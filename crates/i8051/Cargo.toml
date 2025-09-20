@@ -13,3 +13,4 @@ keywords.workspace = true
 i8051-proc-macro.workspace = true
 bytemuck = { version = "1.23", features = ["derive"] }
 type-mapper = "0.1.2"
+bin_file = "0.1.4"

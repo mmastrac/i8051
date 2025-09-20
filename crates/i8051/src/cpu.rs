@@ -4,44 +4,7 @@ use i8051_proc_macro::op_def;
 use type_mapper::map_types;
 
 use crate::regs::{Reg8, Reg16, RegI16, U16Equivalent};
-
-pub const SFR_BASE: u8 = 0x80;
-
-pub const SFR_P0: u8 = 0x80;
-pub const SFR_SP: u8 = 0x81;
-pub const SFR_DPL: u8 = 0x82;
-pub const SFR_DPH: u8 = 0x83;
-pub const SFR_PCON: u8 = 0x87;
-pub const SFR_TCON: u8 = 0x88;
-pub const SFR_TMOD: u8 = 0x89;
-pub const SFR_TL0: u8 = 0x8A;
-pub const SFR_TL1: u8 = 0x8B;
-pub const SFR_TH0: u8 = 0x8C;
-pub const SFR_TH1: u8 = 0x8D;
-pub const SFR_P1: u8 = 0x90;
-pub const SFR_SCON: u8 = 0x98;
-pub const SFR_SBUF: u8 = 0x99;
-pub const SFR_P2: u8 = 0xA0;
-pub const SFR_IE: u8 = 0xA8;
-pub const SFR_P3: u8 = 0xB0;
-pub const SFR_IP: u8 = 0xB8;
-pub const SFR_T2CON: u8 = 0xC8;
-pub const SFR_T2MOD: u8 = 0xC9;
-pub const SFR_RCAP2L: u8 = 0xCA;
-pub const SFR_RCAP2H: u8 = 0xCB;
-pub const SFR_TL2: u8 = 0xCC;
-pub const SFR_TH2: u8 = 0xCD;
-pub const SFR_PSW: u8 = 0xD0;
-pub const SFR_A: u8 = 0xE0;
-pub const SFR_B: u8 = 0xF0;
-
-pub const PSW_C: u8 = 0x00;
-pub const PSW_AC: u8 = 0x01;
-pub const PSW_Z: u8 = 0x02;
-pub const PSW_RS0: u8 = 0x03;
-pub const PSW_RS1: u8 = 0x04;
-pub const PSW_OV: u8 = 0x06;
-pub const PSW_P: u8 = 0x07;
+use crate::sfr::*;
 
 pub trait MemoryMapper {
     fn read(&self, addr: u16) -> u8;
@@ -57,11 +20,15 @@ impl MemoryMapper for () {
 
 pub trait PortMapper {
     fn read(&self, addr: u8) -> u8;
+    fn read_latch(&self, addr: u8) -> u8;
     fn write(&mut self, addr: u8, value: u8);
 }
 
 impl PortMapper for () {
     fn read(&self, addr: u8) -> u8 {
+        0
+    }
+    fn read_latch(&self, addr: u8) -> u8 {
         0
     }
     fn write(&mut self, addr: u8, value: u8) {}
@@ -177,8 +144,12 @@ struct Context<'a, XDATA: MemoryMapper, CODE: MemoryMapper, PORTS: PortMapper> {
 pub struct Cpu {
     pub pc: u16,
     pub internal_ram: [u8; 256],
-    pub sfr: [u8; 128],
-    pub ports: [u8; 4],
+    pub a: u8,
+    pub b: u8,
+    pub dpl: u8,
+    pub dph: u8,
+    pub psw: u8,
+    pub sp: u8,
     pub interrupt: bool,
 }
 
@@ -187,83 +158,125 @@ impl Cpu {
         let mut cpu = Self {
             pc: 0x0000,
             internal_ram: [0; 256],
-            sfr: [0; 128],
+            a: 0,
+            b: 0,
+            dpl: 0,
+            dph: 0,
+            psw: 0,
+            sp: 7, // !
             interrupt: false,
-            ports: [0; 4],
         };
-        cpu.sfr_set(SFR_SP, 7);
         cpu
     }
 
+    pub fn step(
+        &mut self,
+        xdata: &mut impl MemoryMapper,
+        code: &mut impl MemoryMapper,
+        ports: &mut impl PortMapper,
+    ) -> bool {
+        let pc = self.pc;
+        let op = code.read(pc);
+        dispatch(self, xdata, code, ports);
+        if self.pc == pc {
+            // SJMP, so we're in an infinite loop
+            if op == 0b10000000 {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn decode_pc(&self, code: &mut impl MemoryMapper) -> (Vec<u8>, String) {
+        decode(code, self.pc)
+    }
+
+    pub fn decode(&self, code: &mut impl MemoryMapper, pc: u16) -> (Vec<u8>, String) {
+        decode(code, pc)
+    }
+
     pub fn a(&self) -> u8 {
-        self.sfr(SFR_A)
+        self.a
+    }
+
+    pub fn a_set(&mut self, value: u8) {
+        self.a = value;
+        self.psw_set(PSW_Z, value == 0);
     }
 
     pub fn b(&self) -> u8 {
-        self.sfr(SFR_B)
+        self.b
+    }
+
+    pub fn b_set(&mut self, value: u8) {
+        self.b = value;
     }
 
     pub fn dptr(&self) -> u16 {
-        (((self.sfr(SFR_DPH) as u16) << 8) as u16) | self.sfr(SFR_DPL) as u16
+        (((self.dph as u16) << 8) as u16) | self.dpl as u16
     }
 
     pub fn dptr_set(&mut self, value: u16) {
-        *self.sfr_mut(SFR_DPH) = (value >> 8) as u8;
-        *self.sfr_mut(SFR_DPL) = (value & 0xFF) as u8;
+        self.dph = (value >> 8) as u8;
+        self.dpl = (value & 0xFF) as u8;
     }
 
     pub fn r(&self, x: u8) -> u8 {
-        let rs0 = (self.sfr(SFR_PSW) & (1 << PSW_RS0)) != 0;
-        let rs1 = (self.sfr(SFR_PSW) & (1 << PSW_RS1)) != 0;
+        let rs0 = (self.psw & (1 << PSW_RS0)) != 0;
+        let rs1 = (self.psw & (1 << PSW_RS1)) != 0;
         let offset = ((rs0 as u8 | ((rs1 as u8) << 1)) * 8) as usize;
         self.internal_ram[x as usize + offset]
     }
 
     pub fn r_mut(&mut self, x: u8) -> &mut u8 {
-        let rs0 = (self.sfr(SFR_PSW) & (1 << PSW_RS0)) != 0;
-        let rs1 = (self.sfr(SFR_PSW) & (1 << PSW_RS1)) != 0;
+        let rs0 = (self.psw & (1 << PSW_RS0)) != 0;
+        let rs1 = (self.psw & (1 << PSW_RS1)) != 0;
         let offset = ((rs0 as u8 | ((rs1 as u8) << 1)) * 8) as usize;
         &mut self.internal_ram[x as usize + offset]
     }
 
-    pub fn sfr(&self, addr: u8) -> u8 {
-        self.sfr[addr.wrapping_sub(SFR_BASE) as usize]
+    pub fn sfr(&self, addr: u8, ports: &impl PortMapper) -> u8 {
+        match addr {
+            SFR_A => self.a,
+            SFR_B => self.b,
+            SFR_DPH => self.dph,
+            SFR_DPL => self.dpl,
+            SFR_PSW => self.psw,
+            SFR_SP => self.sp,
+            _ => ports.read(addr),
+        }
     }
 
-    pub fn sfr_mut(&mut self, addr: u8) -> &mut u8 {
-        debug_assert!(addr != SFR_P0 && addr != SFR_P1 && addr != SFR_P2 && addr != SFR_P3);
-        &mut self.sfr[addr.wrapping_sub(SFR_BASE) as usize]
-    }
-
-    pub fn sfr_set(&mut self, addr: u8, value: u8) {
-        if addr == SFR_A {
-            self.psw_set(PSW_Z, value == 0);
+    pub fn sfr_set(&mut self, addr: u8, value: u8, ports: &mut impl PortMapper) {
+        match addr {
+            SFR_A => {
+                self.a = value;
+                self.psw_set(PSW_Z, value == 0);
+            }
+            SFR_B => self.b = value,
+            SFR_DPH => self.dph = value,
+            SFR_DPL => self.dpl = value,
+            SFR_PSW => self.psw = value,
+            SFR_SP => self.sp = value,
+            _ => ports.write(addr, value),
         }
-        if addr == SFR_P0 || addr == SFR_P1 || addr == SFR_P2 || addr == SFR_P3 {
-            println!("PORT write {:02X} = {:02X}", addr, value);
-        }
-        if addr == SFR_SBUF {
-            println!("PORT SBUF write {:02X}", value);
-            return;
-        }
-        self.sfr[addr.wrapping_sub(SFR_BASE) as usize] = value;
     }
 
     pub fn psw(&self, flag: u8) -> bool {
-        self.sfr(SFR_PSW) & (1 << flag) != 0
+        self.psw & (1 << flag) != 0
     }
 
     pub fn psw_set(&mut self, flag: u8, value: bool) {
         if value {
-            *self.sfr_mut(SFR_PSW) |= 1 << flag;
+            self.psw |= 1 << flag;
         } else {
-            *self.sfr_mut(SFR_PSW) &= !(1 << flag);
+            self.psw &= !(1 << flag);
         }
     }
 
     pub fn push_stack(&mut self, value: u8) {
-        *self.sfr_mut(SFR_SP) = self.sfr(SFR_SP).wrapping_add(1);
-        self.internal_ram[self.sfr(SFR_SP) as usize] = value;
+        self.sp = self.sp.wrapping_add(1);
+        self.internal_ram[self.sp as usize] = value;
     }
 
     pub fn push_stack16(&mut self, value: u16) {
@@ -272,8 +285,8 @@ impl Cpu {
     }
 
     pub fn pop_stack(&mut self) -> u8 {
-        let value = self.internal_ram[self.sfr(SFR_SP) as usize];
-        *self.sfr_mut(SFR_SP) = self.sfr(SFR_SP).wrapping_sub(1);
+        let value = self.internal_ram[self.sp as usize];
+        self.sp = self.sp.wrapping_sub(1);
         value
     }
 
@@ -283,11 +296,11 @@ impl Cpu {
         ((a as u16) << 8) as u16 | b as u16
     }
 
-    fn read(&self, addr: u8) -> u8 {
+    fn read(&self, addr: u8, ports: &impl PortMapper) -> u8 {
         if addr < 128 {
             self.internal_ram[addr as usize]
         } else {
-            self.sfr(addr)
+            self.sfr(addr, ports)
         }
     }
 
@@ -295,11 +308,11 @@ impl Cpu {
         self.internal_ram[addr as usize]
     }
 
-    fn write(&mut self, addr: u8, value: u8) {
+    fn write(&mut self, addr: u8, value: u8, ports: &mut impl PortMapper) {
         if addr < 128 {
             self.internal_ram[addr as usize] = value;
         } else {
-            self.sfr_set(addr, value);
+            self.sfr_set(addr, value, ports);
         }
     }
 
@@ -310,21 +323,21 @@ impl Cpu {
     /// Read a bit from the internal RAM or SFR. Bit addresses are 0-127 for
     /// internal RAM (mapped to 0x20-0x2F), 128-255 for SFRs (mapped to 0x80,
     /// 0x90, ... 0xf0).
-    fn read_bit(&self, bit_addr: u8) -> bool {
+    fn read_bit(&self, bit_addr: u8, ports: &impl PortMapper) -> bool {
         let bit_pos = bit_addr & 0x07;
         if bit_addr < 0x80 {
             let byte_index = 0x20 + (bit_addr >> 3);
             self.internal_ram[byte_index as usize] & (1 << bit_pos) != 0
         } else {
             let sfr_addr = bit_addr & 0xF8; // base byte of SFR
-            self.sfr(sfr_addr) & (1 << bit_pos) != 0
+            self.sfr(sfr_addr, ports) & (1 << bit_pos) != 0
         }
     }
 
     /// Write a bit to the internal RAM or SFR. Bit addresses are 0-127 for
     /// internal RAM (mapped to 0x20-0x2F), 128-255 for SFRs (mapped to 0x80,
     /// 0x90, ... 0xf0).
-    fn write_bit(&mut self, bit_addr: u8, value: bool) {
+    fn write_bit(&mut self, bit_addr: u8, value: bool, ports: &mut impl PortMapper) {
         let bit_pos = bit_addr & 0x07;
         if bit_addr < 0x80 {
             let byte_index = 0x20 + (bit_addr >> 3);
@@ -336,13 +349,13 @@ impl Cpu {
             }
         } else {
             let sfr_addr = bit_addr & 0xF8;
-            let byte = self.sfr(sfr_addr);
+            let byte = self.sfr(sfr_addr, ports);
             let byte = if value {
                 byte | 1 << bit_pos
             } else {
                 byte & !(1 << bit_pos)
             };
-            self.sfr_set(sfr_addr, byte);
+            self.sfr_set(sfr_addr, byte, ports);
         }
     }
 }
@@ -350,15 +363,15 @@ impl Cpu {
 // Helper macros for the proc macro to use
 macro_rules! op_def_read {
     ($ctx:ident, A) => {
-        Reg8($ctx.cpu.sfr(SFR_A))
+        Reg8($ctx.cpu.a)
     };
     ($ctx:ident, B) => {
-        Reg8($ctx.cpu.sfr(SFR_B))
+        Reg8($ctx.cpu.b)
     };
     ($ctx:ident, PC) => {
         Reg16($ctx.cpu.pc)
     };
-    ($ctx:ident, DPTR) => {{ Reg16((($ctx.cpu.sfr(SFR_DPH) as u16) << 8) | $ctx.cpu.sfr(SFR_DPL) as u16) }};
+    ($ctx:ident, DPTR) => {{ Reg16((($ctx.cpu.dph as u16) << 8) | $ctx.cpu.dpl as u16) }};
     ($ctx:ident, C) => {
         $ctx.cpu.psw(PSW_C)
     };
@@ -372,44 +385,28 @@ macro_rules! op_def_read {
         $ctx.cpu.psw(PSW_Z)
     };
     ($ctx:ident, BIT, $index:expr) => {
-        $ctx.cpu.read_bit($index.to_u8().0)
+        $ctx.cpu.read_bit($index.to_u8().0, $ctx.ports)
     };
     ($ctx:ident, PBIT, $index:expr) => {{
         let port = $index.to_u8().0;
-        let mut bit = $ctx.cpu.read_bit(port);
-        if bit {
-            let sfr = port & 0xF8;
-            let bit_pos = $index.to_u8().0 & 0x07;
-            if sfr == SFR_P0 || sfr == SFR_P1 || sfr == SFR_P2 || sfr == SFR_P3 {
-                println!("PORT read bit {:02X}.{}", sfr, bit_pos);
+        let sfr = port & 0xF8;
+        let mask = match sfr {
+            SFR_P0 | SFR_P1 | SFR_P2 | SFR_P3 => {
+                ($ctx.ports.read_latch(port) & (1 << ($index.to_u8().0 & 0x07))) != 0
             }
-            bit = match sfr {
-                SFR_P0 => $ctx.cpu.ports[0] & (1 << bit_pos) != 0,
-                SFR_P1 => $ctx.cpu.ports[1] & (1 << bit_pos) != 0,
-                SFR_P2 => $ctx.cpu.ports[2] & (1 << bit_pos) != 0,
-                SFR_P3 => $ctx.cpu.ports[3] & (1 << bit_pos) != 0,
-                _ => bit,
-            };
-        }
-        bit
+            _ => true,
+        };
+        mask & $ctx.cpu.read_bit(port, $ctx.ports)
     }};
     ($ctx:ident, DATA, $index:expr) => {
-        Reg8($ctx.cpu.read($index.to_u8().0))
+        Reg8($ctx.cpu.read($index.to_u8().0, $ctx.ports))
     };
     ($ctx:ident, PDATA, $index:expr) => {{
         let port = $index.to_u8().0;
-        let value = $ctx.cpu.read(port);
-        if port == SFR_P0 || port == SFR_P1 || port == SFR_P2 || port == SFR_P3 {
-            println!("PORT read {:02X}", port);
+        match port {
+            SFR_P0 | SFR_P1 | SFR_P2 | SFR_P3 => $ctx.ports.read_latch(port),
+            _ => $ctx.cpu.read(port, $ctx.ports),
         }
-
-        Reg8(match port {
-            SFR_P0 => $ctx.cpu.ports[0] & value,
-            SFR_P1 => $ctx.cpu.ports[1] & value,
-            SFR_P2 => $ctx.cpu.ports[2] & value,
-            SFR_P3 => $ctx.cpu.ports[3] & value,
-            _ => value,
-        })
     }};
     ($ctx:ident, IDATA, $index:expr) => {
         Reg8($ctx.cpu.read_indirect($index.to_u8().0))
@@ -418,19 +415,19 @@ macro_rules! op_def_read {
         Reg8($ctx.cpu.r($index.to_u8().0))
     };
     ($ctx:ident, CODE, $index:expr) => {
-        $ctx.code.read($index.to_u8().0)
+        $ctx.code.read($index.to_u16())
     };
     ($ctx:ident, XDATA, $index:expr) => {
-        $ctx.xdata.read($index.to_u8().0)
+        $ctx.xdata.read($index.to_u16())
     };
 }
 
 macro_rules! op_def_write {
     ($ctx:ident, A, $value:expr) => {{
-        $ctx.cpu.sfr_set(SFR_A, $value.to_u16() as u8);
+        $ctx.cpu.a_set($value.to_u8().0);
     }};
     ($ctx:ident, B, $value:expr) => {{
-        *$ctx.cpu.sfr_mut(SFR_B) = $value.to_u16() as u8;
+        $ctx.cpu.b_set($value.to_u8().0);
     }};
     ($ctx:ident, PC, $value:expr) => {{
         $ctx.cpu.pc = $value.to_u16();
@@ -451,16 +448,18 @@ macro_rules! op_def_write {
         $ctx.cpu.psw_set(PSW_Z, $value);
     }};
     ($ctx:ident, BIT, $index:expr, $value:expr) => {
-        $ctx.cpu.write_bit($index.to_u8().0, $value)
+        $ctx.cpu.write_bit($index.to_u8().0, $value, $ctx.ports)
     };
     ($ctx:ident, PBIT, $index:expr, $value:expr) => {
-        $ctx.cpu.write_bit($index.to_u8().0, $value)
+        $ctx.cpu.write_bit($index.to_u8().0, $value, $ctx.ports)
     };
     ($ctx:ident, DATA, $index:expr, $value:expr) => {
-        $ctx.cpu.write($index.to_u8().0, $value.to_u8().0)
+        $ctx.cpu
+            .write($index.to_u8().0, $value.to_u8().0, $ctx.ports)
     };
     ($ctx:ident, PDATA, $index:expr, $value:expr) => {
-        $ctx.cpu.write($index.to_u8().0, $value.to_u8().0)
+        $ctx.cpu
+            .write($index.to_u8().0, $value.to_u8().0, $ctx.ports)
     };
     ($ctx:ident, IDATA, $index:expr, $value:expr) => {
         $ctx.cpu.write_indirect($index.to_u8().0, $value.to_u8().0)
@@ -472,7 +471,7 @@ macro_rules! op_def_write {
         "CODE cannot be written"
     };
     ($ctx:ident, XDATA, $index:expr, $value:expr) => {
-        $ctx.xdata.write($index.to_u8().0, $value.to_u8().0)
+        $ctx.xdata.write($index.to_u16(), $value.to_u16())
     };
 }
 
@@ -537,7 +536,7 @@ macro_rules! op {
             }
         }
 
-        pub fn dispatch(cpu: &mut Cpu, xdata: &mut impl MemoryMapper, code: &mut impl MemoryMapper) {
+        pub fn dispatch(cpu: &mut Cpu, xdata: &mut impl MemoryMapper, code: &mut impl MemoryMapper, ports: &mut impl PortMapper) {
             #![allow(non_snake_case)]
             #![allow(redundant_semicolons)]
             #![allow(unused_assignments)]
@@ -549,7 +548,7 @@ macro_rules! op {
                 cpu,
                 xdata: $XDATA,
                 code: $CODE,
-                ports: &mut (),
+                ports,
             };
 
             let op = ctx.code.read(ctx.cpu.pc);
@@ -723,6 +722,7 @@ op! {
 fn swap_nibbles(a: Reg8) -> Reg8 {
     Reg8(((a.0 & 0x0F) << 4) | ((a.0 & 0xF0) >> 4))
 }
+
 fn decimal_adjust(a: Reg8, c: bool, ac: bool) -> (Reg8, bool, bool) {
     let mut result = a.0;
     let mut carry = c;
@@ -809,7 +809,7 @@ fn rr(a: Reg8) -> Reg8 {
 }
 
 #[test]
-fn foo() {
+fn op_def_compile_test() {
     #![allow(redundant_semicolons, non_snake_case)]
 
     let mut cpu = Cpu::new();

@@ -1,5 +1,7 @@
 mod cpu;
-pub mod regs;
+pub mod memory;
+mod regs;
+pub mod sfr;
 
 pub use cpu::Cpu;
 pub use cpu::MemoryMapper;

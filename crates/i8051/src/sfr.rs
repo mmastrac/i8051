@@ -1,0 +1,37 @@
+pub const SFR_BASE: u8 = 0x80;
+
+pub const SFR_P0: u8 = 0x80;
+pub const SFR_SP: u8 = 0x81;
+pub const SFR_DPL: u8 = 0x82;
+pub const SFR_DPH: u8 = 0x83;
+pub const SFR_PCON: u8 = 0x87;
+pub const SFR_TCON: u8 = 0x88;
+pub const SFR_TMOD: u8 = 0x89;
+pub const SFR_TL0: u8 = 0x8A;
+pub const SFR_TL1: u8 = 0x8B;
+pub const SFR_TH0: u8 = 0x8C;
+pub const SFR_TH1: u8 = 0x8D;
+pub const SFR_P1: u8 = 0x90;
+pub const SFR_SCON: u8 = 0x98;
+pub const SFR_SBUF: u8 = 0x99;
+pub const SFR_P2: u8 = 0xA0;
+pub const SFR_IE: u8 = 0xA8;
+pub const SFR_P3: u8 = 0xB0;
+pub const SFR_IP: u8 = 0xB8;
+pub const SFR_T2CON: u8 = 0xC8;
+pub const SFR_T2MOD: u8 = 0xC9;
+pub const SFR_RCAP2L: u8 = 0xCA;
+pub const SFR_RCAP2H: u8 = 0xCB;
+pub const SFR_TL2: u8 = 0xCC;
+pub const SFR_TH2: u8 = 0xCD;
+pub const SFR_PSW: u8 = 0xD0;
+pub const SFR_A: u8 = 0xE0;
+pub const SFR_B: u8 = 0xF0;
+
+pub const PSW_C: u8 = 0x00;
+pub const PSW_AC: u8 = 0x01;
+pub const PSW_Z: u8 = 0x02;
+pub const PSW_RS0: u8 = 0x03;
+pub const PSW_RS1: u8 = 0x04;
+pub const PSW_OV: u8 = 0x06;
+pub const PSW_P: u8 = 0x07;
