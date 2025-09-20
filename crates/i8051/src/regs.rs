@@ -24,7 +24,7 @@ pub struct Reg8(pub u8);
 
 impl PartialOrd for Reg8 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.0.cmp(&other.0))
+        Some(self.cmp(other))
     }
 }
 

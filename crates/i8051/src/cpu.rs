@@ -3,7 +3,7 @@ use std::fmt;
 use i8051_proc_macro::op_def;
 use type_mapper::map_types;
 
-use crate::regs::{Reg8, Reg16, RegI16, U16Equivalent};
+use crate::regs::{Reg8, Reg16, U16Equivalent};
 use crate::sfr::*;
 
 /// A trait to provide memory read/write operations.
@@ -13,10 +13,10 @@ pub trait MemoryMapper {
 }
 
 impl MemoryMapper for () {
-    fn read(&self, addr: u16) -> u8 {
+    fn read(&self, _addr: u16) -> u8 {
         0
     }
-    fn write(&mut self, addr: u16, value: u8) {}
+    fn write(&mut self, _addr: u16, _value: u8) {}
 }
 
 /// A trait to provide port read/write operations.
@@ -27,26 +27,26 @@ pub trait PortMapper {
 }
 
 impl PortMapper for () {
-    fn read(&self, addr: u8) -> u8 {
+    fn read(&self, _addr: u8) -> u8 {
         0
     }
-    fn read_latch(&self, addr: u8) -> u8 {
+    fn read_latch(&self, _addr: u8) -> u8 {
         0
     }
-    fn write(&mut self, addr: u8, value: u8) {}
+    fn write(&mut self, _addr: u8, _value: u8) {}
 }
 
 enum Direct {
-    RAM(u8),
-    SFR(u8),
+    Ram(u8),
+    Sfr(u8),
 }
 
 impl From<u8> for Direct {
     fn from(value: u8) -> Self {
-        if (value < 128) {
-            Self::RAM(value)
+        if value < 128 {
+            Self::Ram(value)
         } else {
-            Self::SFR(value)
+            Self::Sfr(value)
         }
     }
 }
@@ -54,51 +54,51 @@ impl From<u8> for Direct {
 impl fmt::Display for Direct {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::RAM(value @ 0..31) => write!(f, "R{}.BANK{}", value % 8, value / 8),
-            Self::RAM(value) => write!(f, "RAM({})", value),
-            Self::SFR(SFR_P0) => write!(f, "P0"),
-            Self::SFR(SFR_A) => write!(f, "A"),
-            Self::SFR(SFR_B) => write!(f, "B"),
-            Self::SFR(SFR_PSW) => write!(f, "PSW"),
-            Self::SFR(SFR_SP) => write!(f, "SP"),
-            Self::SFR(SFR_DPL) => write!(f, "DPL"),
-            Self::SFR(SFR_DPH) => write!(f, "DPH"),
-            Self::SFR(SFR_PCON) => write!(f, "PCON"),
-            Self::SFR(SFR_TCON) => write!(f, "TCON"),
-            Self::SFR(SFR_TMOD) => write!(f, "TMOD"),
-            Self::SFR(SFR_TL0) => write!(f, "TL0"),
-            Self::SFR(SFR_TL1) => write!(f, "TL1"),
-            Self::SFR(SFR_TH0) => write!(f, "TH0"),
-            Self::SFR(SFR_TH1) => write!(f, "TH1"),
-            Self::SFR(SFR_P1) => write!(f, "P1"),
-            Self::SFR(SFR_SCON) => write!(f, "SCON"),
-            Self::SFR(SFR_SBUF) => write!(f, "SBUF"),
-            Self::SFR(SFR_P2) => write!(f, "P2"),
-            Self::SFR(SFR_IE) => write!(f, "IE"),
-            Self::SFR(SFR_P3) => write!(f, "P3"),
-            Self::SFR(SFR_IP) => write!(f, "IP"),
-            Self::SFR(SFR_T2CON) => write!(f, "T2CON"),
-            Self::SFR(SFR_T2MOD) => write!(f, "T2MOD"),
-            Self::SFR(SFR_RCAP2L) => write!(f, "RCAP2L"),
-            Self::SFR(SFR_RCAP2H) => write!(f, "RCAP2H"),
-            Self::SFR(SFR_TL2) => write!(f, "TL2"),
-            Self::SFR(SFR_TH2) => write!(f, "TH2"),
-            Self::SFR(sfr) => write!(f, "SFR({})", sfr),
+            Self::Ram(value @ 0..31) => write!(f, "R{}.BANK{}", value % 8, value / 8),
+            Self::Ram(value) => write!(f, "RAM({})", value),
+            Self::Sfr(SFR_P0) => write!(f, "P0"),
+            Self::Sfr(SFR_A) => write!(f, "A"),
+            Self::Sfr(SFR_B) => write!(f, "B"),
+            Self::Sfr(SFR_PSW) => write!(f, "PSW"),
+            Self::Sfr(SFR_SP) => write!(f, "SP"),
+            Self::Sfr(SFR_DPL) => write!(f, "DPL"),
+            Self::Sfr(SFR_DPH) => write!(f, "DPH"),
+            Self::Sfr(SFR_PCON) => write!(f, "PCON"),
+            Self::Sfr(SFR_TCON) => write!(f, "TCON"),
+            Self::Sfr(SFR_TMOD) => write!(f, "TMOD"),
+            Self::Sfr(SFR_TL0) => write!(f, "TL0"),
+            Self::Sfr(SFR_TL1) => write!(f, "TL1"),
+            Self::Sfr(SFR_TH0) => write!(f, "TH0"),
+            Self::Sfr(SFR_TH1) => write!(f, "TH1"),
+            Self::Sfr(SFR_P1) => write!(f, "P1"),
+            Self::Sfr(SFR_SCON) => write!(f, "SCON"),
+            Self::Sfr(SFR_SBUF) => write!(f, "SBUF"),
+            Self::Sfr(SFR_P2) => write!(f, "P2"),
+            Self::Sfr(SFR_IE) => write!(f, "IE"),
+            Self::Sfr(SFR_P3) => write!(f, "P3"),
+            Self::Sfr(SFR_IP) => write!(f, "IP"),
+            Self::Sfr(SFR_T2CON) => write!(f, "T2CON"),
+            Self::Sfr(SFR_T2MOD) => write!(f, "T2MOD"),
+            Self::Sfr(SFR_RCAP2L) => write!(f, "RCAP2L"),
+            Self::Sfr(SFR_RCAP2H) => write!(f, "RCAP2H"),
+            Self::Sfr(SFR_TL2) => write!(f, "TL2"),
+            Self::Sfr(SFR_TH2) => write!(f, "TH2"),
+            Self::Sfr(sfr) => write!(f, "SFR({})", sfr),
         }
     }
 }
 
 enum Bit {
-    RAM(u8),
-    SFR(u8),
+    Ram(u8),
+    Sfr(u8),
 }
 
 impl From<u8> for Bit {
     fn from(value: u8) -> Self {
-        if (value < 128) {
-            Self::RAM(value)
+        if value < 128 {
+            Self::Ram(value)
         } else {
-            Self::SFR(value)
+            Self::Sfr(value)
         }
     }
 }
@@ -106,8 +106,8 @@ impl From<u8> for Bit {
 impl fmt::Display for Bit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::RAM(value) => write!(f, "RAM(#{:02X}).{}", (value >> 3) + 0x20, value & 0x07),
-            Self::SFR(value) => {
+            Self::Ram(value) => write!(f, "RAM(#{:02X}).{}", (value >> 3) + 0x20, value & 0x07),
+            Self::Sfr(value) => {
                 Direct::from(value & 0xF8).fmt(f)?;
                 write!(f, ".{}", value & 0x07)
             }
@@ -156,10 +156,16 @@ pub struct Cpu {
     interrupt: bool,
 }
 
+impl Default for Cpu {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Cpu {
     /// Create a new 8051 CPU starting at PC 0x0000.
     pub fn new() -> Self {
-        let cpu = Self {
+        Self {
             pc: 0x0000,
             internal_ram: [0; 256],
             a: 0,
@@ -169,8 +175,7 @@ impl Cpu {
             psw: 0,
             sp: 7, // !
             interrupt: false,
-        };
-        cpu
+        }
     }
 
     /// Step the CPU by one instruction.
@@ -232,7 +237,7 @@ impl Cpu {
 
     /// Get the value of the DPTR register.
     pub fn dptr(&self) -> u16 {
-        (((self.dph as u16) << 8) as u16) | self.dpl as u16
+        ((self.dph as u16) << 8) | self.dpl as u16
     }
 
     /// Set the value of the DPTR register.
@@ -331,7 +336,7 @@ impl Cpu {
     pub fn pop_stack16(&mut self) -> u16 {
         let a = self.pop_stack();
         let b = self.pop_stack();
-        ((a as u16) << 8) as u16 | b as u16
+        ((a as u16) << 8) | b as u16
     }
 
     /// Read a value from internal RAM or an SFR, matching the semantics of
@@ -855,7 +860,7 @@ fn div(a: Reg8, b: Reg8) -> (Reg8, Reg8, bool, bool) {
 #[inline(always)]
 fn rlc(a: Reg8, c: bool) -> (Reg8, bool) {
     let new_carry = (a.0 & 0x80) != 0;
-    (Reg8((a.0 << 1) & 0xFF) | (c as u8), new_carry)
+    (Reg8(a.0 << 1) | (c as u8), new_carry)
 }
 
 #[inline(always)]
@@ -867,7 +872,7 @@ fn rrc(a: Reg8, c: bool) -> (Reg8, bool) {
 #[inline(always)]
 fn rl(a: Reg8) -> Reg8 {
     let b = (a.0 & 0x80) >> 7;
-    Reg8((a.0 << 1) & 0xFF | b)
+    Reg8((a.0 << 1) | b)
 }
 
 #[inline(always)]

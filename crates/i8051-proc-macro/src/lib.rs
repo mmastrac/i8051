@@ -51,7 +51,7 @@ fn transform_block(context: &syn::Ident, block: &syn::Block) -> proc_macro2::Tok
 fn transform_stmt(context: &syn::Ident, stmt: &syn::Stmt) -> proc_macro2::TokenStream {
     match stmt {
         syn::Stmt::Expr(expr, semi) => {
-            let transformed = transform_expr(context, &expr);
+            let transformed = transform_expr(context, expr);
             quote!(#transformed #semi)
         }
         syn::Stmt::Local(Local {
@@ -62,7 +62,7 @@ fn transform_stmt(context: &syn::Ident, stmt: &syn::Stmt) -> proc_macro2::TokenS
             semi_token,
         }) => {
             if let Some(init) = init {
-                if let Some(_) = init.diverge {
+                if init.diverge.is_some() {
                     panic!("Unsupported diverge in let statement");
                 }
                 let transformed_init = transform_expr(context, &init.expr);
@@ -103,12 +103,12 @@ fn transform_expr(context: &syn::Ident, expr: &Expr) -> proc_macro2::TokenStream
                                 quote! { op_def_write!(#context, #ident, #transformed_right); }
                             }
                             _ => {
-                                let left_expr = &*left;
+                                let left_expr = left;
                                 quote! { #left_expr = #transformed_right; }
                             }
                         }
                     } else {
-                        let left_expr = &*left;
+                        let left_expr = left;
                         quote! { #left_expr = #transformed_right; }
                     }
                 }
@@ -116,26 +116,23 @@ fn transform_expr(context: &syn::Ident, expr: &Expr) -> proc_macro2::TokenStream
                 Expr::Index(index_expr) => {
                     let transformed_index = transform_expr(context, &index_expr.index);
 
-                    match &*index_expr.expr {
-                        Expr::Path(path_expr) => {
-                            if let Some(ident) = path_expr.path.get_ident() {
-                                match ident.to_string().as_str() {
-                                    "BIT" | "PBIT" | "CODE" | "XDATA" | "DATA" | "IDATA"
-                                    | "PDATA" | "R" => {
-                                        return quote! {{
-                                            let index = #transformed_index;
-                                            let value = #transformed_right;
-                                            op_def_write!(#context, #ident, index, value);
-                                        }};
-                                    }
-                                    _ => {}
-                                }
+                    if let Expr::Path(path_expr) = &*index_expr.expr
+                        && let Some(ident) = path_expr.path.get_ident()
+                    {
+                        match ident.to_string().as_str() {
+                            "BIT" | "PBIT" | "CODE" | "XDATA" | "DATA" | "IDATA" | "PDATA"
+                            | "R" => {
+                                return quote! {{
+                                    let index = #transformed_index;
+                                    let value = #transformed_right;
+                                    op_def_write!(#context, #ident, index, value);
+                                }};
                             }
+                            _ => {}
                         }
-                        _ => {}
                     }
 
-                    let left_expr = transform_expr(context, &left);
+                    let left_expr = transform_expr(context, left);
                     quote! { #left_expr = #transformed_right; }
                 }
                 Expr::Tuple(ExprTuple { elems, .. }) => {
@@ -245,7 +242,7 @@ fn transform_expr(context: &syn::Ident, expr: &Expr) -> proc_macro2::TokenStream
             turbofish,
             ..
         }) => {
-            if let Some(_) = turbofish {
+            if turbofish.is_some() {
                 panic!("Turbofish not supported");
             }
             let transformed_expr = transform_expr(context, receiver);
@@ -311,7 +308,7 @@ fn transform_expr(context: &syn::Ident, expr: &Expr) -> proc_macro2::TokenStream
             let transformed_cond = transform_expr(context, cond);
             let transformed_then = transform_block(context, then_branch);
             if let Some((_, else_branch)) = else_branch {
-                let transformed_otherwise = transform_expr(context, &*else_branch);
+                let transformed_otherwise = transform_expr(context, else_branch);
                 quote! { if #transformed_cond #transformed_then else #transformed_otherwise }
             } else {
                 quote! { if #transformed_cond #transformed_then }

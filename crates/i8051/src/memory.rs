@@ -15,6 +15,12 @@ impl MemoryMapper for RAM {
     }
 }
 
+impl Default for RAM {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RAM {
     pub fn new() -> Self {
         Self { ram: [0; 0x10000] }
