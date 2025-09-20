@@ -58,16 +58,18 @@ pub const SFR_A: u8 = 0xE0;
 pub const SFR_B: u8 = 0xF0;
 
 /// Carry flag: indicates carry from/to the most significant bit
-pub const PSW_C: u8 = 0x00;
+pub const PSW_C: u8 = 0x07;
 /// Auxiliary carry flag: indicates carry from/to the fourth bit
-pub const PSW_AC: u8 = 0x01;
+pub const PSW_AC: u8 = 0x06;
 /// Zero flag: indicates result of last arithmetic operation was zero
-pub const PSW_Z: u8 = 0x02;
+pub const PSW_Z: u8 = 0x05;
 /// Register bank select 0: selects between four 8-bit register banks
-pub const PSW_RS0: u8 = 0x03;
+pub const PSW_RS0: u8 = 0x04;
 /// Register bank select 1: selects between four 8-bit register banks
-pub const PSW_RS1: u8 = 0x04;
+pub const PSW_RS1: u8 = 0x03;
 /// Overflow flag: indicates overflow from/to the most significant bit
-pub const PSW_OV: u8 = 0x06;
+pub const PSW_OV: u8 = 0x02;
+/// Reserved bit: reserved for future use
+pub const PSW_RES: u8 = 0x01;
 /// Parity flag: indicates even/odd number of 1s in the accumulator
-pub const PSW_P: u8 = 0x07;
+pub const PSW_P: u8 = 0x00;

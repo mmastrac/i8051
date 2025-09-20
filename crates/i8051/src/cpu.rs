@@ -223,6 +223,7 @@ impl Cpu {
     pub fn a_set(&mut self, value: u8) {
         self.a = value;
         self.psw_set(PSW_Z, value == 0);
+        self.psw_set(PSW_P, value.count_ones() % 2 == 1);
     }
 
     /// Get the value of the B register.
@@ -831,9 +832,14 @@ fn decimal_adjust(a: Reg8, c: bool, ac: bool) -> (Reg8, bool, bool) {
 
 #[inline(always)]
 fn add_with_carry(a: Reg8, b: Reg8, c: bool) -> (Reg8, bool, bool, bool) {
+    // Aux carry is set if the sum of the low nibbles is greater than 0x0F
     let ac = ((a.0 & 0x0F) + (b.0 & 0x0F) + c as u8) > 0x0F;
     let sum = a.to_u16() + b.to_u16() + c as u16;
-    let ov = ((a.0 ^ b.0) & 0x80) != 0 && ((a.0 ^ sum as u8) & 0x80) != 0;
+
+    // Treat as signed 16-bit to detect overflow in signed 8-bit
+    let sum_s = a.0 as i16 + b.0 as i16 + c as i16;
+    let ov = sum_s < i8::MIN as i16 || sum_s > i8::MAX as i16;
+
     (Reg8(sum as u8), (sum >> 8) != 0, ov, ac)
 }
 
