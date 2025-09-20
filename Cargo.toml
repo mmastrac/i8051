@@ -9,7 +9,7 @@ authors = ["Matt Mastracci <matthew@mastracci.com>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/mmastrac/i8051"
 keywords = ["8051", "mcs-51", "intel"]
-categories = ["aerospace", "automotive", "compilers", "embedded", "hardware-support", "emulators", "simulation"]
+categories = ["compilers", "embedded", "hardware-support", "emulators", "simulation"]
 
 [workspace.dependencies]
 i8051-proc-macro = { version = "0.1.0", path = "crates/i8051-proc-macro" }
