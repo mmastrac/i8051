@@ -1,3 +1,5 @@
+//! SFR (special-function register) addresses for the i8051 microcontroller.
+
 pub const SFR_BASE: u8 = 0x80;
 
 pub const SFR_P0: u8 = 0x80;

@@ -1,3 +1,5 @@
+#![doc=include_str!("../README.md")]
+
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
@@ -7,6 +9,8 @@ use syn::{
     PathSegment, Token, parse_macro_input, punctuated::Punctuated,
 };
 
+/// Desugars and transforms a block of statements into a sequence of
+/// op_def_read/of_def_write calls.
 #[proc_macro]
 pub fn op_def(input: TokenStream) -> TokenStream {
     let mut input = input.into_iter();

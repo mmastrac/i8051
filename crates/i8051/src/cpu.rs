@@ -6,6 +6,7 @@ use type_mapper::map_types;
 use crate::regs::{Reg8, Reg16, RegI16, U16Equivalent};
 use crate::sfr::*;
 
+/// A trait to provide memory read/write operations.
 pub trait MemoryMapper {
     fn read(&self, addr: u16) -> u8;
     fn write(&mut self, addr: u16, value: u8);
@@ -18,6 +19,7 @@ impl MemoryMapper for () {
     fn write(&mut self, addr: u16, value: u8) {}
 }
 
+/// A trait to provide port read/write operations.
 pub trait PortMapper {
     fn read(&self, addr: u8) -> u8;
     fn read_latch(&self, addr: u8) -> u8;
@@ -141,21 +143,23 @@ struct Context<'a, XDATA: MemoryMapper, CODE: MemoryMapper, PORTS: PortMapper> {
     pub ports: &'a mut PORTS,
 }
 
+/// The 8051 CPU.
 pub struct Cpu {
     pub pc: u16,
     pub internal_ram: [u8; 256],
-    pub a: u8,
-    pub b: u8,
-    pub dpl: u8,
-    pub dph: u8,
-    pub psw: u8,
-    pub sp: u8,
-    pub interrupt: bool,
+    a: u8,
+    b: u8,
+    dpl: u8,
+    dph: u8,
+    psw: u8,
+    sp: u8,
+    interrupt: bool,
 }
 
 impl Cpu {
+    /// Create a new 8051 CPU starting at PC 0x0000.
     pub fn new() -> Self {
-        let mut cpu = Self {
+        let cpu = Self {
             pc: 0x0000,
             internal_ram: [0; 256],
             a: 0,
@@ -169,6 +173,14 @@ impl Cpu {
         cpu
     }
 
+    /// Step the CPU by one instruction.
+    ///
+    /// Provide the external memory (`XDATA` and `CODE`) and port mappings for the
+    /// CPU to use, or use `()` for the default implementation.
+    ///
+    /// `XDATA` is external RAM, and `CODE` is external ROM.
+    ///
+    /// Returns `false` if the CPU has halted.
     pub fn step(
         &mut self,
         xdata: &mut impl MemoryMapper,
@@ -187,40 +199,50 @@ impl Cpu {
         true
     }
 
+    /// Decode the instruction at the current PC.
     pub fn decode_pc(&self, code: &mut impl MemoryMapper) -> (Vec<u8>, String) {
         decode(code, self.pc)
     }
 
+    /// Decode the instruction at the given PC.
     pub fn decode(&self, code: &mut impl MemoryMapper, pc: u16) -> (Vec<u8>, String) {
         decode(code, pc)
     }
 
+    /// Get the value of the A register.
     pub fn a(&self) -> u8 {
         self.a
     }
 
+    /// Set the value of the A register.
     pub fn a_set(&mut self, value: u8) {
         self.a = value;
         self.psw_set(PSW_Z, value == 0);
     }
 
+    /// Get the value of the B register.
     pub fn b(&self) -> u8 {
         self.b
     }
 
+    /// Set the value of the B register.
     pub fn b_set(&mut self, value: u8) {
         self.b = value;
     }
 
+    /// Get the value of the DPTR register.
     pub fn dptr(&self) -> u16 {
         (((self.dph as u16) << 8) as u16) | self.dpl as u16
     }
 
+    /// Set the value of the DPTR register.
     pub fn dptr_set(&mut self, value: u16) {
         self.dph = (value >> 8) as u8;
         self.dpl = (value & 0xFF) as u8;
     }
 
+    /// Get the value of the indexed R register, offset using the current PSW's
+    /// RS0/RS1 bits.
     pub fn r(&self, x: u8) -> u8 {
         let rs0 = (self.psw & (1 << PSW_RS0)) != 0;
         let rs1 = (self.psw & (1 << PSW_RS1)) != 0;
@@ -228,6 +250,8 @@ impl Cpu {
         self.internal_ram[x as usize + offset]
     }
 
+    /// Set the value of the indexed R register, offset using the current PSW's
+    /// RS0/RS1 bits.
     pub fn r_mut(&mut self, x: u8) -> &mut u8 {
         let rs0 = (self.psw & (1 << PSW_RS0)) != 0;
         let rs1 = (self.psw & (1 << PSW_RS1)) != 0;
@@ -235,6 +259,7 @@ impl Cpu {
         &mut self.internal_ram[x as usize + offset]
     }
 
+    /// Read from an SFR.
     pub fn sfr(&self, addr: u8, ports: &impl PortMapper) -> u8 {
         match addr {
             SFR_A => self.a,
@@ -247,6 +272,7 @@ impl Cpu {
         }
     }
 
+    /// Write to an SFR.
     pub fn sfr_set(&mut self, addr: u8, value: u8, ports: &mut impl PortMapper) {
         match addr {
             SFR_A => {
@@ -262,10 +288,12 @@ impl Cpu {
         }
     }
 
+    /// Get the value of a PSW flag.
     pub fn psw(&self, flag: u8) -> bool {
         self.psw & (1 << flag) != 0
     }
 
+    /// Set the value of a PSW flag.
     pub fn psw_set(&mut self, flag: u8, value: bool) {
         if value {
             self.psw |= 1 << flag;
@@ -274,28 +302,40 @@ impl Cpu {
         }
     }
 
+    /// Push a value to the stack. The stack is stored in internal RAM and
+    /// indexed by the SP register.
     pub fn push_stack(&mut self, value: u8) {
         self.sp = self.sp.wrapping_add(1);
         self.internal_ram[self.sp as usize] = value;
     }
 
+    /// Push a 16-bit value to the stack, low byte first, matching CALL
+    /// semantics. The stack is stored in internal RAM and indexed by the SP
+    /// register.
     pub fn push_stack16(&mut self, value: u16) {
         self.push_stack((value & 0xFF) as u8);
         self.push_stack((value >> 8) as u8);
     }
 
+    /// Pop a value from the stack. The stack is stored in internal RAM and
+    /// indexed by the SP register.
     pub fn pop_stack(&mut self) -> u8 {
         let value = self.internal_ram[self.sp as usize];
         self.sp = self.sp.wrapping_sub(1);
         value
     }
 
+    /// Pop a 16-bit value from the stack, high byte first, matching CALL
+    /// semantics. The stack is stored in internal RAM and indexed by the SP
+    /// register.
     pub fn pop_stack16(&mut self) -> u16 {
         let a = self.pop_stack();
         let b = self.pop_stack();
         ((a as u16) << 8) as u16 | b as u16
     }
 
+    /// Read a value from internal RAM or an SFR, matching the semantics of
+    /// `direct`-loading opcodes.
     fn read(&self, addr: u8, ports: &impl PortMapper) -> u8 {
         if addr < 128 {
             self.internal_ram[addr as usize]
@@ -304,10 +344,13 @@ impl Cpu {
         }
     }
 
+    /// Read a value from internal RAM, matching the semantics of `@Rn` opcodes.
     fn read_indirect(&self, addr: u8) -> u8 {
         self.internal_ram[addr as usize]
     }
 
+    /// Write a value to internal RAM or an SFR, matching the semantics of
+    /// `direct`-storing opcodes.
     fn write(&mut self, addr: u8, value: u8, ports: &mut impl PortMapper) {
         if addr < 128 {
             self.internal_ram[addr as usize] = value;
@@ -316,6 +359,7 @@ impl Cpu {
         }
     }
 
+    /// Write a value to internal RAM, matching the semantics of `@Rn` opcodes.
     fn write_indirect(&mut self, addr: u8, value: u8) {
         self.internal_ram[addr as usize] = value;
     }
@@ -503,6 +547,17 @@ macro_rules! op {
             OP $name:literal $start:literal $(- $mask:ident $mask_pattern:literal)? $($arg:ident)*  $(, $arg_mask:ident = $arg_mask_expr:tt)? => $stmt:tt ;
         )*
     ) => {
+        /// All instructions for the i8051 microcontroller.
+        ///
+        /// Instructions are defined in pseudo-Rust code.
+        ///
+        $(
+            #[doc = concat!("`", $name, "`\n\n")]
+            #[doc = concat!("```nocompile\n", stringify!($stmt), "\n```\n\n")]
+        )*
+        pub mod ops {
+        }
+
         pub fn decode(code: &mut impl MemoryMapper, pc: u16) -> (Vec<u8>,String) {
             #![allow(unused)]
             #![allow(non_snake_case)]
@@ -718,6 +773,7 @@ op! {
     OP "XCH A,R{x}" 0b11001000 -x 0b111 => {(A, R[x])=(R[x], A);PC+=1};
     OP "XCHD A,@R{x}" 0b11010110 -x 0b1 => {let tmp=IDATA[R[x]]; let tmp2=A&0x0F; A=(A&0xF0)|(tmp&0x0F); IDATA[R[x]]=tmp&0xF0|tmp2; PC+=1};
 }
+pub(crate) use op;
 
 fn swap_nibbles(a: Reg8) -> Reg8 {
     Reg8(((a.0 & 0x0F) << 4) | ((a.0 & 0xF0) >> 4))

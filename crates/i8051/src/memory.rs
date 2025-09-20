@@ -1,3 +1,5 @@
+//! Various memory mapper implementations for the i8051 microcontroller.
+
 use crate::cpu::MemoryMapper;
 
 pub struct RAM {
