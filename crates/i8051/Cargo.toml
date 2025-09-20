@@ -1,6 +1,6 @@
 [package]
 name = "i8051"
-description = "An emulator for the i8051 microcontroller."
+description = "An emulator for the i8051 (MCS-51) microcontroller."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
