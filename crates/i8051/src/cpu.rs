@@ -542,21 +542,33 @@ macro_rules! op_def_call {
 
 macro_rules! op {
     (
-        $XDATA:ident, $CODE:ident,
-        $(
-            OP $name:literal $start:literal $(- $mask:ident $mask_pattern:literal)? $($arg:ident)*  $(, $arg_mask:ident = $arg_mask_expr:tt)? => $stmt:tt ;
-        )*
+        docs
+        $([
+            $name:literal
+            { $($stmt:stmt);+ $(;)? }
+        ])*
     ) => {
         /// All instructions for the i8051 microcontroller.
         ///
         /// Instructions are defined in pseudo-Rust code.
         ///
         $(
-            #[doc = concat!("`", $name, "`\n\n")]
-            #[doc = concat!("```nocompile\n", stringify!($stmt), "\n```\n\n")]
+        #[doc = concat!(" → `", $name, "`\n\n```nocompile\n")]
+        $(
+            #[doc = concat!(stringify!($stmt), ";")]
         )*
-        pub mod ops {
-        }
+        #[doc = "```\n\n"]
+        )*
+        pub mod ops {}
+    };
+
+    (
+        $XDATA:ident, $CODE:ident,
+        $(
+            OP $name:literal $start:literal $(- $mask:ident $mask_pattern:literal)? $($arg:ident)*  $(, $arg_mask:ident = $arg_mask_expr:tt)? => $stmt:tt ;
+        )*
+    ) => {
+        op!( docs $( [$name $stmt] )* );
 
         pub fn decode(code: &mut impl MemoryMapper, pc: u16) -> (Vec<u8>,String) {
             #![allow(unused)]
