@@ -27,7 +27,7 @@ struct Ports {
 }
 
 impl PortMapper for Ports {
-    fn read(&self, addr: u8) -> u8 {
+    fn read(&mut self, addr: u8) -> u8 {
         println!("PORT read {:02X}", addr);
         self.ram[addr as usize - 128]
     }
@@ -35,10 +35,14 @@ impl PortMapper for Ports {
         println!("PORT write {:02X} = {:02X}", addr, value);
         self.ram[addr as usize - 128] = value;
     }
-    fn read_latch(&self, addr: u8) -> u8 {
+    fn read_latch(&mut self, addr: u8) -> u8 {
         println!("PORT read latch {:02X}", addr);
         self.ram[addr as usize - 128]
     }
+    fn interest(&self, _: u8) -> bool {
+        true
+    }
+    fn tick(&mut self) {}
 }
 
 pub fn main() {
@@ -52,16 +56,17 @@ pub fn main() {
 
     let mut instruction_count = 0;
     loop {
-        let (bytes, mnemonic) = cpu.decode_pc(&mut code);
+        let instruction = cpu.decode_pc(&mut code);
         if args.trace {
             println!(
-                "{pc:04X}: {:10} {mnemonic}",
-                bytes
+                "{pc:04X}: {:10} {instruction}",
+                instruction
+                    .bytes()
                     .iter()
                     .map(|b| format!("{:02X}", b))
                     .collect::<Vec<_>>()
                     .join(" "),
-                pc = cpu.pc
+                pc = instruction.pc(),
             );
             println!(
                 "  A={:02X?}  B={:02X?}  DPTR={:04X?}  C={} OV={} AC={} Z={}",

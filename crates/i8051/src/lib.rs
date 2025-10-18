@@ -29,12 +29,12 @@
 //!
 //! See the [`mod@ops`] module for a list of all supported instructions.
 
+pub mod breakpoint;
 mod cpu;
 pub mod memory;
+pub mod peripheral;
 mod regs;
 pub mod sfr;
 
-pub use cpu::Cpu;
-pub use cpu::MemoryMapper;
-pub use cpu::PortMapper;
 pub use cpu::ops;
+pub use cpu::{ControlFlow, Cpu, DefaultPortMapper, Instruction, MemoryMapper, Opcode, PortMapper};

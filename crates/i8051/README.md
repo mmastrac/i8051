@@ -1,6 +1,13 @@
 # i8051 Emulator
 
-This crate provides an emulator for the i8051 microcontroller.
+This crate provides a fast, `unsafe`-free emulator for the i8051
+microcontroller.
+
+The 8051 (a.k.a. the MCS-51) is a 8-bit microcontroller that was very common in
+the 1980s and 1990s, and is still used in many modern devices.
+
+There are a number of different variants of the 8051, and this crate supports a
+CPU like the original 8051, but with a zero-flag extension.
 
 ## Usage
 
@@ -18,3 +25,8 @@ loop {
     }
 }
 ```
+
+## Supported Instructions
+
+The [instruction set](https://docs.rs/i8051/latest/i8051/ops/index.html) is from
+the standard MCS-51.

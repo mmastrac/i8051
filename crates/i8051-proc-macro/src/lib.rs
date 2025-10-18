@@ -1,5 +1,7 @@
 #![doc=include_str!("../README.md")]
 
+use std::collections::BTreeSet;
+
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
@@ -8,6 +10,21 @@ use syn::{
     ExprMethodCall, ExprParen, ExprPath, ExprTuple, ExprUnary, Local, Path, PathArguments,
     PathSegment, Token, parse_macro_input, punctuated::Punctuated,
 };
+
+/// Given `unique!(next token...)`, renders `next!(token...)`, keeping only the unique tokens.
+#[proc_macro]
+pub fn unique(input: TokenStream) -> TokenStream {
+    let mut unique = BTreeSet::new();
+    let mut input = input.into_iter();
+    let next = TokenStream::from(input.next().expect("Expected a next-macro token"));
+    let next = parse_macro_input!(next as syn::Ident);
+    for token in input {
+        let token = TokenStream::from(token);
+        let token = parse_macro_input!(token as syn::Ident);
+        unique.insert(token);
+    }
+    TokenStream::from(quote! { #next ! ( #(#unique)* ); })
+}
 
 /// Desugars and transforms a block of statements into a sequence of
 /// op_def_read/of_def_write calls.

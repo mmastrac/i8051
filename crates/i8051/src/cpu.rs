@@ -1,6 +1,6 @@
 use std::fmt;
 
-use i8051_proc_macro::op_def;
+use i8051_proc_macro::{op_def, unique};
 use type_mapper::map_types;
 
 use crate::regs::{Reg8, Reg16, U16Equivalent};
@@ -19,21 +19,135 @@ impl MemoryMapper for () {
     fn write(&mut self, _addr: u16, _value: u8) {}
 }
 
+impl MemoryMapper for &mut dyn MemoryMapper {
+    fn read(&self, addr: u16) -> u8 {
+        (**self).read(addr)
+    }
+    fn write(&mut self, addr: u16, value: u8) {
+        (**self).write(addr, value)
+    }
+}
+
+pub struct DefaultPortMapper {
+    sfr: [u8; 128],
+}
+
+impl Default for DefaultPortMapper {
+    fn default() -> Self {
+        Self { sfr: [0; 128] }
+    }
+}
+
+impl PortMapper for DefaultPortMapper {
+    fn interest(&self, _addr: u8) -> bool {
+        true
+    }
+    fn read(&mut self, addr: u8) -> u8 {
+        self.sfr[addr.wrapping_sub(SFR_BASE) as usize]
+    }
+    fn read_latch(&mut self, addr: u8) -> u8 {
+        self.sfr[addr.wrapping_sub(SFR_BASE) as usize]
+    }
+    fn write(&mut self, addr: u8, value: u8) {
+        self.sfr[addr.wrapping_sub(SFR_BASE) as usize] = value;
+    }
+    fn tick(&mut self) {}
+}
+
 /// A trait to provide port read/write operations.
 pub trait PortMapper {
-    fn read(&self, addr: u8) -> u8;
-    fn read_latch(&self, addr: u8) -> u8;
+    /// Returns whether the given address is of interest to this port mapper.
+    fn interest(&self, addr: u8) -> bool;
+    /// Read the value at the given address.
+    fn read(&mut self, addr: u8) -> u8;
+    /// Read the latch value at the given address. Only used for
+    /// `SFR_P0`..`SFR_P3`, and only for instructions that operate on latched
+    /// data rather than the input data.
+    ///
+    /// Instructions in [`crate::ops`] that operate on latch are indicated by
+    /// use of `PBIT` and `PDATA` operands (rather than `BIT` and `DATA`
+    /// operands).
+    fn read_latch(&mut self, #[expect(unused)] addr: u8) -> u8 {
+        unreachable!()
+    }
+    /// Write the given value to the given port address.
     fn write(&mut self, addr: u8, value: u8);
+    /// Perform any necessary internal state updates between CPU steps.
+    fn tick(&mut self);
 }
 
 impl PortMapper for () {
-    fn read(&self, _addr: u8) -> u8 {
-        0
+    fn interest(&self, _addr: u8) -> bool {
+        false
     }
-    fn read_latch(&self, _addr: u8) -> u8 {
-        0
+    fn read(&mut self, _addr: u8) -> u8 {
+        unreachable!()
     }
-    fn write(&mut self, _addr: u8, _value: u8) {}
+    fn write(&mut self, _addr: u8, _value: u8) {
+        unreachable!()
+    }
+    fn tick(&mut self) {}
+}
+
+impl<A> PortMapper for (A,)
+where
+    A: PortMapper,
+{
+    fn interest(&self, addr: u8) -> bool {
+        self.0.interest(addr)
+    }
+    fn read(&mut self, addr: u8) -> u8 {
+        self.0.read(addr)
+    }
+    fn read_latch(&mut self, addr: u8) -> u8 {
+        self.0.read_latch(addr)
+    }
+    fn write(&mut self, addr: u8, value: u8) {
+        self.0.write(addr, value)
+    }
+    fn tick(&mut self) {
+        self.0.tick()
+    }
+}
+
+impl<A, B> PortMapper for (A, B)
+where
+    A: PortMapper,
+    B: PortMapper,
+{
+    fn interest(&self, addr: u8) -> bool {
+        self.0.interest(addr) || self.1.interest(addr)
+    }
+    fn read(&mut self, addr: u8) -> u8 {
+        if self.0.interest(addr) {
+            self.0.read(addr)
+        } else if self.1.interest(addr) {
+            self.1.read(addr)
+        } else {
+            unreachable!()
+        }
+    }
+    fn read_latch(&mut self, addr: u8) -> u8 {
+        if self.0.interest(addr) {
+            self.0.read_latch(addr)
+        } else if self.1.interest(addr) {
+            self.1.read_latch(addr)
+        } else {
+            unreachable!()
+        }
+    }
+    fn write(&mut self, addr: u8, value: u8) {
+        if self.0.interest(addr) {
+            self.0.write(addr, value)
+        }
+        if self.1.interest(addr) {
+            self.1.write(addr, value)
+        }
+    }
+    fn tick(&mut self) {
+        self.0.tick();
+        self.1.tick();
+    }
 }
 
 enum Direct {
@@ -143,6 +257,97 @@ struct Context<'a, XDATA: MemoryMapper, CODE: MemoryMapper, PORTS: PortMapper> {
     pub ports: &'a mut PORTS,
 }
 
+pub enum ControlFlow {
+    /// Continue execution from the given PC.
+    Continue(u16),
+    /// Call the given PC, eventually returning to the given PC.
+    Call(u16, u16),
+    /// Choose between two branches.
+    Choice(u16, u16),
+    /// Diverges, unknown control flow.
+    Diverge,
+}
+
+pub struct Instruction {
+    pc: u16,
+    bytes: Vec<u8>,
+}
+
+impl Instruction {
+    pub fn decode(&self) -> String {
+        decode_string(&self.bytes, self.pc)
+    }
+
+    pub fn pc(&self) -> u16 {
+        self.pc
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    pub fn mnemonic(&self) -> Opcode {
+        opcode(self.bytes[0])
+    }
+
+    pub fn addr(&self) -> Option<u16> {
+        addr(&self.bytes)
+    }
+
+    pub fn control_flow(&self) -> ControlFlow {
+        match self.mnemonic() {
+            Opcode::LJMP => ControlFlow::Continue(self.addr().unwrap()),
+            Opcode::LCALL => {
+                ControlFlow::Call(self.pc + self.bytes.len() as u16, self.addr().unwrap())
+            }
+            Opcode::AJMP => ControlFlow::Continue((self.pc & 0xF800) | self.addr().unwrap()),
+            Opcode::ACALL => ControlFlow::Call(
+                self.pc + self.bytes.len() as u16,
+                (self.pc & 0xF800) | self.addr().unwrap(),
+            ),
+            Opcode::JMP | Opcode::RET | Opcode::RETI => ControlFlow::Diverge,
+            Opcode::SJMP => ControlFlow::Continue(
+                self.pc.wrapping_add_signed(self.bytes[1] as i8 as i16) + self.bytes.len() as u16,
+            ),
+            _ => {
+                if has_rel(self.bytes[0]) {
+                    // `rel` instructions always have a relative offset in the last byte.
+                    ControlFlow::Choice(
+                        self.pc + self.bytes.len() as u16,
+                        self.pc
+                            .wrapping_add_signed(self.bytes[self.bytes.len() - 1] as i8 as i16)
+                            + self.bytes.len() as u16,
+                    )
+                } else {
+                    ControlFlow::Continue(self.pc.wrapping_add(self.bytes.len() as u16))
+                }
+            }
+        }
+    }
+}
+
+impl fmt::Display for Instruction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if f.alternate() {
+            write!(f, "{:04X}: ", self.pc)?;
+            for byte in &self.bytes {
+                write!(f, "{:02X} ", byte)?;
+            }
+            for _ in 0..(3 - self.bytes.len()) {
+                write!(f, "   ")?;
+            }
+            write!(f, "{}", self.decode())?;
+            Ok(())
+        } else {
+            write!(f, "{}", self.decode())
+        }
+    }
+}
+
 /// The 8051 CPU.
 pub struct Cpu {
     pub pc: u16,
@@ -205,13 +410,19 @@ impl Cpu {
     }
 
     /// Decode the instruction at the current PC.
-    pub fn decode_pc(&self, code: &mut impl MemoryMapper) -> (Vec<u8>, String) {
-        decode(code, self.pc)
+    pub fn decode_pc(&self, code: &mut impl MemoryMapper) -> Instruction {
+        Instruction {
+            pc: self.pc,
+            bytes: decode(code, self.pc),
+        }
     }
 
     /// Decode the instruction at the given PC.
-    pub fn decode(&self, code: &mut impl MemoryMapper, pc: u16) -> (Vec<u8>, String) {
-        decode(code, pc)
+    pub fn decode(&self, code: &mut impl MemoryMapper, pc: u16) -> Instruction {
+        Instruction {
+            pc,
+            bytes: decode(code, pc),
+        }
     }
 
     /// Get the value of the A register.
@@ -266,7 +477,7 @@ impl Cpu {
     }
 
     /// Read from an SFR.
-    pub fn sfr(&self, addr: u8, ports: &impl PortMapper) -> u8 {
+    pub fn sfr(&self, addr: u8, ports: &mut impl PortMapper) -> u8 {
         match addr {
             SFR_A => self.a,
             SFR_B => self.b,
@@ -308,6 +519,16 @@ impl Cpu {
         }
     }
 
+    /// Get the value of the SP register.
+    pub fn sp(&self) -> u8 {
+        self.sp
+    }
+
+    /// Set the value of the SP register.
+    pub fn sp_set(&mut self, value: u8) {
+        self.sp = value;
+    }
+
     /// Push a value to the stack. The stack is stored in internal RAM and
     /// indexed by the SP register.
     pub fn push_stack(&mut self, value: u8) {
@@ -342,7 +563,7 @@ impl Cpu {
 
     /// Read a value from internal RAM or an SFR, matching the semantics of
     /// `direct`-loading opcodes.
-    fn read(&self, addr: u8, ports: &impl PortMapper) -> u8 {
+    fn read(&self, addr: u8, ports: &mut impl PortMapper) -> u8 {
         if addr < 128 {
             self.internal_ram[addr as usize]
         } else {
@@ -373,7 +594,7 @@ impl Cpu {
     /// Read a bit from the internal RAM or SFR. Bit addresses are 0-127 for
     /// internal RAM (mapped to 0x20-0x2F), 128-255 for SFRs (mapped to 0x80,
     /// 0x90, ... 0xf0).
-    fn read_bit(&self, bit_addr: u8, ports: &impl PortMapper) -> bool {
+    fn read_bit(&self, bit_addr: u8, ports: &mut impl PortMapper) -> bool {
         let bit_pos = bit_addr & 0x07;
         if bit_addr < 0x80 {
             let byte_index = 0x20 + (bit_addr >> 3);
@@ -442,7 +663,7 @@ macro_rules! op_def_read {
         let sfr = port & 0xF8;
         let mask = match sfr {
             SFR_P0 | SFR_P1 | SFR_P2 | SFR_P3 => {
-                ($ctx.ports.read_latch(port) & (1 << ($index.to_u8().0 & 0x07))) != 0
+                ($ctx.ports.read_latch(sfr) & (1 << ($index.to_u8().0 & 0x07))) != 0
             }
             _ => true,
         };
@@ -546,10 +767,23 @@ macro_rules! op_def_call {
     };
 }
 
+macro_rules! opcodes {
+    ($($opcode:ident)*) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum Opcode {
+            Unknown,
+        $(
+            $opcode,
+        )*
+        }
+    };
+}
+
 macro_rules! op {
     (
         docs
         $([
+            $opcode:ident
             $name:literal
             { $($stmt:stmt);+ $(;)? }
         ])*
@@ -559,7 +793,7 @@ macro_rules! op {
         /// Instructions are defined in pseudo-Rust code.
         ///
         $(
-        #[doc = concat!(" → `", $name, "`\n\n```nocompile\n")]
+        #[doc = concat!(" → `", stringify!($opcode), " ", $name, "`\n\n```nocompile\n")]
         $(
             #[doc = concat!(stringify!($stmt), ";")]
         )*
@@ -571,12 +805,63 @@ macro_rules! op {
     (
         $XDATA:ident, $CODE:ident,
         $(
-            OP $name:literal $start:literal $(- $mask:ident $mask_pattern:literal)? $($arg:ident)*  $(, $arg_mask:ident = $arg_mask_expr:tt)? => $stmt:tt ;
+            OP $opcode:ident $name:literal $start:literal $(- $mask:ident $mask_pattern:literal)? $($arg:ident)*  $(, $arg_mask:ident = $arg_mask_expr:tt)? => $stmt:tt ;
         )*
     ) => {
-        op!( docs $( [$name $stmt] )* );
+        op!( docs $( [$opcode $name $stmt] )* );
 
-        pub fn decode(code: &mut impl MemoryMapper, pc: u16) -> (Vec<u8>,String) {
+        unique!(opcodes $( $opcode )*);
+
+        pub fn has_rel(op: u8) -> bool {
+            $(
+                if (op $(& !$mask_pattern)? == $start) {
+                    $(
+                        if stringify!($arg) == "rel" {
+                            return true;
+                        }
+                    )*
+                }
+            )*
+            false
+        }
+
+        /// Decode the absolute address of the instruction at the given PC, if one exists.
+        pub fn addr(code: &[u8]) -> Option<u16> {
+            #![allow(unused)]
+            let op = Reg8(code[0]);
+            $(
+                if (op $(& !$mask_pattern)? == $start) {
+                    $(let $mask = op & $mask_pattern;)?
+                    let mut next_read = 1;
+                    $(
+                        let b = code[next_read];
+                        let $arg: Reg8 = b.into();
+                        next_read = next_read.wrapping_add(1);
+                    )*
+                    $(
+                        op_def!(__no_cpu {
+                            let $arg_mask = $arg_mask_expr;
+                        });
+                        if stringify!($arg_mask) == "addr" {
+                            return Some($arg_mask.to_u16());
+                        }
+                        return None;
+                    )?
+                }
+            )*
+            None
+        }
+
+        pub fn opcode(op: u8) -> Opcode {
+            $(
+                if (op $(& !$mask_pattern)? == $start) {
+                    return Opcode::$opcode;
+                }
+            )*
+            Opcode::Unknown
+        }
+
+        pub fn decode(code: &impl MemoryMapper, pc: u16) -> Vec<u8> {
             #![allow(unused)]
             #![allow(non_snake_case)]
 
@@ -586,7 +871,7 @@ macro_rules! op {
             $(
                 if (op $(& !$mask_pattern)? == $start) {
                     $(let $mask = op & $mask_pattern;)?
-                    let mut next_read = pc + 1;
+                    let mut next_read = pc.wrapping_add(1);
                     $(
                         let b = code.read(next_read);
                         let $arg: map_types!(match $arg {
@@ -596,16 +881,47 @@ macro_rules! op {
                             src => Direct,
                             _ => Reg8,
                         }) = b.into();
-                        next_read += 1;
+                        next_read = next_read.wrapping_add(1);
                         bytes.push(b);
                     )*
                     $(op_def!(__no_cpu {let $arg_mask = $arg_mask_expr;});)?
-                    (bytes, format!($name))
+                    bytes
                 } else
             )*
             {
                 // Unimplemented instruction
-                (bytes, "???".to_string())
+                bytes
+            }
+        }
+
+        pub fn decode_string(code: &[u8], pc: u16) -> String {
+            #![allow(unused)]
+            #![allow(non_snake_case)]
+
+            let op = Reg8(code[0]);
+
+            $(
+                if (op $(& !$mask_pattern)? == $start) {
+                    $(let $mask = op & $mask_pattern;)?
+                    let mut next_read = 1;
+                    $(
+                        let b = code[next_read];
+                        let $arg: map_types!(match $arg {
+                            direct => Direct,
+                            bit => Bit,
+                            dst => Direct,
+                            src => Direct,
+                            _ => Reg8,
+                        }) = b.into();
+                        next_read = next_read.wrapping_add(1);
+                    )*
+                    $(op_def!(__no_cpu {let $arg_mask = $arg_mask_expr;});)?
+                   format!("{} {}", stringify!($opcode), format!($name))
+                } else
+            )*
+            {
+                // Unimplemented instruction
+                "???".to_string()
             }
         }
 
@@ -630,10 +946,10 @@ macro_rules! op {
                 if (op.0 $(& !$mask_pattern)? == $start) {
                     $(let $mask = op & $mask_pattern;)?
                     #[allow(unused)]
-                    let mut next_read = ctx.cpu.pc + 1;
+                    let mut next_read = ctx.cpu.pc.wrapping_add(1);
                     $(
                         let $arg = ctx.code.read(next_read);
-                        next_read += 1;
+                        next_read = next_read.wrapping_add(1);
                     )*
                     $(op_def!(__no_cpu {let $arg_mask = $arg_mask_expr;});)?
                     op_def!(ctx $stmt);
@@ -643,153 +959,152 @@ macro_rules! op {
                 // Unimplemented instruction
                 cpu.pc += 1;
             }
-
         }
     };
 }
 
 op! {
     XDATA, CODE,
-    OP "AJMP #{imm11:X}" 0b00000001 - mask 0b11100000 imm8, imm11 = (mask<<3|imm8) => { PC=(PC&0xF800)|imm11; };
-    OP "ACALL #{imm11:X}" 0b00010001 - mask 0b11100000 imm8, imm11 = (mask<<3|imm8) => { PUSH16(PC+2); PC=(PC&0xF800)|imm11; };
+    OP AJMP "#{addr:X}" 0b00000001 - mask 0b11100000 imm8, addr = (mask<<3|imm8) => { PC=(PC&0xF800)|addr; };
+    OP ACALL "#{addr:X}" 0b00010001 - mask 0b11100000 imm8, addr = (mask<<3|imm8) => { PUSH16(PC+2); PC=(PC&0xF800)|addr; };
 
     // Control flow
-    OP "NOP" 0b00000000 => {PC+=1};
-    OP "LJMP #{addr16:04X}" 0b00000010 imm_hi imm_lo, addr16 = (imm_hi<<8|imm_lo) => {PC=addr16};
-    OP "LCALL #{addr16:04X}" 0b00010010 imm_hi imm_lo, addr16 = (imm_hi<<8|imm_lo) => {PUSH16(PC+3); PC=addr16};
-    OP "JC {rel:+}" 0b01000000 rel, rel=(SEXT(rel)) => {if (C) {PC=PC+2+rel} else {PC+=2}};
-    OP "JNC {rel:+}" 0b01010000 rel, rel=(SEXT(rel)) => {if (!C) {PC=PC+2+rel} else {PC+=2}};
-    OP "JZ {rel:+}" 0b01100000 rel, rel=(SEXT(rel)) => {if (A==0) {PC=PC+2+rel} else {PC+=2}};
-    OP "JNZ {rel:+}" 0b01110000 rel, rel=(SEXT(rel)) => {if (A!=0) {PC=PC+2+rel} else {PC+=2}};
-    OP "SJMP {rel:+}" 0b10000000 rel, rel=(SEXT(rel)) => {PC=PC+2+rel};
-    OP "RET" 0b00100010 => {PC=POP16()};
-    OP "RETI" 0b00110010 => {PC=POP16(); CLEAR_INT()};
-    OP "JMP @A+DPTR"       0b01110011 => {PC=DPTR+A};
-    OP "JB {bit},{rel:+}"  0b00100000 bit rel, rel=(SEXT(rel)) => {if (PBIT[bit]) {PC=PC+3+rel} else {PC+=3}};
-    OP "JNB {bit},{rel:+}" 0b00110000 bit rel, rel=(SEXT(rel)) => {if (!PBIT[bit]) {PC=PC+3+rel} else {PC+=3}};
-    OP "JBC {bit},{rel:+}" 0b00010000 bit rel, rel=(SEXT(rel)) => {if (PBIT[bit]) {BIT[bit]=false; PC=PC+3+rel} else {PC+=3}};
+    OP NOP "" 0b00000000 => {PC+=1};
+    OP LJMP "#{addr:04X}" 0b00000010 imm_hi imm_lo, addr = (imm_hi<<8|imm_lo) => {PC=addr};
+    OP LCALL "#{addr:04X}" 0b00010010 imm_hi imm_lo, addr = (imm_hi<<8|imm_lo) => {PUSH16(PC+3); PC=addr};
+    OP JC "{rel:+}" 0b01000000 rel, rel=(SEXT(rel)) => {if (C) {PC=PC+2+rel} else {PC+=2}};
+    OP JNC "{rel:+}" 0b01010000 rel, rel=(SEXT(rel)) => {if (!C) {PC=PC+2+rel} else {PC+=2}};
+    OP JZ "{rel:+}" 0b01100000 rel, rel=(SEXT(rel)) => {if (A==0) {PC=PC+2+rel} else {PC+=2}};
+    OP JNZ "{rel:+}" 0b01110000 rel, rel=(SEXT(rel)) => {if (A!=0) {PC=PC+2+rel} else {PC+=2}};
+    OP SJMP "{rel:+}" 0b10000000 rel, rel=(SEXT(rel)) => {PC=PC+2+rel};
+    OP RET "" 0b00100010 => {PC=POP16()};
+    OP RETI "" 0b00110010 => {PC=POP16(); CLEAR_INT()};
+    OP JMP "@A+DPTR"       0b01110011 => {PC=DPTR+A};
+    OP JB "{bit},{rel:+}"  0b00100000 bit rel, rel=(SEXT(rel)) => {if (PBIT[bit]) {PC=PC+3+rel} else {PC+=3}};
+    OP JNB "{bit},{rel:+}" 0b00110000 bit rel, rel=(SEXT(rel)) => {if (!PBIT[bit]) {PC=PC+3+rel} else {PC+=3}};
+    OP JBC "{bit},{rel:+}" 0b00010000 bit rel, rel=(SEXT(rel)) => {if (PBIT[bit]) {BIT[bit]=false; PC=PC+3+rel} else {PC+=3}};
 
     // Conditional branches and compare/jump
-    OP "DJNZ {direct},{rel:+}" 0b11010101 direct rel, rel=(SEXT(rel)) => {DATA[direct]-=1; if (DATA[direct]!=0) {PC=PC+3+rel} else {PC+=3}};
-    OP "DJNZ R{x},{rel:+}" 0b11011000 -x 0b111 rel, rel=(SEXT(rel)) => {R[x]-=1; if (R[x]!=0) {PC=PC+2+rel} else {PC+=2}};
-    OP "CJNE A,{direct},{rel:+}" 0b10110101 direct rel, rel=(SEXT(rel)) => {let tmp=DATA[direct]; C=A<tmp; if (A!=tmp) {PC=PC+3+rel} else {PC+=3}};
-    OP "CJNE @R{x},#{imm8:02X},{rel:+}" 0b10110110 -x 0b1 imm8 rel, rel=(SEXT(rel)) => {C=IDATA[R[x]]<imm8; if (IDATA[R[x]]!=imm8) {PC=PC+3+rel} else {PC+=3}};
-    OP "CJNE R{x},#{imm8:02X},{rel:+}" 0b10111000 -x 0b111 imm8 rel, rel=(SEXT(rel)) => {C=R[x]<imm8; if (R[x]!=imm8) {PC=PC+3+rel} else {PC+=3}};
-    OP "CJNE A,#{imm8:02X},{rel:+}" 0b10110100 imm8 rel, rel=(SEXT(rel)) => {C=A<imm8; if (A!=imm8) { PC=PC+3+rel } else { PC+=3 }};
+    OP DJNZ "{direct},{rel:+}" 0b11010101 direct rel, rel=(SEXT(rel)) => {DATA[direct]-=1; if (DATA[direct]!=0) {PC=PC+3+rel} else {PC+=3}};
+    OP DJNZ "R{x},{rel:+}" 0b11011000 -x 0b111 rel, rel=(SEXT(rel)) => {R[x]-=1; if (R[x]!=0) {PC=PC+2+rel} else {PC+=2}};
+    OP CJNE "A,{direct},{rel:+}" 0b10110101 direct rel, rel=(SEXT(rel)) => {let tmp=DATA[direct]; C=A<tmp; if (A!=tmp) {PC=PC+3+rel} else {PC+=3}};
+    OP CJNE "@R{x},#{imm8:02X},{rel:+}" 0b10110110 -x 0b1 imm8 rel, rel=(SEXT(rel)) => {C=IDATA[R[x]]<imm8; if (IDATA[R[x]]!=imm8) {PC=PC+3+rel} else {PC+=3}};
+    OP CJNE "R{x},#{imm8:02X},{rel:+}" 0b10111000 -x 0b111 imm8 rel, rel=(SEXT(rel)) => {C=R[x]<imm8; if (R[x]!=imm8) {PC=PC+3+rel} else {PC+=3}};
+    OP CJNE "A,#{imm8:02X},{rel:+}" 0b10110100 imm8 rel, rel=(SEXT(rel)) => {C=A<imm8; if (A!=imm8) { PC=PC+3+rel } else { PC+=3 }};
 
     // DPTR / MOVX / MOVC
-    OP "MOV DPTR,#{imm16:04X}" 0b10010000 imm_hi imm_lo, imm16 = (imm_hi<<8|imm_lo) => {DPTR=imm16; PC+=3};
-    OP "INC DPTR" 0b10100011 => {DPTR+=1; PC+=1};
-    OP "MOVX @DPTR,A" 0b11110000 => {XDATA[DPTR]=A; PC+=1};
-    OP "MOVX A,@DPTR" 0b11100000 => {A=XDATA[DPTR]; PC+=1};
-    OP "MOVX A,@R{x}" 0b11100010 -x 0b1 => {A=XDATA[R[x]]; PC+=1};
-    OP "MOVX @R{x},A" 0b11110010 -x 0b1 => {XDATA[R[x]]=A; PC+=1};
-    OP "MOVC A,@A+DPTR" 0b10010011 => {A=CODE[DPTR+A]; PC+=1};
-    OP "MOVC A,@A+PC" 0b10000011 => {A=CODE[PC+1+A]; PC+=1};
+    OP MOV "DPTR,#{imm16:04X}" 0b10010000 imm_hi imm_lo, imm16 = (imm_hi<<8|imm_lo) => {DPTR=imm16; PC+=3};
+    OP INC "DPTR" 0b10100011 => {DPTR+=1; PC+=1};
+    OP MOVX "@DPTR,A" 0b11110000 => {XDATA[DPTR]=A; PC+=1};
+    OP MOVX "A,@DPTR" 0b11100000 => {A=XDATA[DPTR]; PC+=1};
+    OP MOVX "A,@R{x}" 0b11100010 -x 0b1 => {A=XDATA[R[x]]; PC+=1};
+    OP MOVX "@R{x},A" 0b11110010 -x 0b1 => {XDATA[R[x]]=A; PC+=1};
+    OP MOVC "A,@A+DPTR" 0b10010011 => {A=CODE[DPTR+A]; PC+=1};
+    OP MOVC "A,@A+PC" 0b10000011 => {A=CODE[PC+1+A]; PC+=1};
 
     // Accumulator and arithmetic
-    OP "CLR A" 0b11100100 => {A=0; PC+=1};
+    OP CLR "A" 0b11100100 => {A=0; PC+=1};
 
-    OP "INC A" 0b00000100 => {A=A+1; PC+=1};
-    OP "INC {direct}" 0b00000101 direct => {DATA[direct]+=1; PC+=2};
-    OP "INC @R{x}" 0b00000110 -x 0b1 => {IDATA[R[x]]+=1; PC+=1};
-    OP "INC R{x}" 0b00001000 -x 0b111 => {R[x]+=1; PC+=1};
+    OP INC "A" 0b00000100 => {A=A+1; PC+=1};
+    OP INC "{direct}" 0b00000101 direct => {DATA[direct]+=1; PC+=2};
+    OP INC "@R{x}" 0b00000110 -x 0b1 => {IDATA[R[x]]+=1; PC+=1};
+    OP INC "R{x}" 0b00001000 -x 0b111 => {R[x]+=1; PC+=1};
 
-    OP "DEC A" 0b00010100 => {A=A-1; PC+=1};
-    OP "DEC {direct}" 0b00010101 direct => {DATA[direct]-=1; PC+=2};
-    OP "DEC @R{x}" 0b00010110 -x 0b1 => {IDATA[R[x]]-=1; PC+=1};
-    OP "DEC R{x}" 0b00011000 -x 0b111 => {R[x]-=1; PC+=1};
+    OP DEC "A" 0b00010100 => {A=A-1; PC+=1};
+    OP DEC "{direct}" 0b00010101 direct => {DATA[direct]-=1; PC+=2};
+    OP DEC "@R{x}" 0b00010110 -x 0b1 => {IDATA[R[x]]-=1; PC+=1};
+    OP DEC "R{x}" 0b00011000 -x 0b111 => {R[x]-=1; PC+=1};
 
-    OP "CPL A" 0b11110100 => {A=!A; PC+=1};
+    OP CPL "A" 0b11110100 => {A=!A; PC+=1};
 
-    OP "MUL AB" 0b10100100 => {(A, B, C, OV) = mul(A, B); PC+=1};
-    OP "DIV AB" 0b10000100 => {(A, B, C, OV) = div(A, B); PC+=1};
+    OP MUL "AB" 0b10100100 => {(A, B, C, OV) = mul(A, B); PC+=1};
+    OP DIV "AB" 0b10000100 => {(A, B, C, OV) = div(A, B); PC+=1};
 
-    OP "ADD A,#{imm8:02X}" 0b00100100 imm8 => {(A, C, OV, AC) = add_with_carry(A, imm8, false); PC+=2};
-    OP "ADD A,{direct}" 0b00100101 direct => {(A, C, OV, AC) = add_with_carry(A, DATA[direct], false); PC+=2};
-    OP "ADD A,@R{x}" 0b00100110 -x 0b1 => {(A, C, OV, AC) = add_with_carry(A, IDATA[R[x]], false); PC+=1};
-    OP "ADD A,R{x}" 0b00101000 -x 0b111 => {(A, C, OV, AC) = add_with_carry(A, R[x], false); PC+=1};
+    OP ADD "A,#{imm8:02X}" 0b00100100 imm8 => {(A, C, OV, AC) = add_with_carry(A, imm8, false); PC+=2};
+    OP ADD "A,{direct}" 0b00100101 direct => {(A, C, OV, AC) = add_with_carry(A, DATA[direct], false); PC+=2};
+    OP ADD "A,@R{x}" 0b00100110 -x 0b1 => {(A, C, OV, AC) = add_with_carry(A, IDATA[R[x]], false); PC+=1};
+    OP ADD "A,R{x}" 0b00101000 -x 0b111 => {(A, C, OV, AC) = add_with_carry(A, R[x], false); PC+=1};
 
-    OP "ADDC A,#{imm8:02X}" 0b00110100 imm8 => {(A, C, OV, AC) = add_with_carry(A, imm8, C); PC+=2};
-    OP "ADDC A,{direct}" 0b00110101 direct => {(A, C, OV, AC) = add_with_carry(A, DATA[direct], C); PC+=2};
-    OP "ADDC A,@R{x}" 0b00110110 -x 0b1 => {(A, C, OV, AC) = add_with_carry(A, IDATA[R[x]], C); PC+=1};
-    OP "ADDC A,R{x}" 0b00111000 -x 0b111 => {(A, C, OV, AC) = add_with_carry(A, R[x], C); PC+=1};
+    OP ADDC "A,#{imm8:02X}" 0b00110100 imm8 => {(A, C, OV, AC) = add_with_carry(A, imm8, C); PC+=2};
+    OP ADDC "A,{direct}" 0b00110101 direct => {(A, C, OV, AC) = add_with_carry(A, DATA[direct], C); PC+=2};
+    OP ADDC "A,@R{x}" 0b00110110 -x 0b1 => {(A, C, OV, AC) = add_with_carry(A, IDATA[R[x]], C); PC+=1};
+    OP ADDC "A,R{x}" 0b00111000 -x 0b111 => {(A, C, OV, AC) = add_with_carry(A, R[x], C); PC+=1};
 
-    OP "SUBB A,#{imm8:02X}" 0b10010100 imm8 => {(A, C) = sub_with_borrow(A, imm8, C); PC+=2};
-    OP "SUBB A,{direct}" 0b10010101 direct => {(A, C) = sub_with_borrow(A, DATA[direct], C); PC+=2};
-    OP "SUBB A,@R{x}" 0b10010110 -x 0b1 => {(A, C) = sub_with_borrow(A, IDATA[R[x]], C); PC+=1};
-    OP "SUBB A,R{x}" 0b10011000 -x 0b111 => {(A, C) = sub_with_borrow(A, R[x], C); PC+=1};
+    OP SUBB "A,#{imm8:02X}" 0b10010100 imm8 => {(A, C) = sub_with_borrow(A, imm8, C); PC+=2};
+    OP SUBB "A,{direct}" 0b10010101 direct => {(A, C) = sub_with_borrow(A, DATA[direct], C); PC+=2};
+    OP SUBB "A,@R{x}" 0b10010110 -x 0b1 => {(A, C) = sub_with_borrow(A, IDATA[R[x]], C); PC+=1};
+    OP SUBB "A,R{x}" 0b10011000 -x 0b111 => {(A, C) = sub_with_borrow(A, R[x], C); PC+=1};
 
-    OP "RLC A" 0b00110011 => { (A, C) = rlc(A, C); PC+=1 };
-    OP "RRC A" 0b00010011 => { (A, C) = rrc(A, C); PC+=1 };
-    OP "RL A" 0b00100011 => { A = rl(A); PC+=1 };
-    OP "RR A" 0b00000011 => { A = rr(A); PC+=1 };
+    OP RLC "A" 0b00110011 => { (A, C) = rlc(A, C); PC+=1 };
+    OP RRC "A" 0b00010011 => { (A, C) = rrc(A, C); PC+=1 };
+    OP RL "A" 0b00100011 => { A = rl(A); PC+=1 };
+    OP RR "A" 0b00000011 => { A = rr(A); PC+=1 };
 
-    OP "ANL A,#{imm8:02X}"    0b01010100 imm8 => {A=A&imm8; PC+=2};
-    OP "ANL A,{direct}"       0b01010101 direct => {A=A&DATA[direct]; PC+=2};
-    OP "ANL A,@R{x}"          0b01010110 -x 0b1 => {A=A&IDATA[R[x]]; PC+=1};
-    OP "ANL A,R{x}"           0b01011000 -x 0b111 => {A=A&R[x]; PC+=1};
-    OP "ANL {direct},A"       0b01010010 direct => {DATA[direct]&=A; PC+=2};
-    OP "ANL {direct},#{imm8}" 0b01010011 direct imm8 => {DATA[direct]&=imm8; PC+=3};
+    OP ANL "A,#{imm8:02X}"    0b01010100 imm8 => {A=A&imm8; PC+=2};
+    OP ANL "A,{direct}"       0b01010101 direct => {A=A&DATA[direct]; PC+=2};
+    OP ANL "A,@R{x}"          0b01010110 -x 0b1 => {A=A&IDATA[R[x]]; PC+=1};
+    OP ANL "A,R{x}"           0b01011000 -x 0b111 => {A=A&R[x]; PC+=1};
+    OP ANL "{direct},A"       0b01010010 direct => {DATA[direct]&=A; PC+=2};
+    OP ANL "{direct},#{imm8}" 0b01010011 direct imm8 => {DATA[direct]&=imm8; PC+=3};
 
-    OP "ORL A,#{imm8:02X}"    0b01000100 imm8 => {A=A|imm8; PC+=2};
-    OP "ORL A,{direct}"       0b01000101 direct => {A=A|DATA[direct]; PC+=2};
-    OP "ORL A,@R{x}"          0b01000110 -x 0b1 => {A=A|IDATA[R[x]]; PC+=1};
-    OP "ORL A,R{x}"           0b01001000 -x 0b111 => {A=A|R[x]; PC+=1};
-    OP "ORL {direct},A"       0b01000010 direct => {DATA[direct]|=A; PC+=2};
-    OP "ORL {direct},#{imm8}" 0b01000011 direct imm8 => {DATA[direct]|=imm8; PC+=3};
+    OP ORL "A,#{imm8:02X}"    0b01000100 imm8 => {A=A|imm8; PC+=2};
+    OP ORL "A,{direct}"       0b01000101 direct => {A=A|DATA[direct]; PC+=2};
+    OP ORL "A,@R{x}"          0b01000110 -x 0b1 => {A=A|IDATA[R[x]]; PC+=1};
+    OP ORL "A,R{x}"           0b01001000 -x 0b111 => {A=A|R[x]; PC+=1};
+    OP ORL "{direct},A"       0b01000010 direct => {DATA[direct]|=A; PC+=2};
+    OP ORL "{direct},#{imm8}" 0b01000011 direct imm8 => {DATA[direct]|=imm8; PC+=3};
 
-    OP "XRL A,#{imm8:02X}"    0b01100100 imm8 => {A=A^imm8; PC+=2};
-    OP "XRL A,{direct}"       0b01100101 direct => {A=A^DATA[direct]; PC+=2};
-    OP "XRL A,@R{x}"          0b01100110 -x 0b1 => {let tmp=IDATA[R[x]]; A=A^tmp; PC+=1};
-    OP "XRL A,R{x}"           0b01101000 -x 0b111 => {A=A^R[x]; PC+=1};
-    OP "XRL {direct},A"       0b01100010 direct => {DATA[direct]^=A; PC+=2};
-    OP "XRL {direct},#{imm8}" 0b01100011 direct imm8 => {DATA[direct]^=imm8; PC+=3};
+    OP XRL "A,#{imm8:02X}"    0b01100100 imm8 => {A=A^imm8; PC+=2};
+    OP XRL "A,{direct}"       0b01100101 direct => {A=A^DATA[direct]; PC+=2};
+    OP XRL "A,@R{x}"          0b01100110 -x 0b1 => {let tmp=IDATA[R[x]]; A=A^tmp; PC+=1};
+    OP XRL "A,R{x}"           0b01101000 -x 0b111 => {A=A^R[x]; PC+=1};
+    OP XRL "{direct},A"       0b01100010 direct => {DATA[direct]^=A; PC+=2};
+    OP XRL "{direct},#{imm8}" 0b01100011 direct imm8 => {DATA[direct]^=imm8; PC+=3};
 
-    OP "DA A" 0b11010100 => {(A,C,AC)=decimal_adjust(A,C,AC); PC+=1};
+    OP DA "A" 0b11010100 => {(A,C,AC)=decimal_adjust(A,C,AC); PC+=1};
 
     // MOV families
-    OP "MOV A,#{imm8:02X}"         0b01110100 imm8 => {A=imm8; PC+=2};
-    OP "MOV R{x},#{imm8:02X}"      0b01111000 -x 0b111 imm8 => {R[x]=imm8; PC+=2};
-    OP "MOV @R{x},A"               0b11110110 -x 0b1 => {IDATA[R[x]]=A; PC+=1};
-    OP "MOV A,@R{x}"               0b11100110 -x 0b1 => {A=IDATA[R[x]]; PC+=1};
-    OP "MOV R{x},A"                0b11111000 -x 0b111 => {R[x]=A; PC+=1};
-    OP "MOV A,R{x}"                0b11101000 -x 0b111 => {A=R[x]; PC+=1};
-    OP "MOV {direct},A"            0b11110101 direct => {DATA[direct]=A; PC+=2};
-    OP "MOV {direct},#{imm8:02X}"  0b01110101 direct imm8 => { DATA[direct]=imm8; PC+=3 };
-    OP "MOV @R{x},#{imm8:02X}"     0b01110110 -x 0b1 imm8 => { IDATA[R[x]]=imm8; PC+=2 };
-    OP "MOV {dst},{src}"           0b10000101 src dst => { DATA[dst]=DATA[src]; PC+=3 };
-    OP "MOV {direct},@R{x}"        0b10000110 -x 0b1 direct => { DATA[direct]=IDATA[R[x]]; PC+=2 };
-    OP "MOV {direct},R{x}"         0b10001000 -x 0b111 direct => { DATA[direct]=R[x]; PC+=2 };
+    OP MOV "A,#{imm8:02X}"         0b01110100 imm8 => {A=imm8; PC+=2};
+    OP MOV "R{x},#{imm8:02X}"      0b01111000 -x 0b111 imm8 => {R[x]=imm8; PC+=2};
+    OP MOV "@R{x},A"               0b11110110 -x 0b1 => {IDATA[R[x]]=A; PC+=1};
+    OP MOV "A,@R{x}"               0b11100110 -x 0b1 => {A=IDATA[R[x]]; PC+=1};
+    OP MOV "R{x},A"                0b11111000 -x 0b111 => {R[x]=A; PC+=1};
+    OP MOV "A,R{x}"                0b11101000 -x 0b111 => {A=R[x]; PC+=1};
+    OP MOV "{direct},A"            0b11110101 direct => {DATA[direct]=A; PC+=2};
+    OP MOV "{direct},#{imm8:02X}"  0b01110101 direct imm8 => { DATA[direct]=imm8; PC+=3 };
+    OP MOV "@R{x},#{imm8:02X}"     0b01110110 -x 0b1 imm8 => { IDATA[R[x]]=imm8; PC+=2 };
+    OP MOV "{dst},{src}"           0b10000101 src dst => { DATA[dst]=DATA[src]; PC+=3 };
+    OP MOV "{direct},@R{x}"        0b10000110 -x 0b1 direct => { DATA[direct]=IDATA[R[x]]; PC+=2 };
+    OP MOV "{direct},R{x}"         0b10001000 -x 0b111 direct => { DATA[direct]=R[x]; PC+=2 };
 
-    OP "MOV A,{direct}"            0b11100101 direct => {A=PDATA[direct]; PC+=2};
-    OP "MOV @R{x},{direct}"        0b10100110 -x 0b1 direct => { IDATA[R[x]]=PDATA[direct]; PC+=2 };
-    OP "MOV R{x},{direct}"         0b10101000 -x 0b111 direct => { R[x]=PDATA[direct]; PC+=2 };
+    OP MOV "A,{direct}"            0b11100101 direct => {A=PDATA[direct]; PC+=2};
+    OP MOV "@R{x},{direct}"        0b10100110 -x 0b1 direct => { IDATA[R[x]]=PDATA[direct]; PC+=2 };
+    OP MOV "R{x},{direct}"         0b10101000 -x 0b111 direct => { R[x]=PDATA[direct]; PC+=2 };
 
     // Stack
-    OP "PUSH {direct}" 0b11000000 direct => {PUSH(DATA[direct]); PC+=2};
-    OP "POP {direct}" 0b11010000 direct => {DATA[direct]=POP(); PC+=2};
+    OP PUSH "{direct}" 0b11000000 direct => {PUSH(DATA[direct]); PC+=2};
+    OP POP "{direct}" 0b11010000 direct => {DATA[direct]=POP(); PC+=2};
 
     // Carry/bit operations
-    OP "CLR C" 0b11000011 => {C=false; PC+=1};
-    OP "SETB C" 0b11010011 => {C=true; PC+=1};
-    OP "CPL C" 0b10110011 => {C=!C; PC+=1};
-    OP "CLR #{bit}" 0b11000010 bit => {BIT[bit]=false; PC+=2};
-    OP "SETB #{bit}" 0b11010010 bit => {BIT[bit]=true; PC+=2};
-    OP "CPL #{bit}" 0b10110010 bit => {BIT[bit]=!BIT[bit]; PC+=2};
-    OP "MOV C,#{bit}" 0b10100010 bit => {C=PBIT[bit]; PC+=2};
-    OP "MOV #{bit},C" 0b10010010 bit => {PBIT[bit]=C; PC+=2};
-    OP "ANL C,#{bit}" 0b10000010 bit => {C&=PBIT[bit]; PC+=2};
-    OP "ANL C,/#{bit}" 0b10110000 bit => {C&=!PBIT[bit]; PC+=2};
-    OP "ORL C,#{bit}" 0b01110010 bit => {C|=PBIT[bit]; PC+=2};
-    OP "ORL C,/#{bit}" 0b10100000 bit => {C|=!PBIT[bit]; PC+=2};
+    OP CLR "C" 0b11000011 => {C=false; PC+=1};
+    OP SETB "C" 0b11010011 => {C=true; PC+=1};
+    OP CPL "C" 0b10110011 => {C=!C; PC+=1};
+    OP CLR "#{bit}" 0b11000010 bit => {BIT[bit]=false; PC+=2};
+    OP SETB "#{bit}" 0b11010010 bit => {BIT[bit]=true; PC+=2};
+    OP CPL "#{bit}" 0b10110010 bit => {BIT[bit]=!BIT[bit]; PC+=2};
+    OP MOV "C,#{bit}" 0b10100010 bit => {C=PBIT[bit]; PC+=2};
+    OP MOV "#{bit},C" 0b10010010 bit => {PBIT[bit]=C; PC+=2};
+    OP ANL "C,#{bit}" 0b10000010 bit => {C&=PBIT[bit]; PC+=2};
+    OP ANL "C,/#{bit}" 0b10110000 bit => {C&=!PBIT[bit]; PC+=2};
+    OP ORL "C,#{bit}" 0b01110010 bit => {C|=PBIT[bit]; PC+=2};
+    OP ORL "C,/#{bit}" 0b10100000 bit => {C|=!PBIT[bit]; PC+=2};
 
     // Exchange
-    OP "SWAP A" 0b11000100 => {A=swap_nibbles(A); PC+=1};
-    OP "XCH A,{direct}" 0b11000101 direct => {(A, DATA[direct])=(DATA[direct], A);PC+=2};
-    OP "XCH A,@R{x}" 0b11000110 -x 0b1 => {(A, IDATA[R[x]])=(IDATA[R[x]], A); PC+=1};
-    OP "XCH A,R{x}" 0b11001000 -x 0b111 => {(A, R[x])=(R[x], A);PC+=1};
-    OP "XCHD A,@R{x}" 0b11010110 -x 0b1 => {let tmp=IDATA[R[x]]; let tmp2=A&0x0F; A=(A&0xF0)|(tmp&0x0F); IDATA[R[x]]=tmp&0xF0|tmp2; PC+=1};
+    OP SWAP "A" 0b11000100 => {A=swap_nibbles(A); PC+=1};
+    OP XCH "A,{direct}" 0b11000101 direct => {(A, DATA[direct])=(DATA[direct], A);PC+=2};
+    OP XCH "A,@R{x}" 0b11000110 -x 0b1 => {(A, IDATA[R[x]])=(IDATA[R[x]], A); PC+=1};
+    OP XCH "A,R{x}" 0b11001000 -x 0b111 => {(A, R[x])=(R[x], A);PC+=1};
+    OP XCHD "A,@R{x}" 0b11010110 -x 0b1 => {let tmp=IDATA[R[x]]; let tmp2=A&0x0F; A=(A&0xF0)|(tmp&0x0F); IDATA[R[x]]=tmp&0xF0|tmp2; PC+=1};
 }
 pub(crate) use op;
 
