@@ -1,9 +1,8 @@
+use std::cell::RefCell;
 use std::sync::mpsc;
 
-use crate::{
-    PortMapper,
-    sfr::{SFR_SBUF, SFR_SCON},
-};
+use crate::sfr::{SFR_SBUF, SFR_SCON};
+use crate::{CpuView, PortMapper};
 
 /// A basic serial port peripheral using `SCON` and `SBUF` that emulates a
 /// delayed send/receive.
@@ -23,9 +22,9 @@ use crate::{
 pub struct Serial {
     input_queue: mpsc::Receiver<u8>,
     send_queue: mpsc::Sender<u8>,
-    sbuf_read: Option<u8>,
+    sbuf_read: RefCell<Option<u8>>,
     sbuf_write: Option<u8>,
-    recv_tick_delay: u16,
+    recv_tick_delay: RefCell<u16>,
     send_tick_delay: u16,
     scon: u8,
 }
@@ -38,10 +37,10 @@ impl Serial {
             Self {
                 input_queue: in_rx,
                 send_queue: out_tx,
-                sbuf_read: None,
+                sbuf_read: RefCell::new(None),
                 sbuf_write: None,
                 scon: 1 << 4,
-                recv_tick_delay: 0,
+                recv_tick_delay: RefCell::new(0),
                 send_tick_delay: 0,
             },
             in_tx,
@@ -51,17 +50,18 @@ impl Serial {
 }
 
 impl PortMapper for Serial {
-    fn interest(&self, addr: u8) -> bool {
+    type WriteValue = (u8, u8);
+    fn interest<C: CpuView>(&self, cpu: &C, addr: u8) -> bool {
         addr == SFR_SCON || addr == SFR_SBUF
     }
-    fn read(&mut self, addr: u8) -> u8 {
+    fn read<C: CpuView>(&self, cpu: &C, addr: u8) -> u8 {
         match addr {
             SFR_SCON => {
                 return self.scon;
             }
             SFR_SBUF => {
-                if let Some(value) = self.sbuf_read.take() {
-                    self.recv_tick_delay = 0;
+                if let Some(value) = self.sbuf_read.borrow_mut().take() {
+                    *self.recv_tick_delay.borrow_mut() = 0;
                     return value;
                 }
                 return 0;
@@ -71,7 +71,10 @@ impl PortMapper for Serial {
             }
         }
     }
-    fn write(&mut self, addr: u8, value: u8) {
+    fn prepare_write<C: CpuView>(&self, cpu: &C, addr: u8, value: u8) -> Self::WriteValue {
+        (addr, value)
+    }
+    fn write(&mut self, (addr, value): Self::WriteValue) {
         match addr {
             SFR_SCON => {
                 // println!("Serial: Set SCON {:02X}", value);
@@ -86,7 +89,7 @@ impl PortMapper for Serial {
             }
         }
     }
-    fn tick(&mut self) {
+    fn tick<C: CpuView>(&mut self, cpu: &C) {
         // This may delay loopback by one tick
         if let Some(value) = self.sbuf_write {
             self.send_tick_delay = self.send_tick_delay.wrapping_add(1);
@@ -100,11 +103,12 @@ impl PortMapper for Serial {
             }
         }
         if self.scon & (1 << 4) != 0 {
-            self.recv_tick_delay = self.recv_tick_delay.wrapping_add(1);
-            if self.recv_tick_delay >= 20 {
-                self.recv_tick_delay = 0;
+            let mut delay = self.recv_tick_delay.borrow_mut();
+            *delay = delay.wrapping_add(1);
+            if *delay >= 20 {
+                *delay = 0;
                 if let Ok(value) = self.input_queue.try_recv() {
-                    self.sbuf_read = Some(value);
+                    *self.sbuf_read.borrow_mut() = Some(value);
                     self.scon |= 1 << 0;
                     // println!(
                     // "Serial: Got value {:02X}, set RI SCON={:02X}",

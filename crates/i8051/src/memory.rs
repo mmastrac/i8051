@@ -1,17 +1,23 @@
 //! Various memory mapper implementations for the i8051 microcontroller.
 
-use crate::cpu::MemoryMapper;
+use crate::{CpuView, MemoryMapper, ReadOnlyMemoryMapper};
 
 pub struct RAM {
     ram: [u8; 0x10000],
 }
 
 impl MemoryMapper for RAM {
-    fn read(&self, addr: u16) -> u8 {
+    type WriteValue = (u16, u8);
+    fn read<C: CpuView>(&self, _cpu: &C, addr: u16) -> u8 {
         self.ram[addr as usize]
     }
-    fn write(&mut self, addr: u16, value: u8) {
-        self.ram[addr as usize] = value;
+    fn prepare_write<C: CpuView>(&self, _cpu: &C, addr: u16, value: u8) -> Self::WriteValue {
+        (addr, value)
+    }
+    fn write(&mut self, value: Self::WriteValue) {
+        match value {
+            (addr, value) => self.ram[addr as usize] = value,
+        }
     }
 }
 
@@ -25,6 +31,12 @@ impl RAM {
     pub fn new() -> Self {
         Self { ram: [0; 0x10000] }
     }
+    pub fn read(&self, addr: u16) -> u8 {
+        self.ram[addr as usize]
+    }
+    pub fn write(&mut self, addr: u16, value: u8) {
+        self.ram[addr as usize] = value;
+    }
 }
 
 pub struct ROM {
@@ -37,11 +49,8 @@ impl ROM {
     }
 }
 
-impl MemoryMapper for ROM {
-    fn read(&self, addr: u16) -> u8 {
+impl ReadOnlyMemoryMapper for ROM {
+    fn read<C: CpuView>(&self, _cpu: &C, addr: u16) -> u8 {
         self.rom[addr as usize]
-    }
-    fn write(&mut self, _: u16, _: u8) {
-        // do nothing
     }
 }

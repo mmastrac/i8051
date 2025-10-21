@@ -35,6 +35,10 @@ pub mod memory;
 pub mod peripheral;
 mod regs;
 pub mod sfr;
+mod traits;
 
 pub use cpu::ops;
-pub use cpu::{ControlFlow, Cpu, DefaultPortMapper, Instruction, MemoryMapper, Opcode, PortMapper};
+pub use cpu::{ControlFlow, Cpu, Instruction, Interrupt, Opcode};
+pub use traits::{
+    CpuContext, CpuView, DefaultPortMapper, MemoryMapper, PortMapper, ReadOnlyMemoryMapper,
+};

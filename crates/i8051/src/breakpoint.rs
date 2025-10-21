@@ -1,9 +1,7 @@
 use std::collections::BTreeMap;
 
-use crate::{
-    Cpu, MemoryMapper,
-    sfr::{PSW_AC, PSW_C, PSW_OV, PSW_Z},
-};
+use crate::sfr::{PSW_AC, PSW_C, PSW_F0, PSW_OV};
+use crate::{Cpu, CpuContext};
 
 pub enum Action {
     /// Log a message to the console.
@@ -21,12 +19,7 @@ pub enum Action {
 }
 
 impl Action {
-    fn run(
-        &self,
-        cpu: &mut Cpu,
-        breakpoints: &mut BreakpointState,
-        mut code: &mut dyn MemoryMapper,
-    ) {
+    fn run(&self, cpu: &mut Cpu, breakpoints: &mut BreakpointState, ctx: &mut impl CpuContext) {
         match self {
             Self::Log(message) => println!("[BP] {}", message),
             Self::Set(register, value) => match register.as_str() {
@@ -41,18 +34,18 @@ impl Action {
             Self::SetTraceInstructions(value) => breakpoints.trace_instructions = *value,
             Self::SetTraceRegisters(value) => breakpoints.trace_registers = *value,
             Self::TraceInstructions => {
-                println!("{:#}", cpu.decode_pc(&mut code));
+                println!("{:#}", cpu.decode_pc(ctx));
             }
             Self::TraceRegisters => {
                 println!(
-                    "  A={:02X?}  B={:02X?}  DPTR={:04X?}  C={} OV={} AC={} Z={}",
+                    "  A={:02X?}  B={:02X?}  DPTR={:04X?}  C={} OV={} AC={} F0={}",
                     cpu.a(),
                     cpu.b(),
                     cpu.dptr(),
                     cpu.psw(PSW_C) as u8,
                     cpu.psw(PSW_OV) as u8,
                     cpu.psw(PSW_AC) as u8,
-                    cpu.psw(PSW_Z) as u8
+                    cpu.psw(PSW_F0) as u8
                 );
                 print!("  ");
                 for i in 0..8 {
@@ -106,10 +99,10 @@ impl Breakpoints {
         self.breakpoints_after.clear();
     }
 
-    pub fn run(&mut self, before: bool, cpu: &mut Cpu, code: &mut impl MemoryMapper) {
+    pub fn run(&mut self, before: bool, cpu: &mut Cpu, ctx: &mut impl CpuContext) {
         let pc = cpu.pc;
         if self.state.trace_instructions && before {
-            Action::TraceInstructions.run(cpu, &mut self.state, code);
+            Action::TraceInstructions.run(cpu, &mut self.state, ctx);
         }
 
         let actions = if before {
@@ -124,10 +117,10 @@ impl Breakpoints {
                 .unwrap_or(&[])
         };
         for action in actions {
-            action.run(cpu, &mut self.state, code);
+            action.run(cpu, &mut self.state, ctx);
         }
         if self.state.trace_registers && !before {
-            Action::TraceRegisters.run(cpu, &mut self.state, code);
+            Action::TraceRegisters.run(cpu, &mut self.state, ctx);
         }
     }
 }

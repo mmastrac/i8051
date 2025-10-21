@@ -2,8 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use i8051::memory::{RAM, ROM};
-use i8051::{Cpu, MemoryMapper};
-use i8051::{PortMapper, sfr::*};
+use i8051::sfr::*;
+use i8051::{Cpu, CpuContext, CpuView, PortMapper};
 
 use clap::Parser;
 
@@ -14,7 +14,7 @@ struct Args {
     rom_file: PathBuf,
 
     /// Maximum number of instructions to execute
-    #[arg(short, long, default_value = "1000")]
+    #[arg(short, long, default_value = "10000")]
     max_instructions: u64,
 
     /// Enable trace output
@@ -27,22 +27,26 @@ struct Ports {
 }
 
 impl PortMapper for Ports {
-    fn read(&mut self, addr: u8) -> u8 {
+    type WriteValue = (u8, u8);
+    fn read<C: CpuView>(&self, _cpu: &C, addr: u8) -> u8 {
         println!("PORT read {:02X}", addr);
         self.ram[addr as usize - 128]
     }
-    fn write(&mut self, addr: u8, value: u8) {
+    fn prepare_write<C: CpuView>(&self, _cpu: &C, addr: u8, value: u8) -> Self::WriteValue {
+        (addr, value)
+    }
+    fn write(&mut self, (addr, value): Self::WriteValue) {
         println!("PORT write {:02X} = {:02X}", addr, value);
         self.ram[addr as usize - 128] = value;
     }
-    fn read_latch(&mut self, addr: u8) -> u8 {
+    fn read_latch<C: CpuView>(&self, _cpu: &C, addr: u8) -> u8 {
         println!("PORT read latch {:02X}", addr);
         self.ram[addr as usize - 128]
     }
-    fn interest(&self, _: u8) -> bool {
+    fn interest<C: CpuView>(&self, _cpu: &C, _addr: u8) -> bool {
         true
     }
-    fn tick(&mut self) {}
+    fn tick<C: CpuView>(&mut self, _cpu: &C) {}
 }
 
 pub fn main() {
@@ -50,13 +54,14 @@ pub fn main() {
 
     let mut cpu = Cpu::new();
 
-    let mut ram = RAM::new();
-    let mut code = ROM::new(fs::read(&args.rom_file).unwrap());
-    let mut ports = Ports { ram: [0; 128] };
+    let ram = RAM::new();
+    let code = ROM::new(fs::read(&args.rom_file).unwrap());
+    let ports = Ports { ram: [0; 128] };
+    let mut context = (ports, ram, code);
 
     let mut instruction_count = 0;
     loop {
-        let instruction = cpu.decode_pc(&mut code);
+        let instruction = cpu.decode_pc(&mut context);
         if args.trace {
             println!(
                 "{pc:04X}: {:10} {instruction}",
@@ -76,7 +81,7 @@ pub fn main() {
                 cpu.psw(PSW_C),
                 cpu.psw(PSW_OV),
                 cpu.psw(PSW_AC),
-                cpu.psw(PSW_Z)
+                cpu.psw(PSW_F0)
             );
             print!("  ");
             for i in 0..8 {
@@ -85,7 +90,7 @@ pub fn main() {
             println!();
         }
         instruction_count += 1;
-        if !cpu.step(&mut ram, &mut code, &mut ports) {
+        if !cpu.step(&mut context) {
             println!(
                 "CPU halted at 0x{:04X} after {} instructions",
                 cpu.pc, instruction_count
@@ -102,14 +107,14 @@ pub fn main() {
     }
 
     println!(
-        "  A={:02X?}  B={:02X?}  DPTR={:04X?}  C={} OV={} AC={} Z={}",
+        "  A={:02X?}  B={:02X?}  DPTR={:04X?}  C={} OV={} AC={} F0={}",
         cpu.a(),
         cpu.b(),
         cpu.dptr(),
         cpu.psw(PSW_C),
         cpu.psw(PSW_OV),
         cpu.psw(PSW_AC),
-        cpu.psw(PSW_Z)
+        cpu.psw(PSW_F0)
     );
     print!("  ");
     for i in 0..8 {
@@ -119,9 +124,9 @@ pub fn main() {
 
     println!(
         "MEM: {:02X} {:02X} {:02X} {:02X}",
-        ram.read(0x8000),
-        ram.read(0x8001),
-        ram.read(0x8002),
-        ram.read(0x8003)
+        context.xdata().read(0x8000),
+        context.xdata().read(0x8001),
+        context.xdata().read(0x8002),
+        context.xdata().read(0x8003)
     );
 }
