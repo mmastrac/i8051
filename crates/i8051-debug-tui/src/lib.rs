@@ -5,6 +5,7 @@ use std::io;
 
 use i8051::sfr::{PSW_AC, PSW_C, PSW_F0, PSW_OV, SFR_A, SFR_B, SFR_DPH, SFR_DPL, SFR_SP};
 use i8051::{Cpu, CpuContext, Register};
+use ratatui::text::Text;
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
@@ -95,8 +96,10 @@ struct DebuggerInternalState {
 struct CodeWindowState {
     /// The first address to display in the code window
     start: Cell<u32>,
-    /// True if the user has explicitly navigated to this address.
-    explicit_navigation: bool,
+    /// The last height of the code window
+    last_height: Cell<usize>,
+    /// The focus address to display in the code window, or None to use the PC
+    focus: Option<u32>,
 }
 
 /// Configuration for the debugger UI
@@ -142,7 +145,8 @@ impl Debugger {
                 is_editing: false,
                 code_window: CodeWindowState {
                     start: Cell::new(0),
-                    explicit_navigation: false,
+                    last_height: Cell::new(10),
+                    focus: None,
                 },
             },
         })
@@ -261,8 +265,8 @@ impl Debugger {
                 code: KeyCode::Char('s'),
                 ..
             }) if self.state.focus == DebuggerFocus::Code => {
-                // Step when code is focused
-                self.state.code_window.explicit_navigation = false;
+                // Step when code is focused, removing any custom address selection
+                self.state.code_window.focus = None;
                 true
             }
             Event::Key(KeyEvent {
@@ -281,7 +285,62 @@ impl Debugger {
                 ..
             }) if self.state.focus == DebuggerFocus::Code => {
                 // Toggle breakpoint
-                self.toggle_breakpoint(cpu.pc_ext(ctx));
+                let addr = self.state.code_window.focus.unwrap_or(cpu.pc_ext(ctx));
+                self.toggle_breakpoint(addr);
+                false
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Up, ..
+            }) if self.state.focus == DebuggerFocus::Code => {
+                // Scroll code window up (decrement start address)
+                let current = self.state.code_window.focus.unwrap_or(cpu.pc_ext(ctx));
+
+                // If we're at the top of the window, jump back 10 instructions and
+                // try to resynchronize
+                let mut start = self.state.code_window.start.get();
+                if start == current {
+                    start = start.saturating_sub(10);
+                }
+
+                // Render instructions and see if we can go back further
+                let instructions = cpu.decode_range(ctx, start, current, 100);
+                if let Some(current) = instructions
+                    .iter()
+                    .position(|instruction| instruction.pc() == current)
+                {
+                    self.state.code_window.start.set(instructions[0].pc());
+                    self.state.code_window.focus =
+                        Some(instructions[current.saturating_sub(1)].pc());
+                } else {
+                    // We failed to resynchronize, so just jump back 1 byte
+                    self.state.code_window.start.set(start);
+                    self.state.code_window.focus = Some(current.saturating_sub(1));
+                }
+                false
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Down,
+                ..
+            }) if self.state.focus == DebuggerFocus::Code => {
+                // Scroll code window down (increment start address)
+                let current = self.state.code_window.focus.unwrap_or(cpu.pc_ext(ctx));
+                let height = self.state.code_window.last_height.get();
+                let instructions =
+                    cpu.decode_range(ctx, self.state.code_window.start.get(), current, 100);
+                let len = cpu.decode(ctx, current).len();
+                if let Some(current) = instructions
+                    .iter()
+                    .position(|instruction| instruction.pc() == current)
+                {
+                    let scroll = height.saturating_sub(current);
+                    if scroll <= 2 {
+                        self.state.code_window.start.set(instructions[2].pc());
+                    } else {
+                        self.state.code_window.start.set(instructions[0].pc());
+                    }
+                }
+                self.state.code_window.focus = Some(current.saturating_add(len as u32));
+
                 false
             }
             Event::Key(KeyEvent {
@@ -443,22 +502,23 @@ fn render_disassembly(
 ) {
     let pc = cpu.pc_ext(ctx);
     let mut lines = Vec::new();
+    let code_window_focus = matches!(focus, DebuggerFocus::Code);
 
     // Calculate how many instructions we can fit in the available area
     let available_height = area.height as usize;
     let max_lines = available_height.min(100);
+    code_window.last_height.set(max_lines);
 
     // Decode the instructions for the code window, caching the start value if we need to.
-    let mut instructions = cpu.decode_range(ctx, code_window.start.get(), max_lines);
-    if !code_window.explicit_navigation {
-        if !instructions
-            .iter()
-            .any(|instruction| instruction.pc() == pc)
-        {
-            instructions = cpu.decode_range(ctx, pc.saturating_sub(10), max_lines);
-            code_window.start.set(instructions.first().unwrap().pc());
-        }
+    let focus_addr = code_window.focus.unwrap_or(pc);
+    let mut instructions = cpu.decode_range(ctx, code_window.start.get(), focus_addr, max_lines);
+    if !instructions
+        .iter()
+        .any(|instruction| instruction.pc() == focus_addr)
+    {
+        instructions = cpu.decode_range(ctx, focus_addr.saturating_sub(10), focus_addr, max_lines);
     }
+    code_window.start.set(instructions.first().unwrap().pc());
 
     for instruction in instructions {
         let bytes_str = instruction
@@ -471,6 +531,7 @@ fn render_disassembly(
         let current_pc = instruction.pc();
         let has_breakpoint = breakpoints.contains(&current_pc);
         let is_current = current_pc == pc;
+        let is_focused = current_pc == focus_addr;
 
         let bp_marker = if has_breakpoint { "●" } else { " " };
         let pc_marker = if is_current { ">" } else { " " };
@@ -492,21 +553,23 @@ fn render_disassembly(
             Style::default().fg(Color::Red)
         } else {
             Style::default()
-        };
-
-        lines.push(Line::from(Span::styled(line_text, style)));
-    }
-
-    let code_window_focus = matches!(focus, DebuggerFocus::Code);
-    let paragraph = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .style(Style::default().bg(if code_window_focus {
+        }
+        .bg(if is_focused {
+            Color::Green
+        } else if code_window_focus {
             Color::Black
         } else {
             Color::Reset
-        }));
+        });
 
-    f.render_widget(paragraph, area);
+        let line = Line::default().patch_style(style).spans([line_text]);
+        let text = Text::from(line);
+        lines.push(text);
+    }
+
+    for (row, line) in area.rows().zip(lines) {
+        f.render_widget(line, row);
+    }
 }
 
 fn render_registers(
