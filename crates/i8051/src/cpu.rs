@@ -557,6 +557,10 @@ impl Cpu {
         (self.pc as u32) | (ctx.ports().pc_extension(&(&*self, &*ctx)) as u32) << 16
     }
 
+    pub fn pc_ext_addr(&self, ctx: &impl CpuContext, addr: u16) -> u32 {
+        (addr as u32) | (ctx.ports().pc_extension(&(&*self, &*ctx)) as u32) << 16
+    }
+
     /// Push a value to the stack. The stack is stored in internal RAM and
     /// indexed by the SP register.
     pub fn push_stack(&mut self, value: u8) {

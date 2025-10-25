@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::io;
 
 use i8051::sfr::{PSW_AC, PSW_C, PSW_F0, PSW_OV, SFR_A, SFR_B, SFR_DPH, SFR_DPL, SFR_SP};
-use i8051::{Cpu, CpuContext, Register};
+use i8051::{ControlFlow, Cpu, CpuContext, Register};
 use ratatui::text::Text;
 use ratatui::{
     Frame, Terminal,
@@ -520,6 +520,29 @@ fn render_disassembly(
     }
     code_window.start.set(instructions.first().unwrap().pc());
 
+    fn control_flow_addr(
+        cpu: &Cpu,
+        ctx: &impl CpuContext,
+        control_flow: ControlFlow,
+    ) -> Option<(&'static str, u32)> {
+        match control_flow {
+            ControlFlow::Call(_, pc) => Some((" ↦ ", cpu.pc_ext_addr(ctx, pc))),
+            ControlFlow::Choice(_, pc) => Some((" ↔ ", cpu.pc_ext_addr(ctx, pc))),
+            _ => None,
+        }
+    }
+
+    let control_flow = instructions
+        .iter()
+        .find(|instruction| instruction.pc() == focus_addr)
+        .map(|instruction| instruction.control_flow())
+        .and_then(|control_flow| control_flow_addr(cpu, ctx, control_flow));
+    let control_flow_pc = instructions
+        .iter()
+        .find(|instruction| instruction.pc() == pc)
+        .map(|instruction| instruction.control_flow())
+        .and_then(|control_flow| control_flow_addr(cpu, ctx, control_flow));
+
     for instruction in instructions {
         let bytes_str = instruction
             .bytes()
@@ -536,13 +559,28 @@ fn render_disassembly(
         let bp_marker = if has_breakpoint { "●" } else { " " };
         let pc_marker = if is_current { ">" } else { " " };
 
+        let control_flow_marker = control_flow.and_then(|(marker, addr)| {
+            if addr == current_pc {
+                Some(marker)
+            } else {
+                None
+            }
+        });
+        let control_flow_marker_pc = control_flow_pc.and_then(|(marker, addr)| {
+            if addr == current_pc {
+                Some(marker)
+            } else {
+                None
+            }
+        });
+
         let line_text = format!(
-            "{}{} {:04X}: {:12} {}",
+            "{}{} {:04X}: {:12} {} ",
             bp_marker,
             pc_marker,
             current_pc,
             bytes_str,
-            instruction.decode()
+            instruction.decode(),
         );
 
         let style = if is_current {
@@ -555,14 +593,24 @@ fn render_disassembly(
             Style::default()
         }
         .bg(if is_focused {
-            Color::Green
+            if is_current {
+                Color::Yellow
+            } else {
+                Color::Green
+            }
         } else if code_window_focus {
             Color::Black
         } else {
             Color::Reset
         });
 
-        let line = Line::default().patch_style(style).spans([line_text]);
+        let mut line = Line::default().patch_style(style).spans([line_text]);
+        line.push_span(Span::styled(
+            control_flow_marker
+                .or(control_flow_marker_pc)
+                .unwrap_or_default(),
+            Style::default().bg(Color::Blue),
+        ));
         let text = Text::from(line);
         lines.push(text);
     }
