@@ -379,6 +379,62 @@ impl Cpu {
         }
     }
 
+    /// Decode an approximate range of instructions. The suggested start address
+    /// may be adjusted to ensure the instruction stream decodes correctly based on the
+    /// current PC.
+    pub fn decode_range(
+        &self,
+        ctx: &mut impl CpuContext,
+        start: u32,
+        lines: usize,
+    ) -> Vec<Instruction> {
+        let mut instructions = Vec::new();
+        let actual_pc = self.pc_ext(ctx);
+
+        // Start with a naive approach of decoding the instructions at the given start address
+        for offset in [0, -1, 1, -2, 2, 3, 0] {
+            instructions.clear();
+            let mut pc = start.wrapping_add_signed(offset);
+            let mut decoded_pc = false;
+            for _ in 0..lines {
+                if pc == actual_pc {
+                    decoded_pc = true;
+                }
+                let instruction = self.decode(ctx, pc);
+                pc = pc.wrapping_add(instruction.len() as _);
+                instructions.push(instruction);
+            }
+            let end = pc;
+
+            // If we decoded the actual PC, return the instructions
+            if decoded_pc {
+                return instructions;
+            }
+
+            // If we aren't surrounding the current PC, just assume the decoding
+            // is value.
+            if !(start..end).contains(&actual_pc) {
+                return instructions;
+            }
+        }
+
+        // If we hit this point, we failed to decode something that includes the PC,
+        // so just do our best.
+        let pc_stream = self.decode_range(ctx, actual_pc, lines);
+
+        if let Some(index) = pc_stream
+            .iter()
+            .position(|instruction| instruction.pc() > actual_pc)
+        {
+            instructions.truncate(index);
+            instructions.extend(pc_stream.into_iter());
+            instructions.truncate(lines);
+            instructions
+        } else {
+            pc_stream
+        }
+    }
+
     /// Get the value of the A register.
     pub fn a(&self) -> u8 {
         self.a

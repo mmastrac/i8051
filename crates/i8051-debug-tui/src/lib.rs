@@ -1,8 +1,9 @@
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::io;
 
-use i8051::sfr::{SFR_A, SFR_B, SFR_DPH, SFR_DPL, SFR_SP, PSW_AC, PSW_C, PSW_F0, PSW_OV};
+use i8051::sfr::{PSW_AC, PSW_C, PSW_F0, PSW_OV, SFR_A, SFR_B, SFR_DPH, SFR_DPL, SFR_SP};
 use i8051::{Cpu, CpuContext, Register};
 use ratatui::{
     Frame, Terminal,
@@ -52,7 +53,7 @@ impl DebuggerFocus {
             Reg(Register::DPTR),
             Output,
         ];
-        
+
         let index = ORDER.iter().position(|r| r == &self).unwrap_or(0);
         ORDER[(index + 1) % ORDER.len()]
     }
@@ -79,6 +80,15 @@ struct DebuggerInternalState {
     edit_buffer: String,
     /// Whether we're currently editing (if true, edit_buffer is shown in place of the focused register)
     is_editing: bool,
+    /// The current code window state
+    code_window: CodeWindowState,
+}
+
+struct CodeWindowState {
+    /// The first address to display in the code window
+    start: Cell<u32>,
+    /// True if the user has explicitly navigated to this address.
+    explicit_navigation: bool,
 }
 
 /// Configuration for the debugger UI
@@ -122,6 +132,10 @@ impl Debugger {
                 state: DebuggerState::Paused,
                 edit_buffer: String::new(),
                 is_editing: false,
+                code_window: CodeWindowState {
+                    start: Cell::new(0),
+                    explicit_navigation: false,
+                },
             },
         })
     }
@@ -156,13 +170,18 @@ impl Debugger {
         // Handle editing mode
         if self.state.is_editing {
             match event {
-                Event::Key(KeyEvent { code: KeyCode::Esc, .. }) => {
+                Event::Key(KeyEvent {
+                    code: KeyCode::Esc, ..
+                }) => {
                     // Cancel editing
                     self.state.is_editing = false;
                     self.state.edit_buffer.clear();
                     return false;
                 }
-                Event::Key(KeyEvent { code: KeyCode::Enter, .. }) => {
+                Event::Key(KeyEvent {
+                    code: KeyCode::Enter,
+                    ..
+                }) => {
                     // Apply the edit
                     if let DebuggerFocus::Reg(register) = self.state.focus {
                         if let Ok(value) = u32::from_str_radix(&self.state.edit_buffer, 16) {
@@ -173,11 +192,17 @@ impl Debugger {
                     self.state.edit_buffer.clear();
                     return false;
                 }
-                Event::Key(KeyEvent { code: KeyCode::Backspace, .. }) => {
+                Event::Key(KeyEvent {
+                    code: KeyCode::Backspace,
+                    ..
+                }) => {
                     self.state.edit_buffer.pop();
                     return false;
                 }
-                Event::Key(KeyEvent { code: KeyCode::Char(c), .. }) if c.is_ascii_hexdigit() => {
+                Event::Key(KeyEvent {
+                    code: KeyCode::Char(c),
+                    ..
+                }) if c.is_ascii_hexdigit() => {
                     // Get max length for this register
                     let max_len = match self.state.focus {
                         DebuggerFocus::Reg(Register::PC) | DebuggerFocus::Reg(Register::DPTR) => 4,
@@ -194,21 +219,34 @@ impl Debugger {
 
         // Handle normal mode
         match event {
-            Event::Key(KeyEvent { code: KeyCode::Char('c'), modifiers: KeyModifiers::CONTROL, .. }) => {
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }) => {
                 if self.state.state == DebuggerState::Running {
                     self.state.state = DebuggerState::Paused;
                 }
                 false
             }
-            Event::Key(KeyEvent { code: KeyCode::Tab, .. }) => {
+            Event::Key(KeyEvent {
+                code: KeyCode::Tab, ..
+            }) => {
                 self.state.focus = self.state.focus.next();
                 false
             }
-            Event::Key(KeyEvent { code: KeyCode::Char('s'), .. }) if self.state.focus == DebuggerFocus::Code => {
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('s'),
+                ..
+            }) if self.state.focus == DebuggerFocus::Code => {
                 // Step when code is focused
+                self.state.code_window.explicit_navigation = false;
                 true
             }
-            Event::Key(KeyEvent { code: KeyCode::Char('r'), .. }) if self.state.focus == DebuggerFocus::Code => {
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('r'),
+                ..
+            }) if self.state.focus == DebuggerFocus::Code => {
                 // Toggle run/pause
                 self.state.state = match self.state.state {
                     DebuggerState::Paused => DebuggerState::Running,
@@ -216,13 +254,18 @@ impl Debugger {
                 };
                 false
             }
-            Event::Key(KeyEvent { code: KeyCode::Char('b'), .. }) if self.state.focus == DebuggerFocus::Code => {
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('b'),
+                ..
+            }) if self.state.focus == DebuggerFocus::Code => {
                 // Toggle breakpoint
                 self.toggle_breakpoint(cpu.pc_ext(ctx));
                 false
             }
-            Event::Key(KeyEvent { code: KeyCode::Char(c), .. }) 
-                if matches!(self.state.focus, DebuggerFocus::Reg(_)) && c.is_ascii_hexdigit() => {
+            Event::Key(KeyEvent {
+                code: KeyCode::Char(c),
+                ..
+            }) if matches!(self.state.focus, DebuggerFocus::Reg(_)) && c.is_ascii_hexdigit() => {
                 // Start editing the currently focused register
                 self.state.is_editing = true;
                 self.state.edit_buffer.clear();
@@ -233,7 +276,13 @@ impl Debugger {
         }
     }
 
-    fn apply_register_edit(&mut self, cpu: &mut Cpu, _ctx: &mut impl CpuContext, register: Register, value: u32) {
+    fn apply_register_edit(
+        &mut self,
+        cpu: &mut Cpu,
+        _ctx: &mut impl CpuContext,
+        register: Register,
+        value: u32,
+    ) {
         use i8051::sfr::SFR_SP;
         match register {
             Register::PC => cpu.pc = value as u16,
@@ -253,20 +302,28 @@ impl Debugger {
     }
 
     /// Render the debugger UI
-    pub fn render(
-        &mut self,
-        cpu: &Cpu,
-        ctx: &mut impl CpuContext,
-    ) -> io::Result<()> {
+    pub fn render(&mut self, cpu: &Cpu, ctx: &mut impl CpuContext) -> io::Result<()> {
         let config = &self.config;
         let breakpoints = &self.breakpoints;
         let focus = self.state.focus;
         let state = self.state.state;
         let is_editing = self.state.is_editing;
         let edit_buffer = &self.state.edit_buffer;
+        let code_window = &self.state.code_window;
 
         self.terminal.draw(|f| {
-            render_frame(f, cpu, ctx, config, breakpoints, focus, state, is_editing, edit_buffer);
+            render_frame(
+                f,
+                cpu,
+                ctx,
+                config,
+                breakpoints,
+                focus,
+                state,
+                is_editing,
+                edit_buffer,
+                &code_window,
+            );
         })?;
         Ok(())
     }
@@ -282,6 +339,7 @@ fn render_frame(
     state: DebuggerState,
     is_editing: bool,
     edit_buffer: &str,
+    code_window: &CodeWindowState,
 ) {
     // Create the main layout with a vertical separator
     let main_chunks = Layout::default()
@@ -299,15 +357,25 @@ fn render_frame(
         .split(main_chunks[2]);
 
     // Render the three panes
-    render_disassembly(f, main_chunks[0], cpu, ctx, config, breakpoints, focus, state);
-    
+    render_disassembly(
+        f,
+        main_chunks[0],
+        cpu,
+        ctx,
+        config,
+        breakpoints,
+        focus,
+        state,
+        code_window,
+    );
+
     // Render vertical separator
     let separator_lines: Vec<Line> = (0..main_chunks[1].height)
         .map(|_| Line::from("│"))
         .collect();
     let separator = Paragraph::new(separator_lines).style(Style::default().fg(Color::DarkGray));
     f.render_widget(separator, main_chunks[1]);
-    
+
     render_registers(f, right_chunks[0], cpu, focus, is_editing, edit_buffer);
     render_output(f, right_chunks[1], focus);
 }
@@ -321,6 +389,7 @@ fn render_disassembly(
     breakpoints: &BTreeSet<u32>,
     focus: DebuggerFocus,
     state: DebuggerState,
+    code_window: &CodeWindowState,
 ) {
     let pc = cpu.pc_ext(ctx);
     let mut lines = Vec::new();
@@ -330,21 +399,27 @@ fn render_disassembly(
         DebuggerState::Running => "[RUNNING]",
         DebuggerState::Paused => "[PAUSED]",
     };
-    
-    let focus_indicator = if focus == DebuggerFocus::Code { "▶ " } else { "  " };
-    
+
+    let focus_indicator = if focus == DebuggerFocus::Code {
+        "▶ "
+    } else {
+        "  "
+    };
+
     let title = format!(
         "{}{} Code {} - {}: Step | {}: Run | {}: Toggle BP | Tab: Switch | q: Quit ",
         focus_indicator,
         state_str,
         "",
-        config.step_key_label, 
-        config.run_key_label, 
+        config.step_key_label,
+        config.run_key_label,
         config.toggle_breakpoint_key_label
     );
 
     let title_style = if focus == DebuggerFocus::Code {
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
@@ -356,27 +431,19 @@ fn render_disassembly(
     let available_height = area.height.saturating_sub(2) as usize; // -2 for title and separator
     let max_lines = available_height.min(100);
 
-    // Start with the current instruction at the top
-    let mut current_pc = pc;
-    let mut seen_addresses = std::collections::HashSet::new();
-
-    for i in 0..max_lines {
-        // Prevent infinite loops if we somehow visit the same address twice
-        if !seen_addresses.insert(current_pc) {
-            lines.push(Line::from(format!(
-                "  [Loop detected at {:04X}]",
-                current_pc
-            )));
-            break;
+    // Decode the instructions for the code window, caching the start value if we need to.
+    let mut instructions = cpu.decode_range(ctx, code_window.start.get(), max_lines);
+    if !code_window.explicit_navigation {
+        if !instructions
+            .iter()
+            .any(|instruction| instruction.pc() == pc)
+        {
+            instructions = cpu.decode_range(ctx, pc.saturating_sub(10), max_lines);
+            code_window.start.set(instructions.first().unwrap().pc());
         }
+    }
 
-        // Safety check: if we've somehow gone past 64KB, stop
-        if i > 0 && current_pc == 0 {
-            lines.push(Line::from("  [Wrapped to 0000]"));
-            break;
-        }
-
-        let instruction = cpu.decode(ctx, current_pc);
+    for instruction in instructions {
         let bytes_str = instruction
             .bytes()
             .iter()
@@ -384,6 +451,7 @@ fn render_disassembly(
             .collect::<Vec<_>>()
             .join(" ");
 
+        let current_pc = instruction.pc();
         let has_breakpoint = breakpoints.contains(&current_pc);
         let is_current = current_pc == pc;
 
@@ -410,9 +478,6 @@ fn render_disassembly(
         };
 
         lines.push(Line::from(Span::styled(line_text, style)));
-
-        // Move to next instruction
-        current_pc = current_pc.wrapping_add(instruction.bytes().len() as _);
     }
 
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
@@ -420,15 +485,27 @@ fn render_disassembly(
     f.render_widget(paragraph, area);
 }
 
-fn render_registers(f: &mut Frame, area: Rect, cpu: &Cpu, focus: DebuggerFocus, is_editing: bool, edit_buffer: &str) {
+fn render_registers(
+    f: &mut Frame,
+    area: Rect,
+    cpu: &Cpu,
+    focus: DebuggerFocus,
+    is_editing: bool,
+    edit_buffer: &str,
+) {
     let mut lines = Vec::new();
 
     let is_reg_focused = matches!(focus, DebuggerFocus::Reg(_));
     let focus_indicator = if is_reg_focused { "▶ " } else { "  " };
-    let title = format!("{}Registers - Tab to select, type hex to edit", focus_indicator);
-    
+    let title = format!(
+        "{}Registers - Tab to select, type hex to edit",
+        focus_indicator
+    );
+
     let title_style = if is_reg_focused {
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
@@ -454,9 +531,13 @@ fn render_registers(f: &mut Frame, area: Rect, cpu: &Cpu, focus: DebuggerFocus, 
     let reg_style = |reg: Register| {
         if focus == DebuggerFocus::Reg(reg) {
             if is_editing {
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
             } else {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             }
         } else {
             Style::default()
@@ -467,17 +548,20 @@ fn render_registers(f: &mut Frame, area: Rect, cpu: &Cpu, focus: DebuggerFocus, 
     let sp = cpu.internal_ram[SFR_SP as usize];
     let pc_sp_line = vec![
         Span::styled(
-            format!("PC: {}", format_value(Register::PC, format!("{:04X}", cpu.pc))), 
-            reg_style(Register::PC)
+            format!(
+                "PC: {}",
+                format_value(Register::PC, format!("{:04X}", cpu.pc))
+            ),
+            reg_style(Register::PC),
         ),
         Span::raw("  "),
         Span::styled(
-            format!("SP: {}", format_value(Register::SP, format!("{:02X}", sp))), 
-            reg_style(Register::SP)
+            format!("SP: {}", format_value(Register::SP, format!("{:02X}", sp))),
+            reg_style(Register::SP),
         ),
     ];
     lines.push(Line::from(pc_sp_line));
-    
+
     // R0-R7 on one or two lines depending on width
     let mut r_spans = Vec::new();
     for i in 0..8 {
@@ -485,8 +569,12 @@ fn render_registers(f: &mut Frame, area: Rect, cpu: &Cpu, focus: DebuggerFocus, 
             r_spans.push(Span::raw(" "));
         }
         r_spans.push(Span::styled(
-            format!("R{}:{}", i, format_value(Register::R(i), format!("{:02X}", cpu.r(i)))),
-            reg_style(Register::R(i))
+            format!(
+                "R{}:{}",
+                i,
+                format_value(Register::R(i), format!("{:02X}", cpu.r(i)))
+            ),
+            reg_style(Register::R(i)),
         ));
     }
     lines.push(Line::from(r_spans));
@@ -494,18 +582,27 @@ fn render_registers(f: &mut Frame, area: Rect, cpu: &Cpu, focus: DebuggerFocus, 
     // A, B, DPTR on one line
     let abc_line = vec![
         Span::styled(
-            format!("A:{}", format_value(Register::A, format!("{:02X}", cpu.a()))), 
-            reg_style(Register::A)
+            format!(
+                "A:{}",
+                format_value(Register::A, format!("{:02X}", cpu.a()))
+            ),
+            reg_style(Register::A),
         ),
         Span::raw(" "),
         Span::styled(
-            format!("B:{}", format_value(Register::B, format!("{:02X}", cpu.b()))), 
-            reg_style(Register::B)
+            format!(
+                "B:{}",
+                format_value(Register::B, format!("{:02X}", cpu.b()))
+            ),
+            reg_style(Register::B),
         ),
         Span::raw(" "),
         Span::styled(
-            format!("DPTR:{}", format_value(Register::DPTR, format!("{:04X}", cpu.dptr()))), 
-            reg_style(Register::DPTR)
+            format!(
+                "DPTR:{}",
+                format_value(Register::DPTR, format!("{:04X}", cpu.dptr()))
+            ),
+            reg_style(Register::DPTR),
         ),
     ];
     lines.push(Line::from(abc_line));
@@ -528,11 +625,17 @@ fn render_registers(f: &mut Frame, area: Rect, cpu: &Cpu, focus: DebuggerFocus, 
 fn render_output(f: &mut Frame, area: Rect, focus: DebuggerFocus) {
     let mut lines = Vec::new();
 
-    let focus_indicator = if focus == DebuggerFocus::Output { "▶ " } else { "  " };
+    let focus_indicator = if focus == DebuggerFocus::Output {
+        "▶ "
+    } else {
+        "  "
+    };
     let title = format!("{}Output", focus_indicator);
-    
+
     let title_style = if focus == DebuggerFocus::Output {
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };

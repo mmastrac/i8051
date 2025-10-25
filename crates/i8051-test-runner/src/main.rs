@@ -147,22 +147,21 @@ fn run_debug_mode_inner(cpu: &mut Cpu, context: &mut impl CpuContext, max_instru
         match event::poll(poll_timeout) {
             Ok(true) => {
                 match event::read() {
-                    Ok(Event::Key(KeyEvent { code: KeyCode::Char('q'), .. })) => {
+                    Ok(Event::Key(KeyEvent {
+                        code: KeyCode::Char('q'),
+                        ..
+                    })) => {
                         debug_log!(log_file, "User pressed 'q' to quit");
-                        should_quit = true;
-                    }
-                    Ok(Event::Key(KeyEvent { code: KeyCode::Esc, .. })) => {
-                        debug_log!(log_file, "Escape pressed, quitting");
                         should_quit = true;
                     }
                     Ok(event) => {
                         debug_log!(log_file, "Handling event: {:?}", event);
-                        
+
                         let was_running = debugger.debugger_state() == DebuggerState::Running;
-                        
+
                         // Let debugger handle the event
                         let should_step = debugger.handle_event(event, cpu, context);
-                        
+
                         if should_step && !cpu_halted {
                             debug_log!(log_file, "Step command at PC={:04X}", cpu.pc);
                             if cpu.step(context) {
@@ -183,7 +182,7 @@ fn run_debug_mode_inner(cpu: &mut Cpu, context: &mut impl CpuContext, max_instru
                                 cpu_halted = true;
                             }
                         }
-                        
+
                         // Render after handling event (unless we're still running - render happens after batch)
                         let now_running = debugger.debugger_state() == DebuggerState::Running;
                         if !now_running || !was_running {
