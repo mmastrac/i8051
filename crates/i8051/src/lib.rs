@@ -38,7 +38,7 @@ pub mod sfr;
 mod traits;
 
 pub use cpu::ops;
-pub use cpu::{ControlFlow, Cpu, Instruction, Interrupt, Opcode};
+pub use cpu::{ControlFlow, Cpu, Instruction, Interrupt, Opcode, Register};
 pub use traits::{
     CpuContext, CpuView, DefaultPortMapper, MemoryMapper, PortMapper, ReadOnlyMemoryMapper,
 };

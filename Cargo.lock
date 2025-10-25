@@ -335,9 +335,9 @@ dependencies = [
 name = "i8051-debug-tui"
 version = "0.3.0"
 dependencies = [
- "crossterm",
  "i8051",
  "ratatui",
+ "tui-textarea",
 ]
 
 [[package]]
@@ -354,7 +354,6 @@ name = "i8051-test-runner"
 version = "0.3.0"
 dependencies = [
  "clap",
- "crossterm",
  "i8051",
  "i8051-debug-tui",
 ]
@@ -684,6 +683,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tui-textarea"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a5318dd619ed73c52a9417ad19046724effc1287fb75cdcc4eca1d6ac1acbae"
+dependencies = [
+ "crossterm",
+ "ratatui",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]

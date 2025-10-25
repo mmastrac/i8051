@@ -6,10 +6,10 @@ use std::time::Duration;
 use i8051::memory::{RAM, ROM};
 use i8051::sfr::*;
 use i8051::{Cpu, CpuContext, CpuView, PortMapper};
-use i8051_debug_tui::{Debugger, DebuggerConfig, KeyAction};
+use i8051_debug_tui::{Debugger, DebuggerConfig};
 
 use clap::Parser;
-use crossterm::event::{self, Event, KeyCode, KeyEvent};
+use i8051_debug_tui::crossterm::event::{self, Event, KeyCode, KeyEvent};
 
 macro_rules! debug_log {
     ($file:expr, $($arg:tt)*) => {
@@ -109,6 +109,8 @@ fn run_debug_mode(cpu: &mut Cpu, context: &mut impl CpuContext, max_instructions
 }
 
 fn run_debug_mode_inner(cpu: &mut Cpu, context: &mut impl CpuContext, max_instructions: u64) {
+    use i8051_debug_tui::DebuggerState;
+
     let mut log_file = File::create("/tmp/i8051-debug.log").ok();
     debug_log!(log_file, "=== Debug session started ===");
 
@@ -118,13 +120,12 @@ fn run_debug_mode_inner(cpu: &mut Cpu, context: &mut impl CpuContext, max_instru
     debugger.enter().expect("Failed to enter debug mode");
 
     let mut instruction_count = 0;
-    let mut running = false;
     let mut should_quit = false;
     let mut cpu_halted = false;
 
     // Initial render
     debug_log!(log_file, "Initial render at PC={:04X}", cpu.pc);
-    if let Err(e) = debugger.render(cpu, context, None) {
+    if let Err(e) = debugger.render(cpu, context) {
         debug_log!(log_file, "ERROR: Initial render failed: {}", e);
         should_quit = true;
     }
@@ -132,93 +133,65 @@ fn run_debug_mode_inner(cpu: &mut Cpu, context: &mut impl CpuContext, max_instru
     let mut loop_count = 0;
     while !should_quit {
         loop_count += 1;
-        if loop_count % 10 == 0 {
+        if loop_count % 100 == 0 {
             debug_log!(log_file, "Loop iteration {}, PC={:04X}", loop_count, cpu.pc);
         }
 
         // Check for input with a small timeout
-        match event::poll(Duration::from_millis(100)) {
+        let poll_timeout = if debugger.debugger_state() == DebuggerState::Running {
+            Duration::from_millis(0) // Small delay when running to batch instructions
+        } else {
+            Duration::from_millis(100)
+        };
+
+        match event::poll(poll_timeout) {
             Ok(true) => {
                 match event::read() {
-                    Ok(Event::Key(KeyEvent { code, .. })) => {
-                        match code {
-                            KeyCode::Char('q') => {
-                                debug_log!(log_file, "User pressed 'q' to quit");
-                                should_quit = true;
-                            }
-                            KeyCode::Char('s') => {
-                                // Step
-                                debug_log!(log_file, "Step command at PC={:04X}", cpu.pc);
-                                if cpu_halted {
-                                    debug_log!(log_file, "CPU already halted, cannot step");
-                                } else if cpu.step(context) {
-                                    instruction_count += 1;
-                                    debug_log!(
-                                        log_file,
-                                        "Stepped to PC={:04X}, count={}",
-                                        cpu.pc,
-                                        instruction_count
-                                    );
-                                } else {
-                                    debug_log!(
-                                        log_file,
-                                        "CPU halted at PC={:04X} after {} instructions",
-                                        cpu.pc,
-                                        instruction_count
-                                    );
-                                    cpu_halted = true;
-                                }
-                                debug_log!(log_file, "About to render after step...");
-                                match debugger.render(cpu, context, Some(KeyAction::Step)) {
-                                    Ok(_) => {
-                                        debug_log!(log_file, "Render completed successfully");
-                                    }
-                                    Err(e) => {
-                                        debug_log!(log_file, "ERROR: Render failed on step: {}", e);
-                                        should_quit = true;
-                                    }
-                                }
-                            }
-                            KeyCode::Char('r') => {
-                                // Toggle run mode
-                                running = !running;
-                                debug_log!(log_file, "Run mode toggled: {}", running);
-                                if let Err(e) = debugger.render(cpu, context, Some(KeyAction::Run))
-                                {
-                                    debug_log!(
-                                        log_file,
-                                        "ERROR: Render failed on run toggle: {}",
-                                        e
-                                    );
-                                    should_quit = true;
-                                }
-                            }
-                            KeyCode::Char('b') => {
-                                // Toggle breakpoint
-                                debugger.toggle_breakpoint(cpu.pc_ext(context));
-                                debug_log!(log_file, "Toggled breakpoint at {:04X}", cpu.pc);
-                                if let Err(e) =
-                                    debugger.render(cpu, context, Some(KeyAction::ToggleBreakpoint))
-                                {
-                                    debug_log!(
-                                        log_file,
-                                        "ERROR: Render failed on breakpoint toggle: {}",
-                                        e
-                                    );
-                                    should_quit = true;
-                                }
-                            }
-                            KeyCode::Esc => {
-                                debug_log!(log_file, "Escape pressed, quitting");
-                                should_quit = true;
-                            }
-                            other => {
-                                debug_log!(log_file, "Unhandled key: {:?}", other);
+                    Ok(Event::Key(KeyEvent { code: KeyCode::Char('q'), .. })) => {
+                        debug_log!(log_file, "User pressed 'q' to quit");
+                        should_quit = true;
+                    }
+                    Ok(Event::Key(KeyEvent { code: KeyCode::Esc, .. })) => {
+                        debug_log!(log_file, "Escape pressed, quitting");
+                        should_quit = true;
+                    }
+                    Ok(event) => {
+                        debug_log!(log_file, "Handling event: {:?}", event);
+                        
+                        let was_running = debugger.debugger_state() == DebuggerState::Running;
+                        
+                        // Let debugger handle the event
+                        let should_step = debugger.handle_event(event, cpu, context);
+                        
+                        if should_step && !cpu_halted {
+                            debug_log!(log_file, "Step command at PC={:04X}", cpu.pc);
+                            if cpu.step(context) {
+                                instruction_count += 1;
+                                debug_log!(
+                                    log_file,
+                                    "Stepped to PC={:04X}, count={}",
+                                    cpu.pc,
+                                    instruction_count
+                                );
+                            } else {
+                                debug_log!(
+                                    log_file,
+                                    "CPU halted at PC={:04X} after {} instructions",
+                                    cpu.pc,
+                                    instruction_count
+                                );
+                                cpu_halted = true;
                             }
                         }
-                    }
-                    Ok(other_event) => {
-                        debug_log!(log_file, "Received non-key event: {:?}", other_event);
+                        
+                        // Render after handling event (unless we're still running - render happens after batch)
+                        let now_running = debugger.debugger_state() == DebuggerState::Running;
+                        if !now_running || !was_running {
+                            if let Err(e) = debugger.render(cpu, context) {
+                                debug_log!(log_file, "ERROR: Render failed: {}", e);
+                                should_quit = true;
+                            }
+                        }
                     }
                     Err(e) => {
                         debug_log!(log_file, "ERROR: Failed to read event: {}", e);
@@ -227,7 +200,7 @@ fn run_debug_mode_inner(cpu: &mut Cpu, context: &mut impl CpuContext, max_instru
                 }
             }
             Ok(false) => {
-                // Timeout, no event
+                // Timeout, no event - but we might need to run
             }
             Err(e) => {
                 debug_log!(log_file, "ERROR: Failed to poll events: {}", e);
@@ -235,41 +208,56 @@ fn run_debug_mode_inner(cpu: &mut Cpu, context: &mut impl CpuContext, max_instru
             }
         }
 
-        // If running, execute instructions
-        if running && !cpu_halted {
-            if cpu.step(context) {
-                instruction_count += 1;
+        // If running, execute a batch of instructions
+        if debugger.debugger_state() == DebuggerState::Running && !cpu_halted {
+            // Execute instructions in batches for better performance
+            const BATCH_SIZE: usize = 1000;
+            for _ in 0..BATCH_SIZE {
+                if cpu.step(context) {
+                    instruction_count += 1;
 
-                // Check for breakpoint
-                if debugger.breakpoints().contains(&cpu.pc_ext(context)) {
-                    running = false;
-                    debug_log!(log_file, "Hit breakpoint at {:04X}", cpu.pc);
-                    if let Err(e) = debugger.render(cpu, context, None) {
-                        debug_log!(log_file, "ERROR: Render failed at breakpoint: {}", e);
+                    // Check for breakpoint
+                    if debugger.breakpoints().contains(&cpu.pc_ext(context)) {
+                        debug_log!(log_file, "Hit breakpoint at {:04X}", cpu.pc);
+                        debugger.pause();
+                        if let Err(e) = debugger.render(cpu, context) {
+                            debug_log!(log_file, "ERROR: Render failed at breakpoint: {}", e);
+                            should_quit = true;
+                        }
+                        break; // Exit batch loop on breakpoint
+                    }
+
+                    if instruction_count >= max_instructions {
+                        debug_log!(log_file, "Reached max instructions: {}", max_instructions);
+                        debugger.pause();
+                        if let Err(e) = debugger.render(cpu, context) {
+                            debug_log!(log_file, "ERROR: Render failed at max instructions: {}", e);
+                            should_quit = true;
+                        }
+                        break; // Exit batch loop
+                    }
+                } else {
+                    // CPU halted
+                    cpu_halted = true;
+                    debugger.pause();
+                    debug_log!(
+                        log_file,
+                        "CPU halted at {:04X} after {} instructions",
+                        cpu.pc,
+                        instruction_count
+                    );
+                    if let Err(e) = debugger.render(cpu, context) {
+                        debug_log!(log_file, "ERROR: Render failed on CPU halt: {}", e);
                         should_quit = true;
                     }
+                    break; // Exit batch loop on halt
                 }
+            }
 
-                if instruction_count >= max_instructions {
-                    running = false;
-                    debug_log!(log_file, "Reached max instructions: {}", max_instructions);
-                    if let Err(e) = debugger.render(cpu, context, None) {
-                        debug_log!(log_file, "ERROR: Render failed at max instructions: {}", e);
-                        should_quit = true;
-                    }
-                }
-            } else {
-                // CPU halted
-                running = false;
-                cpu_halted = true;
-                debug_log!(
-                    log_file,
-                    "CPU halted at {:04X} after {} instructions",
-                    cpu.pc,
-                    instruction_count
-                );
-                if let Err(e) = debugger.render(cpu, context, None) {
-                    debug_log!(log_file, "ERROR: Render failed on CPU halt: {}", e);
+            // Render after batch execution
+            if debugger.debugger_state() == DebuggerState::Running {
+                if let Err(e) = debugger.render(cpu, context) {
+                    debug_log!(log_file, "ERROR: Render failed during run: {}", e);
                     should_quit = true;
                 }
             }
@@ -278,10 +266,9 @@ fn run_debug_mode_inner(cpu: &mut Cpu, context: &mut impl CpuContext, max_instru
 
     debug_log!(
         log_file,
-        "Exiting debug loop: should_quit={}, cpu_halted={}, running={}",
+        "Exiting debug loop: should_quit={}, cpu_halted={}",
         should_quit,
-        cpu_halted,
-        running
+        cpu_halted
     );
     debugger.exit().expect("Failed to exit debug mode");
     debug_log!(log_file, "=== Debug session ended ===");

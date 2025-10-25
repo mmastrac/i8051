@@ -8,5 +8,4 @@ readme = "README.md"
 [dependencies]
 i8051.workspace = true
 ratatui = "0.29"
-crossterm = "0.28"
-
+tui-textarea = { version = "0.7.0", features = [] }

@@ -7,6 +7,26 @@ use crate::regs::{Reg8, Reg16, U16Equivalent};
 use crate::sfr::*;
 use crate::{CpuContext, CpuView, MemoryMapper, PortMapper, ReadOnlyMemoryMapper};
 
+/// A register in the 8051 CPU.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Register {
+    A,
+    B,
+    DPL,
+    DPH,
+    DPTR,
+    PSW,
+    SP,
+    /// Program Counter.
+    PC,
+    /// R0-R8
+    R(u8),
+    /// General SFR, overlaps with registers above.
+    SFR(u8),
+    /// Internal CPU RAM.
+    RAM(u8),
+}
+
 pub enum Interrupt {
     External0,
     External1,
