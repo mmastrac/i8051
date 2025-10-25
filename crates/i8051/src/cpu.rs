@@ -93,13 +93,16 @@ impl fmt::Display for Bit {
 
 impl<CTX: CpuContext> CpuView for (&Cpu, &CTX) {
     fn read_xdata(&self, addr: u16) -> u8 {
-        self.1.xdata().read(self, addr)
+        self.1.xdata().read(self, addr as u32)
     }
-    fn read_code(&self, addr: u16) -> u8 {
+    fn read_code(&self, addr: u32) -> u8 {
         self.1.code().read(self, addr)
     }
     fn pc(&self) -> u16 {
         self.0.pc
+    }
+    fn pc_ext(&self) -> u32 {
+        self.0.pc_ext(self.1)
     }
     fn a(&self) -> u8 {
         self.0.a
@@ -144,13 +147,16 @@ impl<CTX: CpuContext> CpuView for (&Cpu, &CTX) {
 
 impl<CTX: CpuContext> CpuView for (&mut Cpu, &mut CTX) {
     fn read_xdata(&self, addr: u16) -> u8 {
-        self.1.xdata().read(self, addr)
+        self.1.xdata().read(self, addr as u32)
     }
-    fn read_code(&self, addr: u16) -> u8 {
+    fn read_code(&self, addr: u32) -> u8 {
         self.1.code().read(self, addr)
     }
     fn pc(&self) -> u16 {
         self.0.pc
+    }
+    fn pc_ext(&self) -> u32 {
+        self.0.pc_ext(self.1)
     }
     fn a(&self) -> u8 {
         self.0.a
@@ -205,16 +211,16 @@ pub enum ControlFlow {
 }
 
 pub struct Instruction {
-    pc: u16,
+    pc: u32,
     bytes: Vec<u8>,
 }
 
 impl Instruction {
     pub fn decode(&self) -> String {
-        decode_string(&self.bytes, self.pc)
+        decode_string(&self.bytes, self.pc as u16)
     }
 
-    pub fn pc(&self) -> u16 {
+    pub fn pc(&self) -> u32 {
         self.pc
     }
 
@@ -235,31 +241,27 @@ impl Instruction {
     }
 
     pub fn control_flow(&self) -> ControlFlow {
+        let pc = self.pc as u16;
+        let next = pc.wrapping_add(self.bytes.len() as u16);
         match self.mnemonic() {
             Opcode::LJMP => ControlFlow::Continue(self.addr().unwrap()),
-            Opcode::LCALL => {
-                ControlFlow::Call(self.pc + self.bytes.len() as u16, self.addr().unwrap())
-            }
-            Opcode::AJMP => ControlFlow::Continue((self.pc & 0xF800) | self.addr().unwrap()),
-            Opcode::ACALL => ControlFlow::Call(
-                self.pc + self.bytes.len() as u16,
-                (self.pc & 0xF800) | self.addr().unwrap(),
-            ),
+            Opcode::LCALL => ControlFlow::Call(next, self.addr().unwrap()),
+            Opcode::AJMP => ControlFlow::Continue((pc & 0xF800) | self.addr().unwrap()),
+            Opcode::ACALL => ControlFlow::Call(next, (pc & 0xF800) | self.addr().unwrap()),
             Opcode::JMP | Opcode::RET | Opcode::RETI => ControlFlow::Diverge,
             Opcode::SJMP => ControlFlow::Continue(
-                self.pc.wrapping_add_signed(self.bytes[1] as i8 as i16) + self.bytes.len() as u16,
+                pc.wrapping_add_signed(self.bytes[1] as i8 as i16) + self.bytes.len() as u16,
             ),
             _ => {
                 if has_rel(self.bytes[0]) {
                     // `rel` instructions always have a relative offset in the last byte.
                     ControlFlow::Choice(
-                        self.pc + self.bytes.len() as u16,
-                        self.pc
-                            .wrapping_add_signed(self.bytes[self.bytes.len() - 1] as i8 as i16)
+                        next,
+                        pc.wrapping_add_signed(self.bytes[self.bytes.len() - 1] as i8 as i16)
                             + self.bytes.len() as u16,
                     )
                 } else {
-                    ControlFlow::Continue(self.pc.wrapping_add(self.bytes.len() as u16))
+                    ControlFlow::Continue(next)
                 }
             }
         }
@@ -328,10 +330,10 @@ impl Cpu {
     ///
     /// Returns `false` if the CPU has halted.
     pub fn step(&mut self, ctx: &mut impl CpuContext) -> bool {
-        let pc = self.pc;
+        let pc = self.pc_ext(ctx);
         let op = (&*self, &*ctx).read_code(pc);
         dispatch(self, ctx);
-        if self.pc == pc {
+        if self.pc_ext(ctx) == pc {
             // SJMP, so we're in an infinite loop
             if op == 0b10000000 {
                 return false;
@@ -342,14 +344,15 @@ impl Cpu {
 
     /// Decode the instruction at the current PC.
     pub fn decode_pc(&self, ctx: &mut impl CpuContext) -> Instruction {
+        let pc = self.pc_ext(ctx);
         Instruction {
-            pc: self.pc,
-            bytes: decode(&self, ctx, self.pc),
+            pc,
+            bytes: decode(&self, ctx, pc),
         }
     }
 
     /// Decode the instruction at the given PC.
-    pub fn decode(&self, ctx: &mut impl CpuContext, pc: u16) -> Instruction {
+    pub fn decode(&self, ctx: &mut impl CpuContext, pc: u32) -> Instruction {
         Instruction {
             pc,
             bytes: decode(&self, ctx, pc),
@@ -459,6 +462,10 @@ impl Cpu {
     /// Set the value of the SP register.
     pub fn sp_set(&mut self, value: u8) {
         self.sp = value;
+    }
+
+    pub fn pc_ext(&self, ctx: &impl CpuContext) -> u32 {
+        (self.pc as u32) | (ctx.ports().pc_extension(&(&*self, &*ctx)) as u32) << 16
     }
 
     /// Push a value to the stack. The stack is stored in internal RAM and
@@ -618,14 +625,16 @@ macro_rules! op_def_read {
         Reg8($ctx.0.r($index.to_u8().0))
     };
     ($ctx:ident, CODE, $index:expr) => {
-        Reg8($ctx.read_code($index.to_u16()))
+        Reg8($ctx.read_code(
+            (($ctx.1.ports().pc_extension(&$ctx) as u32) << 16) as u32 | $index.to_u16() as u32,
+        ))
     };
     ($ctx:ident, XDATA, $index:expr) => {
         if std::mem::size_of_val(&$index) == 2 {
-            $ctx.1.xdata().read(&$ctx, $index.to_u16())
+            $ctx.1.xdata().read(&$ctx, $index.to_u16() as _)
         } else {
             let high = ($ctx.1.ports().read_latch(&$ctx, SFR_P2) as u16) << 8;
-            $ctx.1.xdata().read(&$ctx, $index.to_u16() | high)
+            $ctx.1.xdata().read(&$ctx, ($index.to_u16() | high) as _)
         }
     };
 }
@@ -681,14 +690,15 @@ macro_rules! op_def_write {
             let write = $ctx
                 .1
                 .xdata()
-                .prepare_write(&$ctx, $index.to_u16(), $value.to_u8().0);
+                .prepare_write(&$ctx, $index.to_u16() as _, $value.to_u8().0);
             $ctx.1.xdata_mut().write(write)
         } else {
             let high = ($ctx.1.ports().read_latch(&$ctx, SFR_P2) as u16) << 8;
-            let write =
-                $ctx.1
-                    .xdata()
-                    .prepare_write(&$ctx, $index.to_u16() | high, $value.to_u8().0);
+            let write = $ctx.1.xdata().prepare_write(
+                &$ctx,
+                ($index.to_u16() | high) as _,
+                $value.to_u8().0,
+            );
             $ctx.1.xdata_mut().write(write)
         }
     };
@@ -808,7 +818,7 @@ macro_rules! op {
             Opcode::Unknown
         }
 
-        pub fn decode(cpu: &Cpu, ctx: &mut impl CpuContext, pc: u16) -> Vec<u8> {
+        pub fn decode(cpu: &Cpu, ctx: &mut impl CpuContext, pc: u32) -> Vec<u8> {
             #![allow(unused)]
             #![allow(non_snake_case)]
 
@@ -878,14 +888,15 @@ macro_rules! op {
             #![allow(redundant_semicolons)]
             #![allow(unused_assignments)]
 
+            let pc_ext = cpu.pc_ext(ctx);
             let ctx = (cpu, ctx);
-            let op = Reg8(ctx.read_code(ctx.pc()));
+            let op = Reg8(ctx.read_code(pc_ext));
 
             $(
                 if (op $(& !$mask_pattern)? == $start) {
                     $(let $mask = op & $mask_pattern;)?
                     #[allow(unused)]
-                    let mut next_read = ctx.pc().wrapping_add(1);
+                    let mut next_read = pc_ext.wrapping_add(1);
                     $(
                         let $arg = Reg8(ctx.read_code(next_read));
                         next_read = next_read.wrapping_add(1);

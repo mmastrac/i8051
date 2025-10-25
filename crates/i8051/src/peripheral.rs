@@ -47,6 +47,36 @@ impl Serial {
             out_rx,
         )
     }
+
+    pub fn tick(&mut self) {
+        // This may delay loopback by one tick
+        if let Some(value) = self.sbuf_write {
+            self.send_tick_delay = self.send_tick_delay.wrapping_add(1);
+            if self.send_tick_delay >= 10 {
+                self.send_tick_delay = 0;
+                if let Ok(()) = self.send_queue.send(value) {
+                    self.sbuf_write = None;
+                    self.scon |= 1 << 1;
+                    // println!("Serial: Wrote {:02X}, set TI SCON={:02X}", value, self.scon);
+                }
+            }
+        }
+        if self.scon & (1 << 4) != 0 {
+            let mut delay = self.recv_tick_delay.borrow_mut();
+            *delay = delay.wrapping_add(1);
+            if *delay >= 20 {
+                *delay = 0;
+                if let Ok(value) = self.input_queue.try_recv() {
+                    *self.sbuf_read.borrow_mut() = Some(value);
+                    self.scon |= 1 << 0;
+                    // println!(
+                    // "Serial: Got value {:02X}, set RI SCON={:02X}",
+                    // value, self.scon
+                    // );
+                }
+            }
+        }
+    }
 }
 
 impl PortMapper for Serial {
@@ -86,35 +116,6 @@ impl PortMapper for Serial {
             }
             _ => {
                 unreachable!()
-            }
-        }
-    }
-    fn tick<C: CpuView>(&mut self, cpu: &C) {
-        // This may delay loopback by one tick
-        if let Some(value) = self.sbuf_write {
-            self.send_tick_delay = self.send_tick_delay.wrapping_add(1);
-            if self.send_tick_delay >= 10 {
-                self.send_tick_delay = 0;
-                if let Ok(()) = self.send_queue.send(value) {
-                    self.sbuf_write = None;
-                    self.scon |= 1 << 1;
-                    // println!("Serial: Wrote {:02X}, set TI SCON={:02X}", value, self.scon);
-                }
-            }
-        }
-        if self.scon & (1 << 4) != 0 {
-            let mut delay = self.recv_tick_delay.borrow_mut();
-            *delay = delay.wrapping_add(1);
-            if *delay >= 20 {
-                *delay = 0;
-                if let Ok(value) = self.input_queue.try_recv() {
-                    *self.sbuf_read.borrow_mut() = Some(value);
-                    self.scon |= 1 << 0;
-                    // println!(
-                    // "Serial: Got value {:02X}, set RI SCON={:02X}",
-                    // value, self.scon
-                    // );
-                }
             }
         }
     }

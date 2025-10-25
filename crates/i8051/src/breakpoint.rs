@@ -64,8 +64,8 @@ struct BreakpointState {
 }
 
 pub struct Breakpoints {
-    breakpoints_before: BTreeMap<u16, Vec<Action>>,
-    breakpoints_after: BTreeMap<u16, Vec<Action>>,
+    breakpoints_before: BTreeMap<u32, Vec<Action>>,
+    breakpoints_after: BTreeMap<u32, Vec<Action>>,
     state: BreakpointState,
 }
 
@@ -78,7 +78,7 @@ impl Breakpoints {
         }
     }
 
-    pub fn add(&mut self, before: bool, addr: u16, action: Action) {
+    pub fn add(&mut self, before: bool, addr: u32, action: Action) {
         if before {
             self.breakpoints_before
                 .entry(addr)
@@ -89,7 +89,7 @@ impl Breakpoints {
         }
     }
 
-    pub fn remove(&mut self, addr: u16) {
+    pub fn remove(&mut self, addr: u32) {
         self.breakpoints_before.remove(&addr);
         self.breakpoints_after.remove(&addr);
     }
@@ -100,10 +100,7 @@ impl Breakpoints {
     }
 
     pub fn run(&mut self, before: bool, cpu: &mut Cpu, ctx: &mut impl CpuContext) {
-        let pc = cpu.pc;
-        if self.state.trace_instructions && before {
-            Action::TraceInstructions.run(cpu, &mut self.state, ctx);
-        }
+        let pc = cpu.pc_ext(ctx);
 
         let actions = if before {
             self.breakpoints_before
@@ -118,6 +115,9 @@ impl Breakpoints {
         };
         for action in actions {
             action.run(cpu, &mut self.state, ctx);
+        }
+        if self.state.trace_instructions && before {
+            Action::TraceInstructions.run(cpu, &mut self.state, ctx);
         }
         if self.state.trace_registers && !before {
             Action::TraceRegisters.run(cpu, &mut self.state, ctx);

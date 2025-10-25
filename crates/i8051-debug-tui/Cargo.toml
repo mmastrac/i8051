@@ -1,0 +1,12 @@
+[package]
+name = "i8051-debug-tui"
+version.workspace = true
+edition.workspace = true
+publish = false
+readme = "README.md"
+
+[dependencies]
+i8051.workspace = true
+ratatui = "0.29"
+crossterm = "0.28"
+

@@ -8,11 +8,14 @@ pub struct RAM {
 
 impl MemoryMapper for RAM {
     type WriteValue = (u16, u8);
-    fn read<C: CpuView>(&self, _cpu: &C, addr: u16) -> u8 {
+    fn len(&self) -> u32 {
+        0x10000
+    }
+    fn read<C: CpuView>(&self, _cpu: &C, addr: u32) -> u8 {
         self.ram[addr as usize]
     }
-    fn prepare_write<C: CpuView>(&self, _cpu: &C, addr: u16, value: u8) -> Self::WriteValue {
-        (addr, value)
+    fn prepare_write<C: CpuView>(&self, _cpu: &C, addr: u32, value: u8) -> Self::WriteValue {
+        (addr as u16, value)
     }
     fn write(&mut self, value: Self::WriteValue) {
         match value {
@@ -50,7 +53,13 @@ impl ROM {
 }
 
 impl ReadOnlyMemoryMapper for ROM {
-    fn read<C: CpuView>(&self, _cpu: &C, addr: u16) -> u8 {
+    fn len(&self) -> u32 {
+        self.rom.len() as u32
+    }
+    fn read<C: CpuView>(&self, _cpu: &C, addr: u32) -> u8 {
+        if addr >= self.rom.len() as u32 {
+            return 0;
+        }
         self.rom[addr as usize]
     }
 }

@@ -14,3 +14,4 @@ categories = ["compilers", "embedded", "hardware-support", "emulators", "simulat
 [workspace.dependencies]
 i8051-proc-macro = { version = "0.3.0", path = "crates/i8051-proc-macro" }
 i8051 = { version = "0.3.0", path = "crates/i8051" }
+i8051-debug-tui = { version = "0.3.0", path = "crates/i8051-debug-tui" }

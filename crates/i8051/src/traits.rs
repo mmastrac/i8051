@@ -7,9 +7,10 @@ pub trait CpuView {
     /// Read a byte from external data memory.
     fn read_xdata(&self, addr: u16) -> u8;
     /// Read a byte from code memory.
-    fn read_code(&self, addr: u16) -> u8;
+    fn read_code(&self, addr: u32) -> u8;
 
     fn pc(&self) -> u16;
+    fn pc_ext(&self) -> u32;
     fn a(&self) -> u8;
     fn b(&self) -> u8;
     fn dptr(&self) -> u16;
@@ -44,14 +45,16 @@ pub trait CpuContext {
 /// A trait to provide memory read/write operations.
 pub trait MemoryMapper {
     type WriteValue;
-    fn read<C: CpuView>(&self, cpu: &C, addr: u16) -> u8;
-    fn prepare_write<C: CpuView>(&self, cpu: &C, addr: u16, value: u8) -> Self::WriteValue;
+    fn len(&self) -> u32;
+    fn read<C: CpuView>(&self, cpu: &C, addr: u32) -> u8;
+    fn prepare_write<C: CpuView>(&self, cpu: &C, addr: u32, value: u8) -> Self::WriteValue;
     fn write(&mut self, value: Self::WriteValue);
 }
 
 /// A trait to provide read-only memory read operations.
 pub trait ReadOnlyMemoryMapper {
-    fn read<C: CpuView>(&self, cpu: &C, addr: u16) -> u8;
+    fn len(&self) -> u32;
+    fn read<C: CpuView>(&self, cpu: &C, addr: u32) -> u8;
 }
 
 /// A trait to provide port read/write operations.
@@ -63,6 +66,11 @@ pub trait PortMapper {
     /// uses the value of `P2` as the high byte.
     fn extend_short_read<C: CpuView>(&self, cpu: &C, addr: u8) -> u16 {
         addr as u16 | (cpu.sfr(SFR_P2) as u16) << 8
+    }
+    /// Extends the PC to a 32-bit address. By default, this doesn't perform any
+    /// extension.
+    fn pc_extension<C: CpuView>(&self, _cpu: &C) -> u16 {
+        0
     }
     /// Read the value at the given address.
     fn read<C: CpuView>(&self, cpu: &C, addr: u8) -> u8;
@@ -81,24 +89,27 @@ pub trait PortMapper {
 
     /// Write the given value to the given port address.
     fn write(&mut self, value: Self::WriteValue);
-
-    /// Perform any necessary internal state updates between CPU steps.
-    fn tick<C: CpuView>(&mut self, cpu: &C);
 }
 
 impl MemoryMapper for () {
     type WriteValue = ();
-    fn read<C: CpuView>(&self, _cpu: &C, _addr: u16) -> u8 {
+    fn len(&self) -> u32 {
         0
     }
-    fn prepare_write<C: CpuView>(&self, _cpu: &C, _addr: u16, _value: u8) -> Self::WriteValue {
+    fn read<C: CpuView>(&self, _cpu: &C, _addr: u32) -> u8 {
+        0
+    }
+    fn prepare_write<C: CpuView>(&self, _cpu: &C, _addr: u32, _value: u8) -> Self::WriteValue {
         ()
     }
     fn write(&mut self, _value: Self::WriteValue) {}
 }
 
 impl ReadOnlyMemoryMapper for () {
-    fn read<C: CpuView>(&self, _cpu: &C, _addr: u16) -> u8 {
+    fn len(&self) -> u32 {
+        0
+    }
+    fn read<C: CpuView>(&self, _cpu: &C, _addr: u32) -> u8 {
         0
     }
 }
@@ -133,7 +144,6 @@ impl PortMapper for DefaultPortMapper {
     fn write(&mut self, (addr, value): Self::WriteValue) {
         self.sfr[addr.wrapping_sub(SFR_BASE) as usize] = value;
     }
-    fn tick<C: CpuView>(&mut self, _cpu: &C) {}
 }
 
 impl PortMapper for () {
@@ -153,7 +163,6 @@ impl PortMapper for () {
     fn write(&mut self, _value: Self::WriteValue) {
         unreachable!()
     }
-    fn tick<C: CpuView>(&mut self, _cpu: &C) {}
 }
 
 pub enum WriteChoice<A, B> {
@@ -171,13 +180,10 @@ where
         self.0.interest(cpu, addr) || self.1.interest(cpu, addr)
     }
     fn extend_short_read<C: CpuView>(&self, cpu: &C, addr: u8) -> u16 {
-        if self.0.interest(cpu, addr) {
-            self.0.extend_short_read(cpu, addr)
-        } else if self.1.interest(cpu, addr) {
-            self.1.extend_short_read(cpu, addr)
-        } else {
-            unreachable!()
-        }
+        self.0.extend_short_read(cpu, addr)
+    }
+    fn pc_extension<C: CpuView>(&self, cpu: &C) -> u16 {
+        self.0.pc_extension(cpu)
     }
     fn read<C: CpuView>(&self, cpu: &C, addr: u8) -> u8 {
         if self.0.interest(cpu, addr) {
@@ -211,10 +217,6 @@ where
             WriteChoice::A(value) => self.0.write(value),
             WriteChoice::B(value) => self.1.write(value),
         }
-    }
-    fn tick<C: CpuView>(&mut self, cpu: &C) {
-        self.0.tick(cpu);
-        self.1.tick(cpu);
     }
 }
 
