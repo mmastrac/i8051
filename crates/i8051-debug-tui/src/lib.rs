@@ -34,28 +34,36 @@ enum DebuggerFocus {
 }
 
 impl DebuggerFocus {
-    pub fn next(self) -> Self {
-        use DebuggerFocus::*;
-        const ORDER: [DebuggerFocus; 15] = [
-            Code,
-            Reg(Register::PC),
-            Reg(Register::SP),
-            Reg(Register::R(0)),
-            Reg(Register::R(1)),
-            Reg(Register::R(2)),
-            Reg(Register::R(3)),
-            Reg(Register::R(4)),
-            Reg(Register::R(5)),
-            Reg(Register::R(6)),
-            Reg(Register::R(7)),
-            Reg(Register::A),
-            Reg(Register::B),
-            Reg(Register::DPTR),
-            Output,
-        ];
+    const ORDER: [DebuggerFocus; 15] = [
+        DebuggerFocus::Code,
+        DebuggerFocus::Reg(Register::PC),
+        DebuggerFocus::Reg(Register::SP),
+        DebuggerFocus::Reg(Register::R(0)),
+        DebuggerFocus::Reg(Register::R(1)),
+        DebuggerFocus::Reg(Register::R(2)),
+        DebuggerFocus::Reg(Register::R(3)),
+        DebuggerFocus::Reg(Register::R(4)),
+        DebuggerFocus::Reg(Register::R(5)),
+        DebuggerFocus::Reg(Register::R(6)),
+        DebuggerFocus::Reg(Register::R(7)),
+        DebuggerFocus::Reg(Register::A),
+        DebuggerFocus::Reg(Register::B),
+        DebuggerFocus::Reg(Register::DPTR),
+        DebuggerFocus::Output,
+    ];
 
-        let index = ORDER.iter().position(|r| r == &self).unwrap_or(0);
-        ORDER[(index + 1) % ORDER.len()]
+    pub fn next(self) -> Self {
+        let index = Self::ORDER.iter().position(|r| r == &self).unwrap_or(0);
+        Self::ORDER[(index + 1) % Self::ORDER.len()]
+    }
+
+    pub fn prev(self) -> Self {
+        let index = Self::ORDER.iter().position(|r| r == &self).unwrap_or(0);
+        if index == 0 {
+            Self::ORDER[Self::ORDER.len() - 1]
+        } else {
+            Self::ORDER[index - 1]
+        }
     }
 
     /// Returns zero if not editable, otherwise the length.
@@ -230,9 +238,23 @@ impl Debugger {
                 false
             }
             Event::Key(KeyEvent {
-                code: KeyCode::Tab, ..
+                code: KeyCode::Tab,
+                modifiers,
+                ..
             }) => {
-                self.state.focus = self.state.focus.next();
+                if modifiers.contains(KeyModifiers::SHIFT) {
+                    self.state.focus = self.state.focus.prev();
+                } else {
+                    self.state.focus = self.state.focus.next();
+                }
+                false
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::BackTab,
+                ..
+            }) => {
+                // BackTab is also Shift+Tab on some terminals
+                self.state.focus = self.state.focus.prev();
                 false
             }
             Event::Key(KeyEvent {
@@ -341,7 +363,19 @@ fn render_frame(
     edit_buffer: &str,
     code_window: &CodeWindowState,
 ) {
-    // Create the main layout with a vertical separator
+    // Create main layout with status bar at bottom
+    let main_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(0),    // Main content area
+            Constraint::Length(1), // Status bar
+        ])
+        .split(f.area());
+
+    let content_area = main_layout[0];
+    let status_area = main_layout[1];
+
+    // Create the main content layout with a vertical separator
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -349,7 +383,7 @@ fn render_frame(
             Constraint::Length(1), // Vertical separator
             Constraint::Percentage(50),
         ])
-        .split(f.area());
+        .split(content_area);
 
     let right_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -357,17 +391,7 @@ fn render_frame(
         .split(main_chunks[2]);
 
     // Render the three panes
-    render_disassembly(
-        f,
-        main_chunks[0],
-        cpu,
-        ctx,
-        config,
-        breakpoints,
-        focus,
-        state,
-        code_window,
-    );
+    render_disassembly(f, main_chunks[0], cpu, ctx, breakpoints, focus, code_window);
 
     // Render vertical separator
     let separator_lines: Vec<Line> = (0..main_chunks[1].height)
@@ -378,6 +402,34 @@ fn render_frame(
 
     render_registers(f, right_chunks[0], cpu, focus, is_editing, edit_buffer);
     render_output(f, right_chunks[1], focus);
+
+    // Render status bar at the bottom
+    let status_text = format!(
+        " {} │ {}: Step │ {}: Run │ {}: Breakpoint │ Tab/Shift+Tab: Switch │ q: Quit ",
+        if state == DebuggerState::Running {
+            "RUNNING"
+        } else {
+            "PAUSED "
+        },
+        config.step_key_label,
+        config.run_key_label,
+        config.toggle_breakpoint_key_label,
+    );
+
+    let status_style = if state == DebuggerState::Running {
+        Style::default()
+            .bg(Color::Green)
+            .fg(Color::Black)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .bg(Color::Blue)
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
+    };
+
+    let status_bar = Paragraph::new(Line::from(Span::styled(status_text, status_style)));
+    f.render_widget(status_bar, status_area);
 }
 
 fn render_disassembly(
@@ -385,50 +437,15 @@ fn render_disassembly(
     area: Rect,
     cpu: &Cpu,
     ctx: &mut impl CpuContext,
-    config: &DebuggerConfig,
     breakpoints: &BTreeSet<u32>,
     focus: DebuggerFocus,
-    state: DebuggerState,
     code_window: &CodeWindowState,
 ) {
     let pc = cpu.pc_ext(ctx);
     let mut lines = Vec::new();
 
-    // Add title with key bindings and state
-    let state_str = match state {
-        DebuggerState::Running => "[RUNNING]",
-        DebuggerState::Paused => "[PAUSED]",
-    };
-
-    let focus_indicator = if focus == DebuggerFocus::Code {
-        "▶ "
-    } else {
-        "  "
-    };
-
-    let title = format!(
-        "{}{} Code {} - {}: Step | {}: Run | {}: Toggle BP | Tab: Switch | q: Quit ",
-        focus_indicator,
-        state_str,
-        "",
-        config.step_key_label,
-        config.run_key_label,
-        config.toggle_breakpoint_key_label
-    );
-
-    let title_style = if focus == DebuggerFocus::Code {
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-    };
-
-    lines.push(Line::from(Span::styled(title, title_style)));
-    lines.push(Line::from("─".repeat(area.width as usize)));
-
     // Calculate how many instructions we can fit in the available area
-    let available_height = area.height.saturating_sub(2) as usize; // -2 for title and separator
+    let available_height = area.height as usize;
     let max_lines = available_height.min(100);
 
     // Decode the instructions for the code window, caching the start value if we need to.
@@ -480,7 +497,14 @@ fn render_disassembly(
         lines.push(Line::from(Span::styled(line_text, style)));
     }
 
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let code_window_focus = matches!(focus, DebuggerFocus::Code);
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .style(Style::default().bg(if code_window_focus {
+            Color::Black
+        } else {
+            Color::Reset
+        }));
 
     f.render_widget(paragraph, area);
 }
@@ -496,22 +520,6 @@ fn render_registers(
     let mut lines = Vec::new();
 
     let is_reg_focused = matches!(focus, DebuggerFocus::Reg(_));
-    let focus_indicator = if is_reg_focused { "▶ " } else { "  " };
-    let title = format!(
-        "{}Registers - Tab to select, type hex to edit",
-        focus_indicator
-    );
-
-    let title_style = if is_reg_focused {
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-    };
-
-    lines.push(Line::from(Span::styled(title, title_style)));
-    lines.push(Line::from("─".repeat(area.width as usize)));
 
     // Helper function to format a register value with optional editing
     let format_value = |reg: Register, default_value: String| -> String {
@@ -532,11 +540,19 @@ fn render_registers(
         if focus == DebuggerFocus::Reg(reg) {
             if is_editing {
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(if is_reg_focused {
+                        Color::LightGreen
+                    } else {
+                        Color::Green
+                    })
                     .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
             } else {
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(if is_reg_focused {
+                        Color::LightYellow
+                    } else {
+                        Color::Yellow
+                    })
                     .add_modifier(Modifier::BOLD)
             }
         } else {
@@ -617,7 +633,13 @@ fn render_registers(
         if cpu.psw(PSW_F0) { "1" } else { "0" }
     )));
 
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .style(Style::default().bg(if is_reg_focused {
+            Color::Black
+        } else {
+            Color::Reset
+        }));
 
     f.render_widget(paragraph, area);
 }
