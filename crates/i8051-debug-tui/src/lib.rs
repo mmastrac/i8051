@@ -25,6 +25,8 @@ pub enum DebuggerState {
     Paused,
     /// The CPU is running.
     Running,
+    /// The debugger is quitting.
+    Quit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,6 +167,7 @@ impl Debugger {
     /// Pause the debugger (set to paused state)
     pub fn pause(&mut self) {
         self.state.state = DebuggerState::Paused;
+        self.state.code_window.focus = None;
     }
 
     /// Toggle a breakpoint at the given address
@@ -262,6 +265,13 @@ impl Debugger {
                 false
             }
             Event::Key(KeyEvent {
+                code: KeyCode::Char('q'),
+                ..
+            }) => {
+                self.state.state = DebuggerState::Quit;
+                true
+            }
+            Event::Key(KeyEvent {
                 code: KeyCode::Char('s'),
                 ..
             }) if self.state.focus == DebuggerFocus::Code => {
@@ -277,6 +287,7 @@ impl Debugger {
                 self.state.state = match self.state.state {
                     DebuggerState::Paused => DebuggerState::Running,
                     DebuggerState::Running => DebuggerState::Paused,
+                    DebuggerState::Quit => DebuggerState::Quit,
                 };
                 false
             }
@@ -450,7 +461,9 @@ fn render_frame(
         .split(main_chunks[2]);
 
     // Render the three panes
-    render_disassembly(f, main_chunks[0], cpu, ctx, breakpoints, focus, code_window);
+    if state == DebuggerState::Paused {
+        render_disassembly(f, main_chunks[0], cpu, ctx, breakpoints, focus, code_window);
+    }
 
     // Render vertical separator
     let separator_lines: Vec<Line> = (0..main_chunks[1].height)

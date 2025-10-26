@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use crate::sfr::{PSW_AC, PSW_C, PSW_F0, PSW_OV};
 use crate::{Cpu, CpuContext};
 
+use tracing::{Level, info};
+
 pub enum Action {
     /// Log a message to the console.
     Log(String),
@@ -21,7 +23,7 @@ pub enum Action {
 impl Action {
     fn run(&self, cpu: &mut Cpu, breakpoints: &mut BreakpointState, ctx: &mut impl CpuContext) {
         match self {
-            Self::Log(message) => println!("[BP] {}", message),
+            Self::Log(message) => info!("[BP] {}", message),
             Self::Set(register, value) => match register.as_str() {
                 "A" => cpu.a_set(*value as u8),
                 "B" => cpu.b_set(*value as u8),
@@ -34,24 +36,30 @@ impl Action {
             Self::SetTraceInstructions(value) => breakpoints.trace_instructions = *value,
             Self::SetTraceRegisters(value) => breakpoints.trace_registers = *value,
             Self::TraceInstructions => {
-                println!("{:#}", cpu.decode_pc(ctx));
+                info!("{:#}", cpu.decode_pc(ctx));
             }
             Self::TraceRegisters => {
-                println!(
-                    "  A={:02X?}  B={:02X?}  DPTR={:04X?}  C={} OV={} AC={} F0={}",
-                    cpu.a(),
-                    cpu.b(),
-                    cpu.dptr(),
-                    cpu.psw(PSW_C) as u8,
-                    cpu.psw(PSW_OV) as u8,
-                    cpu.psw(PSW_AC) as u8,
-                    cpu.psw(PSW_F0) as u8
-                );
-                print!("  ");
-                for i in 0..8 {
-                    print!("R{}={:02X?} ", i, cpu.r(i));
+                if tracing::enabled!(Level::INFO) {
+                    let regs = format!(
+                        "  A={:02X?}  B={:02X?}  DPTR={:04X?}  C={} OV={} AC={} F0={}",
+                        cpu.a(),
+                        cpu.b(),
+                        cpu.dptr(),
+                        cpu.psw(PSW_C) as u8,
+                        cpu.psw(PSW_OV) as u8,
+                        cpu.psw(PSW_AC) as u8,
+                        cpu.psw(PSW_F0) as u8
+                    );
+
+                    info!("{}", regs);
+
+                    let mut regs = String::from("  ");
+                    for i in 0..8 {
+                        regs.push_str(&format!("R{}={:02X?} ", i, cpu.r(i)));
+                    }
+                    regs.push('\n');
+                    info!("{}", regs);
                 }
-                println!();
             }
         }
     }
