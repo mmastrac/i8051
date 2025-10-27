@@ -1,0 +1,38 @@
+PORT read A8
+PORT write A8 = 02
+PORT read A8
+PORT write A8 = 82
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read B0
+PORT read latch 90
+PORT write 90 = FF
+CPU halted at 0x00DE after 584 instructions
+  A=01  B=00  DPTR=0000  C=false OV=false AC=false F0=false
+  R0=00 R1=00 R2=00 R3=00 R4=00 R5=00 R6=00 R7=00 
+MEM: 00 00 00 00

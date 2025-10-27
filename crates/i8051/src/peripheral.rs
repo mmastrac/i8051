@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::sync::mpsc;
 
-use crate::sfr::{SFR_SBUF, SFR_SCON};
+use crate::{Cpu, CpuContext, Interrupt, sfr::*};
 use crate::{CpuView, PortMapper};
 
 /// A basic serial port peripheral using `SCON` and `SBUF` that emulates a
@@ -113,6 +113,139 @@ impl PortMapper for Serial {
             SFR_SBUF => {
                 self.sbuf_write = Some(value);
                 self.send_tick_delay = 0;
+            }
+            _ => {
+                unreachable!()
+            }
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct Timer {
+    tcon: u8,
+    tmod: u8,
+    th0: u8,
+    tl0: u8,
+    th1: u8,
+    tl1: u8,
+}
+
+impl Timer {
+    pub fn prepare_tick(&self, cpu: &mut Cpu, ctx: &impl CpuContext) -> (bool, bool) {
+        let tr0 = (self.tcon & (1 << 4)) != 0;
+        let tr1 = (self.tcon & (1 << 6)) != 0;
+        let mut res = (false, false);
+
+        if tr0 {
+            let gate0 = (self.tmod & 0x4) != 0;
+            if !gate0 || cpu.sfr(SFR_P3, ctx) & (1 << 0) != 0 {
+                res.0 = true;
+            }
+        }
+
+        if tr1 {
+            let gate1 = (self.tmod & 0x40) != 0;
+            if !gate1 || cpu.sfr(SFR_P3, ctx) & (1 << 0) != 0 {
+                res.1 = true;
+            }
+        }
+
+        res
+    }
+
+    pub fn tick(&mut self, cpu: &mut Cpu, (t0, t1): (bool, bool)) {
+        if t0 {
+            match self.tmod & 0x03 {
+                1 => {
+                    self.tl0 = self.tl0.wrapping_add(1);
+                    if self.tl0 == 0 {
+                        self.th0 = self.th0.wrapping_add(1);
+                    }
+                    if self.th0 == 0 && self.tl0 == 0 {
+                        self.tcon |= 1 << 5;
+                        cpu.interrupt(Interrupt::Timer0);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if t1 {
+            match (self.tmod & 0x0c) >> 4 {
+                1 => {
+                    self.tl1 = self.tl1.wrapping_add(1);
+                    if self.tl1 == 0 {
+                        self.th1 = self.th1.wrapping_add(1);
+                    }
+                    if self.th1 == 0 && self.tl1 == 0 {
+                        self.tcon |= 1 << 7;
+                        cpu.interrupt(Interrupt::Timer1);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+impl PortMapper for Timer {
+    type WriteValue = (u8, u8);
+    fn interest<C: CpuView>(&self, _cpu: &C, addr: u8) -> bool {
+        addr == SFR_TCON
+            || addr == SFR_TMOD
+            || addr == SFR_TH0
+            || addr == SFR_TL0
+            || addr == SFR_TH1
+            || addr == SFR_TL1
+    }
+    fn read<C: CpuView>(&self, _cpu: &C, addr: u8) -> u8 {
+        match addr {
+            SFR_TCON => {
+                return self.tcon;
+            }
+            SFR_TMOD => {
+                return self.tmod;
+            }
+            SFR_TH0 => {
+                return self.th0;
+            }
+            SFR_TL0 => {
+                return self.tl0;
+            }
+            SFR_TH1 => {
+                return self.th1;
+            }
+            SFR_TL1 => {
+                return self.tl1;
+            }
+            _ => {
+                unreachable!()
+            }
+        }
+    }
+    fn prepare_write<C: CpuView>(&self, _cpu: &C, addr: u8, value: u8) -> Self::WriteValue {
+        (addr, value)
+    }
+    fn write(&mut self, (addr, value): Self::WriteValue) {
+        match addr {
+            SFR_TCON => {
+                self.tcon = value;
+            }
+            SFR_TMOD => {
+                self.tmod = value;
+            }
+            SFR_TH0 => {
+                self.th0 = value;
+            }
+            SFR_TL0 => {
+                self.tl0 = value;
+            }
+            SFR_TH1 => {
+                self.th1 = value;
+            }
+            SFR_TL1 => {
+                self.tl1 = value;
             }
             _ => {
                 unreachable!()

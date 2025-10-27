@@ -30,6 +30,9 @@ pub enum Register {
 pub enum Interrupt {
     External0,
     External1,
+    Timer0,
+    Timer1,
+    Serial,
 }
 
 enum Direct {
@@ -360,6 +363,28 @@ impl Cpu {
             }
         }
         true
+    }
+
+    pub fn interrupt(&mut self, interrupt: Interrupt) {
+        self.interrupt = true;
+        self.push_stack16(self.pc);
+        match interrupt {
+            Interrupt::Timer0 => {
+                self.pc = 0x000B;
+            }
+            Interrupt::Timer1 => {
+                self.pc = 0x001B;
+            }
+            Interrupt::Serial => {
+                self.pc = 0x0023;
+            }
+            Interrupt::External0 => {
+                self.pc = 0x0003;
+            }
+            Interrupt::External1 => {
+                self.pc = 0x0013;
+            }
+        }
     }
 
     /// Decode the instruction at the current PC.

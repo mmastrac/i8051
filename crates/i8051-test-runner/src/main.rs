@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use i8051::memory::{RAM, ROM};
+use i8051::peripheral::Timer;
 use i8051::sfr::*;
 use i8051::{Cpu, CpuContext, CpuView, PortMapper};
 use i8051_debug_tui::{Debugger, DebuggerConfig};
@@ -73,7 +74,8 @@ pub fn main() {
     let ram = RAM::new();
     let code = ROM::new(fs::read(&args.rom_file).unwrap());
     let ports = Ports { ram: [0; 128] };
-    let mut context = (ports, ram, code);
+    let timer = Timer::default();
+    let mut context = ((timer, ports), ram, code);
 
     if args.debug {
         run_debug_mode(&mut cpu, &mut context, args.max_instructions);
@@ -82,7 +84,7 @@ pub fn main() {
     }
 }
 
-fn run_debug_mode(cpu: &mut Cpu, context: &mut impl CpuContext, max_instructions: u64) {
+fn run_debug_mode(cpu: &mut Cpu, context: &mut ((Timer, Ports), RAM, ROM), max_instructions: u64) {
     use std::sync::{Arc, Mutex};
     let panic_info: Arc<Mutex<Option<String>>> = Default::default();
 
@@ -108,7 +110,11 @@ fn run_debug_mode(cpu: &mut Cpu, context: &mut impl CpuContext, max_instructions
     }
 }
 
-fn run_debug_mode_inner(cpu: &mut Cpu, context: &mut impl CpuContext, max_instructions: u64) {
+fn run_debug_mode_inner(
+    cpu: &mut Cpu,
+    context: &mut ((Timer, Ports), RAM, ROM),
+    max_instructions: u64,
+) {
     use i8051_debug_tui::DebuggerState;
 
     let mut log_file = File::create("/tmp/i8051-debug.log").ok();
@@ -181,6 +187,10 @@ fn run_debug_mode_inner(cpu: &mut Cpu, context: &mut impl CpuContext, max_instru
                                 );
                                 cpu_halted = true;
                             }
+                            let tick = context.0.0.prepare_tick(cpu, context);
+                            context.0.0.tick(cpu, tick);
+                            context.0.1.ram[(SFR_P3 - 0x80) as usize] =
+                                !context.0.1.ram[(SFR_P3 - 0x80) as usize];
                         }
 
                         // Render after handling event (unless we're still running - render happens after batch)
@@ -251,6 +261,10 @@ fn run_debug_mode_inner(cpu: &mut Cpu, context: &mut impl CpuContext, max_instru
                     }
                     break; // Exit batch loop on halt
                 }
+                let tick = context.0.0.prepare_tick(cpu, context);
+                context.0.0.tick(cpu, tick);
+                context.0.1.ram[(SFR_P3 - 0x80) as usize] =
+                    !context.0.1.ram[(SFR_P3 - 0x80) as usize];
             }
 
             // Render after batch execution
@@ -273,7 +287,7 @@ fn run_debug_mode_inner(cpu: &mut Cpu, context: &mut impl CpuContext, max_instru
     debug_log!(log_file, "=== Debug session ended ===");
 }
 
-fn run_normal_mode(cpu: &mut Cpu, context: &mut impl CpuContext, args: &Args) {
+fn run_normal_mode(cpu: &mut Cpu, context: &mut ((Timer, Ports), RAM, ROM), args: &Args) {
     let mut instruction_count = 0;
     loop {
         let instruction = cpu.decode_pc(context);
@@ -312,6 +326,9 @@ fn run_normal_mode(cpu: &mut Cpu, context: &mut impl CpuContext, args: &Args) {
             );
             break;
         }
+        let tick = context.0.0.prepare_tick(cpu, context);
+        context.0.0.tick(cpu, tick);
+        context.0.1.ram[(SFR_P3 - 0x80) as usize] = !context.0.1.ram[(SFR_P3 - 0x80) as usize];
         if instruction_count >= args.max_instructions {
             println!(
                 "CPU halted at 0x{:04X} after {} instructions",
