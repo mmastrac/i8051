@@ -1,1 +1,4 @@
+CPU halted at 0x00B8 after 541 instructions
+  A=FA  B=00  DPTR=8000  C=false OV=false AC=false F0=false
+  R0=00 R1=00 R2=00 R3=00 R4=00 R5=00 R6=00 R7=00 
 MEM: FA 00 00 00

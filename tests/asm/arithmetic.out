@@ -1,1 +1,4 @@
+CPU halted at 0x008D after 73 instructions
+  A=FF  B=00  DPTR=8001  C=false OV=true AC=false F0=false
+  R0=34 R1=56 R2=30 R3=20 R4=27 R5=25 R6=01 R7=0A 
 MEM: FF FF 00 00

@@ -1,1 +1,4 @@
+CPU halted at 0x0101 after 992 instructions
+  A=06  B=FC  DPTR=8003  C=false OV=false AC=false F0=false
+  R0=00 R1=00 R2=00 R3=00 R4=00 R5=00 R6=00 R7=06 
 MEM: 0A FA 19 06

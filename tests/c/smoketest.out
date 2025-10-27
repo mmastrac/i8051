@@ -1,2 +1,5 @@
-P1 = 55
+PORT write 90 = 55
+CPU halted at 0x00D7 after 649 instructions
+  A=37  B=00  DPTR=8000  C=false OV=true AC=true F0=false
+  R0=00 R1=00 R2=00 R3=00 R4=00 R5=00 R6=0B R7=37 
 MEM: 37 00 00 00

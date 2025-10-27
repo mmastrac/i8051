@@ -28,3 +28,17 @@ build-asm-tests: make-build-dirs
     @just build-c smoketest
     @just build-c math
     @just build-c mul
+
+test-asm NAME:
+    @echo "[ASM] testing {{NAME}}..."
+    @target/debug/test-runner {{ASM_OUTPUT_DIR}}/asm/{{NAME}}.bin > {{ASM_OUTPUT_DIR}}/asm/{{NAME}}.log
+    @diff -u {{ASM_OUTPUT_DIR}}/asm/{{NAME}}.log tests/asm/{{NAME}}.out
+
+test-c NAME:
+    @echo "[C] testing {{NAME}}..."
+    @target/debug/test-runner {{ASM_OUTPUT_DIR}}/c/{{NAME}}.bin > {{ASM_OUTPUT_DIR}}/c/{{NAME}}.log
+    @diff -u {{ASM_OUTPUT_DIR}}/c/{{NAME}}.log tests/c/{{NAME}}.out
+
+test: build-asm-tests
+    @for asm in tests/asm/*.asm; do just test-asm $(basename $asm .asm); done
+    @for c in tests/c/*.c; do just test-c $(basename $c .c); done
