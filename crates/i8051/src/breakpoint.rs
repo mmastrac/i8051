@@ -18,6 +18,8 @@ pub enum Action {
     TraceInstructions,
     /// Trace the current state of the CPU.
     TraceRegisters,
+    /// Run an arbitrary function.
+    Run(Box<dyn Fn(&mut Cpu)>),
 }
 
 impl Action {
@@ -61,6 +63,7 @@ impl Action {
                     info!("{}", regs);
                 }
             }
+            Self::Run(func) => func(cpu),
         }
     }
 }

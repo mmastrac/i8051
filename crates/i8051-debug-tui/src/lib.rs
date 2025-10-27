@@ -3,7 +3,9 @@ use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::io;
 
-use i8051::sfr::{PSW_AC, PSW_C, PSW_F0, PSW_OV, SFR_A, SFR_B, SFR_DPH, SFR_DPL, SFR_SP};
+use i8051::sfr::{
+    PSW_AC, PSW_C, PSW_F0, PSW_OV, PSW_RS0, PSW_RS1, SFR_A, SFR_B, SFR_DPH, SFR_DPL, SFR_SP,
+};
 use i8051::{ControlFlow, Cpu, CpuContext, Register};
 use ratatui::text::Text;
 use ratatui::{
@@ -157,6 +159,11 @@ impl Debugger {
     /// Get a reference to the breakpoints set
     pub fn breakpoints(&self) -> &BTreeSet<u32> {
         &self.breakpoints
+    }
+
+    /// Get a mutable reference to the breakpoints set
+    pub fn breakpoints_mut(&mut self) -> &mut BTreeSet<u32> {
+        &mut self.breakpoints
     }
 
     /// Get the current debugger state
@@ -378,15 +385,14 @@ impl Debugger {
         use i8051::sfr::SFR_SP;
         match register {
             Register::PC => cpu.pc = value as u16,
-            Register::SP => cpu.internal_ram[SFR_SP as usize] = value as u8,
-            Register::A => cpu.internal_ram[SFR_A as usize] = value as u8,
-            Register::B => cpu.internal_ram[SFR_B as usize] = value as u8,
+            Register::SP => cpu.sp_set(value as u8),
+            Register::A => cpu.a_set(value as u8),
+            Register::B => cpu.b_set(value as u8),
             Register::DPTR => {
-                cpu.internal_ram[SFR_DPL as usize] = (value & 0xFF) as u8;
-                cpu.internal_ram[SFR_DPH as usize] = ((value >> 8) & 0xFF) as u8;
+                cpu.dptr_set(value as u16);
             }
             Register::R(n) => {
-                let base = (cpu.internal_ram[i8051::sfr::SFR_PSW as usize] & 0x18) << 3;
+                let base = ((cpu.psw(PSW_RS0) as u8) | ((cpu.psw(PSW_RS1) as u8) << 1)) * 8;
                 cpu.internal_ram[(base + n) as usize] = value as u8;
             }
             _ => {}
@@ -457,7 +463,7 @@ fn render_frame(
 
     let right_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([Constraint::Min(25), Constraint::Percentage(50)])
         .split(main_chunks[2]);
 
     // Render the three panes
@@ -473,7 +479,6 @@ fn render_frame(
     f.render_widget(separator, main_chunks[1]);
 
     render_registers(f, right_chunks[0], cpu, focus, is_editing, edit_buffer);
-    render_output(f, right_chunks[1], focus);
 
     // Render status bar at the bottom
     let status_text = format!(
@@ -685,7 +690,7 @@ fn render_registers(
     };
 
     // Compact format: PC and SP on one line
-    let sp = cpu.internal_ram[SFR_SP as usize];
+    let sp = cpu.sp();
     let pc_sp_line = vec![
         Span::styled(
             format!(
@@ -756,6 +761,27 @@ fn render_registers(
         if cpu.psw(PSW_AC) { "1" } else { "0" },
         if cpu.psw(PSW_F0) { "1" } else { "0" }
     )));
+    lines.push(Line::from(""));
+
+    // Internal RAM display (128 bytes)
+    lines.push(Line::from(Span::styled(
+        "Internal RAM:",
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+
+    // Display 16 bytes per line for 8 lines (128 bytes total)
+    for row in 0..8 {
+        let addr = row * 16;
+        let mut spans = vec![Span::raw(format!("{:02X}: ", addr))];
+
+        for col in 0..16 {
+            let byte_addr = addr + col;
+            let byte_val = cpu.internal_ram[byte_addr];
+            spans.push(Span::raw(format!("{:02X} ", byte_val)));
+        }
+
+        lines.push(Line::from(spans));
+    }
 
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
@@ -764,33 +790,6 @@ fn render_registers(
         } else {
             Color::Reset
         }));
-
-    f.render_widget(paragraph, area);
-}
-
-fn render_output(f: &mut Frame, area: Rect, focus: DebuggerFocus) {
-    let mut lines = Vec::new();
-
-    let focus_indicator = if focus == DebuggerFocus::Output {
-        "▶ "
-    } else {
-        "  "
-    };
-    let title = format!("{}Output", focus_indicator);
-
-    let title_style = if focus == DebuggerFocus::Output {
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-    };
-
-    lines.push(Line::from(Span::styled(title, title_style)));
-    lines.push(Line::from("─".repeat(area.width as usize)));
-    lines.push(Line::from(""));
-
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
 
     f.render_widget(paragraph, area);
 }
