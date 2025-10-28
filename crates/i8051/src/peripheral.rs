@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 use std::sync::mpsc;
 
+use tracing::warn;
+
 use crate::{Cpu, CpuContext, Interrupt, sfr::*};
 use crate::{CpuView, PortMapper};
 
@@ -129,33 +131,69 @@ pub struct Timer {
     tl0: u8,
     th1: u8,
     tl1: u8,
+
+    prev_p3: u8,
+    warned_timer: bool,
+}
+
+pub struct TimerTick {
+    tick_t0: bool,
+    tick_t1: bool,
+    p3: u8,
 }
 
 impl Timer {
-    pub fn prepare_tick(&self, cpu: &mut Cpu, ctx: &impl CpuContext) -> (bool, bool) {
+    pub fn prepare_tick(&self, cpu: &mut Cpu, ctx: &impl CpuContext) -> TimerTick {
         let tr0 = (self.tcon & (1 << 4)) != 0;
-        let tr1 = (self.tcon & (1 << 6)) != 0;
-        let mut res = (false, false);
+        let tc0 = (self.tmod & (1 << 2)) != 0;
+        let gate0 = (self.tmod & (1 << 3)) != 0;
 
-        if tr0 {
-            let gate0 = (self.tmod & 0x4) != 0;
-            if !gate0 || cpu.sfr(SFR_P3, ctx) & (1 << 0) != 0 {
-                res.0 = true;
+        let tr1 = (self.tcon & (1 << 6)) != 0;
+        let tc1 = (self.tmod & (1 << 6)) != 0;
+        let gate1 = (self.tmod & (1 << 7)) != 0;
+
+        // Read P3 iff a timer is enabled AND is in counter mode OR is gated by INT0/1,
+        // otherwise use historical pin history.
+        let needs_p3 = (tr0 && (tc0 || gate0)) || (tr1 && (tc1 || gate1));
+        let p3 = if needs_p3 {
+            cpu.sfr(SFR_P3, ctx)
+        } else {
+            self.prev_p3
+        };
+        let int0 = (p3 & (1 << 2)) != 0;
+        let int1 = (p3 & (1 << 3)) != 0;
+        let t0 = (p3 & (1 << 4)) != 0;
+        let t1 = (p3 & (1 << 5)) != 0;
+
+        let mut res = TimerTick {
+            tick_t0: false,
+            tick_t1: false,
+            p3,
+        };
+
+        if tr0 && (!gate0 || int0) {
+            if tc0 {
+                res.tick_t0 = self.prev_p3 & (1 << 4) != 0 && !t0; // falling edge
+            } else {
+                res.tick_t0 = true;
             }
         }
 
-        if tr1 {
-            let gate1 = (self.tmod & 0x40) != 0;
-            if !gate1 || cpu.sfr(SFR_P3, ctx) & (1 << 0) != 0 {
-                res.1 = true;
+        if tr1 && (!gate1 || int1) {
+            if tc1 {
+                res.tick_t1 = self.prev_p3 & (1 << 5) != 0 && !t1; // falling edge
+            } else {
+                res.tick_t1 = true;
             }
         }
 
         res
     }
 
-    pub fn tick(&mut self, cpu: &mut Cpu, (t0, t1): (bool, bool)) {
-        if t0 {
+    pub fn tick(&mut self, cpu: &mut Cpu, tick: TimerTick) {
+        self.prev_p3 = tick.p3;
+
+        if tick.tick_t0 {
             match self.tmod & 0x03 {
                 1 => {
                     self.tl0 = self.tl0.wrapping_add(1);
@@ -167,12 +205,17 @@ impl Timer {
                         cpu.interrupt(Interrupt::Timer0);
                     }
                 }
-                _ => {}
+                mode => {
+                    if !self.warned_timer {
+                        warn!("Timer 0: Timer mode {mode} not supported");
+                        self.warned_timer = true;
+                    }
+                }
             }
         }
 
-        if t1 {
-            match (self.tmod & 0x0c) >> 4 {
+        if tick.tick_t1 {
+            match (self.tmod & 0x30) >> 4 {
                 1 => {
                     self.tl1 = self.tl1.wrapping_add(1);
                     if self.tl1 == 0 {
@@ -183,7 +226,12 @@ impl Timer {
                         cpu.interrupt(Interrupt::Timer1);
                     }
                 }
-                _ => {}
+                mode => {
+                    if !self.warned_timer {
+                        warn!("Timer 1: Timer mode {mode} not supported");
+                        self.warned_timer = true;
+                    }
+                }
             }
         }
     }
