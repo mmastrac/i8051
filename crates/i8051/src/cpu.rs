@@ -160,6 +160,8 @@ impl<CTX: CpuContext> CpuView for (&Cpu, &CTX) {
             crate::sfr::SFR_DPL => self.0.dpl,
             crate::sfr::SFR_PSW => self.0.psw,
             crate::sfr::SFR_SP => self.0.sp,
+            crate::sfr::SFR_IP => self.0.ip,
+            crate::sfr::SFR_IE => self.0.ie,
             _ => self.1.ports().read(self, addr), // Placeholder for ports
         }
     }
@@ -214,6 +216,8 @@ impl<CTX: CpuContext> CpuView for (&mut Cpu, &mut CTX) {
             crate::sfr::SFR_DPL => self.0.dpl,
             crate::sfr::SFR_PSW => self.0.psw,
             crate::sfr::SFR_SP => self.0.sp,
+            crate::sfr::SFR_IP => self.0.ip,
+            crate::sfr::SFR_IE => self.0.ie,
             _ => self.1.ports().read(self, addr), // Placeholder for ports
         }
     }
@@ -319,6 +323,8 @@ pub struct Cpu {
     dph: u8,
     psw: u8,
     sp: u8,
+    ip: u8,
+    ie: u8,
     interrupt: bool,
 }
 
@@ -339,6 +345,8 @@ impl Cpu {
             dpl: 0,
             dph: 0,
             psw: 0,
+            ip: 0,
+            ie: 0,
             sp: 7, // !
             interrupt: false,
         }
@@ -366,25 +374,25 @@ impl Cpu {
     }
 
     pub fn interrupt(&mut self, interrupt: Interrupt) {
+        if self.ie & 0x80 == 0 {
+            return;
+        }
+
+        let (handler, ie) = match interrupt {
+            Interrupt::Timer0 => (0x000B, 1 << 1),
+            Interrupt::Timer1 => (0x001B, 1 << 3),
+            Interrupt::Serial => (0x0023, 1 << 4),
+            Interrupt::External0 => (0x0003, 1 << 0),
+            Interrupt::External1 => (0x0013, 1 << 2),
+        };
+
+        if self.ie & ie == 0 {
+            return;
+        }
+
         self.interrupt = true;
         self.push_stack16(self.pc);
-        match interrupt {
-            Interrupt::Timer0 => {
-                self.pc = 0x000B;
-            }
-            Interrupt::Timer1 => {
-                self.pc = 0x001B;
-            }
-            Interrupt::Serial => {
-                self.pc = 0x0023;
-            }
-            Interrupt::External0 => {
-                self.pc = 0x0003;
-            }
-            Interrupt::External1 => {
-                self.pc = 0x0013;
-            }
-        }
+        self.pc = handler;
     }
 
     /// Decode the instruction at the current PC.
@@ -532,6 +540,8 @@ impl Cpu {
             SFR_DPL => self.dpl,
             SFR_PSW => self.psw,
             SFR_SP => self.sp,
+            SFR_IP => self.ip,
+            SFR_IE => self.ie,
             _ => ctx.ports().read(&(&*self, &*ctx), addr),
         }
     }
@@ -539,14 +549,14 @@ impl Cpu {
     /// Write to an SFR.
     pub fn sfr_set(&mut self, addr: u8, value: u8, ctx: &mut impl CpuContext) {
         match addr {
-            SFR_A => {
-                self.a = value;
-            }
+            SFR_A => self.a = value,
             SFR_B => self.b = value,
             SFR_DPH => self.dph = value,
             SFR_DPL => self.dpl = value,
             SFR_PSW => self.psw = value,
             SFR_SP => self.sp = value,
+            SFR_IP => self.ip = value,
+            SFR_IE => self.ie = value,
             _ => {
                 let write = ctx.ports().prepare_write(&(&*self, &*ctx), addr, value);
                 ctx.ports_mut().write(write);
