@@ -8,6 +8,7 @@ use crate::regs::{Reg8, Reg16, U16Equivalent};
 use crate::sfr::*;
 use crate::{CpuContext, CpuView, MemoryMapper, PortMapper, ReadOnlyMemoryMapper};
 
+/// Flags available in the PSW register.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Flag {
@@ -19,6 +20,34 @@ pub enum Flag {
     OV = PSW_OV,
     RES = PSW_RES,
     P = PSW_P,
+}
+
+impl Flag {
+    pub fn all() -> [Flag; 8] {
+        [
+            Flag::C,
+            Flag::AC,
+            Flag::F0,
+            Flag::RS0,
+            Flag::RS1,
+            Flag::OV,
+            Flag::RES,
+            Flag::P,
+        ]
+    }
+
+    pub fn short_name(&self) -> &'static str {
+        match self {
+            Flag::C => "CY",
+            Flag::AC => "AC",
+            Flag::F0 => "F0",
+            Flag::RS0 => "R0",
+            Flag::RS1 => "R1",
+            Flag::OV => "OV",
+            Flag::RES => "RS",
+            Flag::P => "PY",
+        }
+    }
 }
 
 /// A register in the 8051 CPU.

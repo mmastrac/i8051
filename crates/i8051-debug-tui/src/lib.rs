@@ -753,13 +753,19 @@ fn render_registers(
     lines.push(Line::from(""));
 
     // PSW flags
-    lines.push(Line::from(format!(
-        "C:{}  OV:{}  AC:{}  F0:{}",
-        if cpu.psw(Flag::C) { "1" } else { "0" },
-        if cpu.psw(Flag::OV) { "1" } else { "0" },
-        if cpu.psw(Flag::AC) { "1" } else { "0" },
-        if cpu.psw(Flag::F0) { "1" } else { "0" }
-    )));
+    let mut flag_spans = Vec::new();
+    for (i, flag) in Flag::all().iter().enumerate() {
+        if i > 0 {
+            flag_spans.push(Span::raw(" "));
+        }
+        let style = if cpu.psw(*flag) {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().add_modifier(Modifier::DIM)
+        };
+        flag_spans.push(Span::styled(flag.short_name(), style));
+    }
+    lines.push(Line::from(flag_spans));
     lines.push(Line::from(""));
 
     // Internal RAM display (128 bytes)
