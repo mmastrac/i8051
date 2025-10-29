@@ -63,10 +63,10 @@ pub const PSW_C: u8 = 0x07;
 pub const PSW_AC: u8 = 0x06;
 /// User-defined flag 0
 pub const PSW_F0: u8 = 0x05;
-/// Register bank select 0: selects between four 8-bit register banks
-pub const PSW_RS0: u8 = 0x04;
 /// Register bank select 1: selects between four 8-bit register banks
-pub const PSW_RS1: u8 = 0x03;
+pub const PSW_RS1: u8 = 0x04;
+/// Register bank select 0: selects between four 8-bit register banks
+pub const PSW_RS0: u8 = 0x03;
 /// Overflow flag: indicates overflow from/to the most significant bit
 pub const PSW_OV: u8 = 0x02;
 /// Reserved bit: reserved for future use
