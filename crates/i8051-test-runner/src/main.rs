@@ -11,7 +11,9 @@ use i8051_debug_tui::{Debugger, DebuggerConfig};
 
 use clap::Parser;
 use i8051_debug_tui::crossterm::event::{self, Event, KeyCode, KeyEvent};
-use tracing::{Level, info, trace};
+use tracing::{Level, info};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 macro_rules! debug_log {
     ($file:expr, $($arg:tt)*) => {
@@ -159,6 +161,9 @@ fn run_debug_mode_inner(
     let mut debugger = Debugger::new(config).expect("Failed to create debugger");
 
     debugger.enter().expect("Failed to enter debug mode");
+    tracing_subscriber::registry()
+        .with(debugger.tracing_collector())
+        .init();
 
     let mut instruction_count = 0;
     let mut should_quit = false;

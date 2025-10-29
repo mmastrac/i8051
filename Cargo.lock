@@ -338,6 +338,8 @@ version = "0.6.0"
 dependencies = [
  "i8051",
  "ratatui",
+ "tracing",
+ "tracing-subscriber",
  "tui-textarea",
 ]
 

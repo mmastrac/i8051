@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
 use crate::cpu::Flag;
-use crate::sfr::{PSW_AC, PSW_C, PSW_F0, PSW_OV};
 use crate::{Cpu, CpuContext, Register};
 
 use tracing::{Level, info};

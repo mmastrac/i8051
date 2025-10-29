@@ -9,3 +9,5 @@ readme = "README.md"
 i8051.workspace = true
 ratatui = "0.29"
 tui-textarea = { version = "0.7.0", features = [] }
+tracing = "0.1"
+tracing-subscriber = "0.3"

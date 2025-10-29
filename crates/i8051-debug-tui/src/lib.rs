@@ -1,7 +1,8 @@
 use std::borrow::Cow;
 use std::cell::Cell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::io;
+use std::sync::{Arc, Mutex};
 
 use i8051::{ControlFlow, Cpu, CpuContext, Flag, Register};
 use ratatui::text::Text;
@@ -14,9 +15,116 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
 };
+use tracing::Level;
+use tracing_subscriber::Layer;
 
 // Re-export crossterm from ratatui so users get the matching version
 pub use ratatui::crossterm;
+
+/// Inner state for the tracing collector
+#[derive(Clone)]
+struct TracingCollectorInner {
+    max_events: usize,
+    events: Arc<Mutex<VecDeque<(Level, String)>>>,
+}
+
+/// A tracing collector that collects events and displays them in a TUI.
+#[derive(Clone)]
+pub struct TracingCollector {
+    inner: TracingCollectorInner,
+}
+
+impl TracingCollector {
+    pub fn new(max_events: usize) -> Self {
+        Self {
+            inner: TracingCollectorInner {
+                max_events,
+                events: Arc::new(Mutex::new(VecDeque::with_capacity(max_events))),
+            },
+        }
+    }
+
+    pub fn with_last_n(&self, n: usize, mut f: impl FnMut(Level, &str)) {
+        let events = self.inner.events.lock().unwrap();
+        for event in events.iter().rev().take(n) {
+            f(event.0, &event.1);
+        }
+    }
+
+    /// Clear all collected events
+    pub fn clear(&self) {
+        self.inner.events.lock().unwrap().clear();
+    }
+
+    fn add_event(&self, level: Level, message: String) {
+        let mut events = self.inner.events.lock().unwrap();
+        if events.len() >= self.inner.max_events {
+            events.pop_front();
+        }
+        events.push_back((level, message));
+    }
+}
+
+impl<S> Layer<S> for TracingCollector
+where
+    S: tracing::Subscriber,
+{
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        struct Filter(bool);
+        impl tracing::field::Visit for Filter {
+            fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if field.name() == "log.module_path" && value.starts_with("mio::") {
+                    self.0 = true;
+                }
+            }
+        }
+
+        let mut filter = Filter(false);
+        event.record(&mut filter);
+        if filter.0 {
+            return;
+        }
+
+        // Format the event into a string
+        let mut visitor = EventVisitor::default();
+        event.record(&mut visitor);
+
+        let level = event.metadata().level();
+        let message = visitor.message;
+
+        self.add_event(*level, message);
+    }
+}
+
+/// Visitor for extracting message from tracing events
+#[derive(Default)]
+struct EventVisitor {
+    message: String,
+}
+
+impl tracing::field::Visit for EventVisitor {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.message = format!("{:?}", value);
+            // Remove the surrounding quotes that Debug adds
+            if self.message.starts_with('"') && self.message.ends_with('"') {
+                self.message = self.message[1..self.message.len() - 1].to_string();
+            }
+        } else if self.message.is_empty() {
+            // If no message field, use the first field we see
+            self.message = format!("{} = {:?}", field.name(), value);
+        } else {
+            // Append additional fields
+            self.message
+                .push_str(&format!(", {} = {:?}", field.name(), value));
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DebuggerState {
@@ -126,6 +234,7 @@ pub struct Debugger {
     breakpoints: BTreeSet<u32>,
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
     state: DebuggerInternalState,
+    tracing_collector: TracingCollector,
 }
 
 impl Debugger {
@@ -150,7 +259,13 @@ impl Debugger {
                     focus: None,
                 },
             },
+            tracing_collector: TracingCollector::new(1000),
         })
+    }
+
+    /// Get a clone of the tracing collector that can be used as a Layer
+    pub fn tracing_collector(&self) -> TracingCollector {
+        self.tracing_collector.clone()
     }
 
     /// Get a reference to the breakpoints set
@@ -359,6 +474,14 @@ impl Debugger {
                 false
             }
             Event::Key(KeyEvent {
+                code: KeyCode::Char('c'),
+                ..
+            }) if self.state.focus == DebuggerFocus::Output => {
+                // Clear trace output
+                self.tracing_collector.clear();
+                false
+            }
+            Event::Key(KeyEvent {
                 code: KeyCode::Char(c),
                 ..
             }) if matches!(self.state.focus, DebuggerFocus::Reg(_)) && c.is_ascii_hexdigit() => {
@@ -391,6 +514,7 @@ impl Debugger {
         let is_editing = self.state.is_editing;
         let edit_buffer = &self.state.edit_buffer;
         let code_window = &self.state.code_window;
+        let trace_events = &self.tracing_collector;
 
         self.terminal.draw(|f| {
             render_frame(
@@ -404,6 +528,7 @@ impl Debugger {
                 is_editing,
                 edit_buffer,
                 &code_window,
+                &trace_events,
             );
         })?;
         Ok(())
@@ -421,6 +546,7 @@ fn render_frame(
     is_editing: bool,
     edit_buffer: &str,
     code_window: &CodeWindowState,
+    trace_events: &TracingCollector,
 ) {
     // Create main layout with status bar at bottom
     let main_layout = Layout::default()
@@ -446,7 +572,7 @@ fn render_frame(
 
     let right_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(25), Constraint::Percentage(50)])
+        .constraints([Constraint::Min(10), Constraint::Percentage(50)])
         .split(main_chunks[2]);
 
     // Render the three panes
@@ -462,6 +588,7 @@ fn render_frame(
     f.render_widget(separator, main_chunks[1]);
 
     render_registers(f, right_chunks[0], cpu, focus, is_editing, edit_buffer);
+    render_output(f, right_chunks[1], trace_events, focus);
 
     // Render status bar at the bottom
     let status_text = format!(
@@ -819,6 +946,44 @@ fn render_registers(
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .style(Style::default().bg(if is_reg_focused {
+            Color::Black
+        } else {
+            Color::Reset
+        }));
+
+    f.render_widget(paragraph, area);
+}
+
+fn render_output(f: &mut Frame, area: Rect, trace_events: &TracingCollector, focus: DebuggerFocus) {
+    let is_output_focused = matches!(focus, DebuggerFocus::Output);
+
+    // Create header
+    let mut lines = vec![Line::from(Span::styled(
+        "Trace Output:",
+        Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+    ))];
+
+    // Add trace events (most recent at bottom)
+    let available_lines = area.height.saturating_sub(1) as usize; // Account for header
+    trace_events.with_last_n(available_lines, &mut |level: Level, event: &str| {
+        // Color code by log level
+        let level_color = match level {
+            Level::ERROR => Color::Red,
+            Level::WARN => Color::Yellow,
+            Level::INFO => Color::Green,
+            Level::DEBUG => Color::Cyan,
+            Level::TRACE => Color::DarkGray,
+        };
+
+        lines.push(Line::from(vec![Span::styled(
+            event.to_string(),
+            Style::default().fg(level_color),
+        )]));
+    });
+
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .style(Style::default().bg(if is_output_focused {
             Color::Black
         } else {
             Color::Reset
