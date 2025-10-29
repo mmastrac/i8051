@@ -677,20 +677,20 @@ fn render_registers(
     let pc_sp_line = vec![
         Span::styled(
             format!(
-                "PC: {}",
+                "PC:{}",
                 format_value(Register::PC, format!("{:04X}", cpu.pc))
             ),
             reg_style(Register::PC),
         ),
         Span::raw(" "),
         Span::styled(
-            format!("SP: {}", format_value(Register::SP, format!("{:02X}", sp))),
+            format!("SP:{}", format_value(Register::SP, format!("{:02X}", sp))),
             reg_style(Register::SP),
         ),
         Span::raw(" "),
         Span::styled(
             format!(
-                "IP: {}",
+                "IP:{}",
                 format_value(Register::IP, format!("{:02X}", cpu.ip()))
             ),
             reg_style(Register::IP),
@@ -698,7 +698,7 @@ fn render_registers(
         Span::raw(" "),
         Span::styled(
             format!(
-                "IE: {}",
+                "IE:{}",
                 format_value(Register::IE, format!("{:02X}", cpu.ie()))
             ),
             reg_style(Register::IE),
@@ -774,15 +774,43 @@ fn render_registers(
         Style::default().add_modifier(Modifier::BOLD),
     )));
 
+    // Get current SP value and register bank
+    let sp = cpu.sp() as usize;
+    let register_bank =
+        (if cpu.psw(Flag::RS1) { 2 } else { 0 }) + (if cpu.psw(Flag::RS0) { 1 } else { 0 });
+    let bank_start = register_bank * 8;
+    let bank_end = bank_start + 8;
+
     // Display 16 bytes per line for 8 lines (128 bytes total)
     for row in 0..8 {
         let addr = row * 16;
-        let mut spans = vec![Span::raw(format!("{:02X}: ", addr))];
+        let mut spans = vec![Span::styled(
+            format!("{:02X}: ", addr),
+            Style::default().add_modifier(Modifier::DIM),
+        )];
 
         for col in 0..16 {
             let byte_addr = addr + col;
             let byte_val = cpu.internal_ram[byte_addr];
-            spans.push(Span::raw(format!("{:02X} ", byte_val)));
+            let in_current_register_bank = byte_addr >= bank_start && byte_addr < bank_end;
+
+            // Determine background color based on address
+            let style = if byte_addr == sp.wrapping_add(1) {
+                // Stack pointer: dark green background
+                Style::default().bg(Color::Green).fg(Color::Black)
+            } else if in_current_register_bank {
+                // Current register bank: light yellow background
+                Style::default().bg(Color::Yellow).fg(Color::Black)
+            } else {
+                Style::default()
+            };
+
+            if in_current_register_bank && byte_addr < bank_end - 1 {
+                spans.push(Span::styled(format!("{:02X} ", byte_val), style));
+            } else {
+                spans.push(Span::styled(format!("{:02X}", byte_val), style));
+                spans.push(Span::raw(" "));
+            }
         }
 
         lines.push(Line::from(spans));
