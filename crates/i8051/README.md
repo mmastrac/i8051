@@ -31,6 +31,8 @@ loop {
 The [`i8051-debug-tui`](https://crates.io/crates/i8051-debug-tui) crate provides
 a terminal UI debugger for the i8051 emulator.
 
+![Debugger](https://github.com/mmastrac/i8051/blob/main/docs/debugger.gif?raw=true)
+
 ## Supported Instructions
 
 The [instruction set](https://docs.rs/i8051/latest/i8051/ops/index.html) is from
