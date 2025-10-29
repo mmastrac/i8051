@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::sync::mpsc;
 
-use tracing::warn;
+use tracing::{trace, warn};
 
 use crate::{Cpu, CpuContext, Interrupt, sfr::*};
 use crate::{CpuView, PortMapper};
@@ -123,6 +123,61 @@ impl PortMapper for Serial {
     }
 }
 
+pub const P3_RXD: u8 = 1 << 0;
+pub const P3_TXD: u8 = 1 << 1;
+pub const P3_INT0: u8 = 1 << 2;
+pub const P3_INT1: u8 = 1 << 3;
+pub const P3_T0: u8 = 1 << 4;
+pub const P3_T1: u8 = 1 << 5;
+pub const P3_WR: u8 = 1 << 6;
+pub const P3_RD: u8 = 1 << 7;
+
+pub const TCON_TF1: u8 = 1 << 7;
+pub const TCON_TR1: u8 = 1 << 6;
+pub const TCON_TF0: u8 = 1 << 5;
+pub const TCON_TR0: u8 = 1 << 4;
+pub const TCON_IE1: u8 = 1 << 3;
+pub const TCON_IT1: u8 = 1 << 2;
+pub const TCON_IE0: u8 = 1 << 1;
+pub const TCON_IT0: u8 = 1 << 0;
+
+pub const TMOD_GATE1: u8 = 1 << 7;
+pub const TMOD_C_T1: u8 = 1 << 6;
+pub const TMOD_M11: u8 = 1 << 5;
+pub const TMOD_M10: u8 = 1 << 4;
+pub const TMOD_GATE0: u8 = 1 << 3;
+pub const TMOD_C_T0: u8 = 1 << 2;
+pub const TMOD_M01: u8 = 1 << 1;
+pub const TMOD_M00: u8 = 1 << 0;
+
+/// A timer peripheral that emulates the timer 0 and timer 1 registers and
+/// interrupts.
+///
+/// TCON:
+///
+/// `[TF0, TR0, TF1, TR1, IE0, IT0, IE1, IT1]`
+///
+///  - `TF0`: Timer 0 overflow flag
+///  - `TR0`: Timer 0 run control
+///  - `TF1`: Timer 1 overflow flag
+///  - `TR1`: Timer 1 run control
+///  - `IE0`: External interrupt 0 enable
+///  - `IT0`: External interrupt 0 type
+///  - `IE1`: External interrupt 1 enable
+///  - `IT1`: External interrupt 1 type
+///
+/// TMOD:
+///
+/// `[GATE0, C/T0, M1, M0, GATE1, C/T1, M3, M2]`
+///
+///  - `GATE0`: Timer 0 gate
+///  - `C`/`T0`: Timer 0 counter/timer mode
+///  - `M1`: Timer 0 mode 1
+///  - `M0`: Timer 0 mode 0
+///  - `GATE1`: Timer 1 gate
+///  - `C`/`T1`: Timer 1 counter/timer mode
+///  - `M3`: Timer 1 mode 3
+///  - `M2`: Timer 1 mode 2
 #[derive(Debug, Default)]
 pub struct Timer {
     tcon: u8,
@@ -144,13 +199,13 @@ pub struct TimerTick {
 
 impl Timer {
     pub fn prepare_tick(&self, cpu: &mut Cpu, ctx: &impl CpuContext) -> TimerTick {
-        let tr0 = (self.tcon & (1 << 4)) != 0;
-        let tc0 = (self.tmod & (1 << 2)) != 0;
-        let gate0 = (self.tmod & (1 << 3)) != 0;
+        let tr0 = (self.tcon & TCON_TR0) != 0;
+        let tc0 = (self.tmod & TMOD_C_T0) != 0;
+        let gate0 = (self.tmod & TMOD_GATE0) != 0;
 
-        let tr1 = (self.tcon & (1 << 6)) != 0;
-        let tc1 = (self.tmod & (1 << 6)) != 0;
-        let gate1 = (self.tmod & (1 << 7)) != 0;
+        let tr1 = (self.tcon & TCON_TR1) != 0;
+        let tc1 = (self.tmod & TMOD_C_T1) != 0;
+        let gate1 = (self.tmod & TMOD_GATE1) != 0;
 
         // Read P3 iff a timer is enabled AND is in counter mode OR is gated by INT0/1,
         // otherwise use historical pin history.
@@ -160,10 +215,10 @@ impl Timer {
         } else {
             self.prev_p3
         };
-        let int0 = (p3 & (1 << 2)) != 0;
-        let int1 = (p3 & (1 << 3)) != 0;
-        let t0 = (p3 & (1 << 4)) != 0;
-        let t1 = (p3 & (1 << 5)) != 0;
+        let int0 = (p3 & P3_INT0) != 0;
+        let int1 = (p3 & P3_INT1) != 0;
+        let t0 = (p3 & P3_T0) != 0;
+        let t1 = (p3 & P3_T1) != 0;
 
         let mut res = TimerTick {
             tick_t0: false,
@@ -173,7 +228,7 @@ impl Timer {
 
         if tr0 && (!gate0 || int0) {
             if tc0 {
-                res.tick_t0 = self.prev_p3 & (1 << 4) != 0 && !t0; // falling edge
+                res.tick_t0 = self.prev_p3 & P3_T0 != 0 && !t0; // falling edge
             } else {
                 res.tick_t0 = true;
             }
@@ -181,7 +236,7 @@ impl Timer {
 
         if tr1 && (!gate1 || int1) {
             if tc1 {
-                res.tick_t1 = self.prev_p3 & (1 << 5) != 0 && !t1; // falling edge
+                res.tick_t1 = self.prev_p3 & P3_T1 != 0 && !t1; // falling edge
             } else {
                 res.tick_t1 = true;
             }
@@ -201,7 +256,7 @@ impl Timer {
                         self.th0 = self.th0.wrapping_add(1);
                     }
                     if self.th0 == 0 && self.tl0 == 0 {
-                        self.tcon |= 1 << 5;
+                        self.tcon |= TCON_TF0;
                         cpu.interrupt(Interrupt::Timer0);
                     }
                 }
@@ -222,7 +277,7 @@ impl Timer {
                         self.th1 = self.th1.wrapping_add(1);
                     }
                     if self.th1 == 0 && self.tl1 == 0 {
-                        self.tcon |= 1 << 7;
+                        self.tcon |= TCON_TF1;
                         cpu.interrupt(Interrupt::Timer1);
                     }
                 }
@@ -281,6 +336,9 @@ impl PortMapper for Timer {
                 self.tcon = value;
             }
             SFR_TMOD => {
+                if self.tmod != value {
+                    trace!("Timer mode changed: {:02X} -> {:02X}", self.tmod, value);
+                }
                 self.tmod = value;
             }
             SFR_TH0 => {

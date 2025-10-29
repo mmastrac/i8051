@@ -54,7 +54,11 @@ struct Ports {
 impl PortMapper for Ports {
     type WriteValue = (u8, u8);
     fn read<C: CpuView>(&self, _cpu: &C, addr: u8) -> u8 {
-        info!("PORT read {:02X}", addr);
+        info!(
+            "PORT read {:02X} = {:02X}",
+            addr,
+            self.ram[addr as usize - 128]
+        );
         self.ram[addr as usize - 128]
     }
     fn prepare_write<C: CpuView>(&self, _cpu: &C, addr: u8, value: u8) -> Self::WriteValue {

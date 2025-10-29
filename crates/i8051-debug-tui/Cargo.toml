@@ -1,5 +1,6 @@
 [package]
 name = "i8051-debug-tui"
+description = "A TUI for debugging the i8051 microcontroller emulator."
 readme = "README.md"
 version.workspace = true
 edition.workspace = true

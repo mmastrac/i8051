@@ -9,7 +9,8 @@ void timer0_isr(void) __interrupt (1)
     /* Toggle port 1 and stop timer 0 */
     TR0 = 0;
     P1 = ~P1;
-    interrupt_flag = 1;
+    interrupt_flag = TF0;
+    TF0 = 0;
 }
 
 void main(void)

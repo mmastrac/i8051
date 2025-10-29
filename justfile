@@ -36,12 +36,12 @@ build-asm-tests: make-build-dirs
 test-asm NAME:
     @echo "[ASM] testing {{NAME}}..."
     @target/debug/test-runner {{ASM_OUTPUT_DIR}}/asm/{{NAME}}.bin > {{ASM_OUTPUT_DIR}}/asm/{{NAME}}.log
-    @diff -u {{ASM_OUTPUT_DIR}}/asm/{{NAME}}.log tests/asm/{{NAME}}.out
+    @diff -u {{ASM_OUTPUT_DIR}}/asm/{{NAME}}.log tests/asm/{{NAME}}.out | tee {{ASM_OUTPUT_DIR}}/asm/{{NAME}}.diff | head -n 20
 
 test-c NAME:
     @echo "[C] testing {{NAME}}..."
     @target/debug/test-runner {{ASM_OUTPUT_DIR}}/c/{{NAME}}.bin > {{ASM_OUTPUT_DIR}}/c/{{NAME}}.log
-    @diff -u {{ASM_OUTPUT_DIR}}/c/{{NAME}}.log tests/c/{{NAME}}.out
+    @diff -u {{ASM_OUTPUT_DIR}}/c/{{NAME}}.log tests/c/{{NAME}}.out | tee {{ASM_OUTPUT_DIR}}/c/{{NAME}}.diff | head -n 20
 
 test: build-asm-tests build-rust
     @for asm in tests/asm/*.asm; do just test-asm $(basename $asm .asm); done
