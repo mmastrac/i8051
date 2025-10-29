@@ -1,16 +1,17 @@
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{self, IsTerminal, Write, stdout};
 use std::path::PathBuf;
 use std::time::Duration;
 
 use i8051::memory::{RAM, ROM};
 use i8051::peripheral::Timer;
-use i8051::sfr::*;
-use i8051::{Cpu, CpuContext, CpuView, PortMapper};
+use i8051::{Cpu, CpuView, PortMapper};
+use i8051::{Flag, sfr::*};
 use i8051_debug_tui::{Debugger, DebuggerConfig};
 
 use clap::Parser;
 use i8051_debug_tui::crossterm::event::{self, Event, KeyCode, KeyEvent};
+use tracing::{Level, info, trace};
 
 macro_rules! debug_log {
     ($file:expr, $($arg:tt)*) => {
@@ -38,6 +39,10 @@ struct Args {
     /// Enable debug mode with TUI
     #[arg(short, long)]
     debug: bool,
+
+    /// Enable verbose output
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 struct Ports {
@@ -47,18 +52,18 @@ struct Ports {
 impl PortMapper for Ports {
     type WriteValue = (u8, u8);
     fn read<C: CpuView>(&self, _cpu: &C, addr: u8) -> u8 {
-        println!("PORT read {:02X}", addr);
+        info!("PORT read {:02X}", addr);
         self.ram[addr as usize - 128]
     }
     fn prepare_write<C: CpuView>(&self, _cpu: &C, addr: u8, value: u8) -> Self::WriteValue {
         (addr, value)
     }
     fn write(&mut self, (addr, value): Self::WriteValue) {
-        println!("PORT write {:02X} = {:02X}", addr, value);
+        info!("PORT write {:02X} = {:02X}", addr, value);
         self.ram[addr as usize - 128] = value;
     }
     fn read_latch<C: CpuView>(&self, _cpu: &C, addr: u8) -> u8 {
-        println!("PORT read latch {:02X}", addr);
+        info!("PORT read latch {:02X}", addr);
         self.ram[addr as usize - 128]
     }
     fn interest<C: CpuView>(&self, _cpu: &C, _addr: u8) -> bool {
@@ -68,6 +73,36 @@ impl PortMapper for Ports {
 
 pub fn main() {
     let args = Args::parse();
+
+    if args.debug {
+        // ?
+    } else {
+        let level = if args.verbose {
+            Level::TRACE
+        } else {
+            Level::INFO
+        };
+        let format = tracing_subscriber::fmt::format()
+            .with_target(false)
+            .with_line_number(false)
+            .with_level(false)
+            .without_time();
+        if stdout().is_terminal() {
+            tracing_subscriber::fmt()
+                .with_max_level(level)
+                .event_format(format)
+                .log_internal_errors(false)
+                .init();
+        } else {
+            tracing_subscriber::fmt()
+                .with_ansi(false)
+                .with_max_level(level)
+                .event_format(format)
+                .log_internal_errors(false)
+                .with_writer(io::stdout)
+                .init();
+        }
+    }
 
     let mut cpu = Cpu::new();
 
@@ -307,10 +342,10 @@ fn run_normal_mode(cpu: &mut Cpu, context: &mut ((Timer, Ports), RAM, ROM), args
                 cpu.a(),
                 cpu.b(),
                 cpu.dptr(),
-                cpu.psw(PSW_C),
-                cpu.psw(PSW_OV),
-                cpu.psw(PSW_AC),
-                cpu.psw(PSW_F0)
+                cpu.psw(Flag::C),
+                cpu.psw(Flag::OV),
+                cpu.psw(Flag::AC),
+                cpu.psw(Flag::F0)
             );
             print!("  ");
             for i in 0..8 {
@@ -343,10 +378,10 @@ fn run_normal_mode(cpu: &mut Cpu, context: &mut ((Timer, Ports), RAM, ROM), args
         cpu.a(),
         cpu.b(),
         cpu.dptr(),
-        cpu.psw(PSW_C),
-        cpu.psw(PSW_OV),
-        cpu.psw(PSW_AC),
-        cpu.psw(PSW_F0)
+        cpu.psw(Flag::C),
+        cpu.psw(Flag::OV),
+        cpu.psw(Flag::AC),
+        cpu.psw(Flag::F0)
     );
     print!("  ");
     for i in 0..8 {

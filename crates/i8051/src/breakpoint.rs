@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
+use crate::cpu::Flag;
 use crate::sfr::{PSW_AC, PSW_C, PSW_F0, PSW_OV};
-use crate::{Cpu, CpuContext};
+use crate::{Cpu, CpuContext, Register};
 
 use tracing::{Level, info};
 
@@ -9,7 +10,7 @@ pub enum Action {
     /// Log a message to the console.
     Log(String),
     /// Set a register to a value.
-    Set(String, u16),
+    Set(Register, u16),
     /// Enable or disable tracing of instructions.
     SetTraceInstructions(bool),
     /// Enable or disable automatic tracing of registers.
@@ -26,15 +27,7 @@ impl Action {
     fn run(&self, cpu: &mut Cpu, breakpoints: &mut BreakpointState, ctx: &mut impl CpuContext) {
         match self {
             Self::Log(message) => info!("[BP] {}", message),
-            Self::Set(register, value) => match register.as_str() {
-                "A" => cpu.a_set(*value as u8),
-                "B" => cpu.b_set(*value as u8),
-                "DPTR" => cpu.dptr_set(*value),
-                "PSW" => cpu.psw_set(*value as u8, true),
-                "SP" => cpu.sp_set(*value as u8),
-                "PC" => cpu.pc = *value,
-                _ => panic!("Unknown register: {}", register),
-            },
+            Self::Set(register, value) => cpu.register_set(*register, *value),
             Self::SetTraceInstructions(value) => breakpoints.trace_instructions = *value,
             Self::SetTraceRegisters(value) => breakpoints.trace_registers = *value,
             Self::TraceInstructions => {
@@ -47,10 +40,10 @@ impl Action {
                         cpu.a(),
                         cpu.b(),
                         cpu.dptr(),
-                        cpu.psw(PSW_C) as u8,
-                        cpu.psw(PSW_OV) as u8,
-                        cpu.psw(PSW_AC) as u8,
-                        cpu.psw(PSW_F0) as u8
+                        cpu.psw(Flag::C) as u8,
+                        cpu.psw(Flag::OV) as u8,
+                        cpu.psw(Flag::AC) as u8,
+                        cpu.psw(Flag::F0) as u8
                     );
 
                     info!("{}", regs);

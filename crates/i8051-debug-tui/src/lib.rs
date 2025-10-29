@@ -3,10 +3,7 @@ use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::io;
 
-use i8051::sfr::{
-    PSW_AC, PSW_C, PSW_F0, PSW_OV, PSW_RS0, PSW_RS1, SFR_A, SFR_B, SFR_DPH, SFR_DPL, SFR_SP,
-};
-use i8051::{ControlFlow, Cpu, CpuContext, Register};
+use i8051::{ControlFlow, Cpu, CpuContext, Flag, Register};
 use ratatui::text::Text;
 use ratatui::{
     Frame, Terminal,
@@ -382,21 +379,7 @@ impl Debugger {
         register: Register,
         value: u32,
     ) {
-        use i8051::sfr::SFR_SP;
-        match register {
-            Register::PC => cpu.pc = value as u16,
-            Register::SP => cpu.sp_set(value as u8),
-            Register::A => cpu.a_set(value as u8),
-            Register::B => cpu.b_set(value as u8),
-            Register::DPTR => {
-                cpu.dptr_set(value as u16);
-            }
-            Register::R(n) => {
-                let base = ((cpu.psw(PSW_RS0) as u8) | ((cpu.psw(PSW_RS1) as u8) << 1)) * 8;
-                cpu.internal_ram[(base + n) as usize] = value as u8;
-            }
-            _ => {}
-        }
+        cpu.register_set(register, value as _);
     }
 
     /// Render the debugger UI
@@ -772,10 +755,10 @@ fn render_registers(
     // PSW flags
     lines.push(Line::from(format!(
         "C:{}  OV:{}  AC:{}  F0:{}",
-        if cpu.psw(PSW_C) { "1" } else { "0" },
-        if cpu.psw(PSW_OV) { "1" } else { "0" },
-        if cpu.psw(PSW_AC) { "1" } else { "0" },
-        if cpu.psw(PSW_F0) { "1" } else { "0" }
+        if cpu.psw(Flag::C) { "1" } else { "0" },
+        if cpu.psw(Flag::OV) { "1" } else { "0" },
+        if cpu.psw(Flag::AC) { "1" } else { "0" },
+        if cpu.psw(Flag::F0) { "1" } else { "0" }
     )));
     lines.push(Line::from(""));
 

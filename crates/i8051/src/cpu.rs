@@ -8,6 +8,19 @@ use crate::regs::{Reg8, Reg16, U16Equivalent};
 use crate::sfr::*;
 use crate::{CpuContext, CpuView, MemoryMapper, PortMapper, ReadOnlyMemoryMapper};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Flag {
+    C = PSW_C,
+    AC = PSW_AC,
+    F0 = PSW_F0,
+    RS0 = PSW_RS0,
+    RS1 = PSW_RS1,
+    OV = PSW_OV,
+    RES = PSW_RES,
+    P = PSW_P,
+}
+
 /// A register in the 8051 CPU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Register {
@@ -17,6 +30,7 @@ pub enum Register {
     DPH,
     DPTR,
     PSW,
+    Flag(Flag),
     SP,
     IP,
     IE,
@@ -24,8 +38,6 @@ pub enum Register {
     PC,
     /// R0-R8
     R(u8),
-    /// General SFR, overlaps with registers above.
-    SFR(u8),
     /// Internal CPU RAM.
     RAM(u8),
 }
@@ -146,7 +158,7 @@ impl<CTX: CpuContext> CpuView for (&Cpu, &CTX) {
     fn dph(&self) -> u8 {
         self.0.dph
     }
-    fn psw(&self, flag: u8) -> bool {
+    fn psw(&self, flag: Flag) -> bool {
         self.0.psw(flag)
     }
     fn sp(&self) -> u8 {
@@ -157,9 +169,6 @@ impl<CTX: CpuContext> CpuView for (&Cpu, &CTX) {
     }
     fn sfr(&self, addr: u8) -> u8 {
         self.0.sfr(addr, self.1)
-    }
-    fn interrupt(&self, _interrupt: Interrupt) {
-        // Can't modify during a view
     }
 }
 
@@ -191,7 +200,7 @@ impl<CTX: CpuContext> CpuView for (&mut Cpu, &mut CTX) {
     fn dph(&self) -> u8 {
         self.0.dph
     }
-    fn psw(&self, flag: u8) -> bool {
+    fn psw(&self, flag: Flag) -> bool {
         self.0.psw(flag)
     }
     fn sp(&self) -> u8 {
@@ -202,9 +211,6 @@ impl<CTX: CpuContext> CpuView for (&mut Cpu, &mut CTX) {
     }
     fn sfr(&self, addr: u8) -> u8 {
         self.0.sfr(addr, self.1)
-    }
-    fn interrupt(&self, _interrupt: Interrupt) {
-        // Can't modify during a view
     }
 }
 
@@ -464,6 +470,44 @@ impl Cpu {
         }
     }
 
+    /// Retrieves the value of a CPU-managed register.
+    pub fn register(&self, register: Register) -> u16 {
+        match register {
+            Register::A => self.a as _,
+            Register::B => self.b as _,
+            Register::DPL => self.dpl as _,
+            Register::DPH => self.dph as _,
+            Register::DPTR => self.dptr() as _,
+            Register::PSW => self.psw as _,
+            Register::SP => self.sp as _,
+            Register::IP => self.ip as _,
+            Register::IE => self.ie as _,
+            Register::PC => self.pc as _,
+            Register::R(n) => self.r(n) as _,
+            Register::RAM(n) => self.internal_ram[n as usize] as _,
+            Register::Flag(flag) => self.psw(flag.into()) as _,
+        }
+    }
+
+    /// Sets the value of a CPU-managed register.
+    pub fn register_set(&mut self, register: Register, value: u16) {
+        match register {
+            Register::A => self.a = value as u8,
+            Register::B => self.b = value as u8,
+            Register::DPL => self.dpl = value as u8,
+            Register::DPH => self.dph = value as u8,
+            Register::DPTR => self.dptr_set(value as u16),
+            Register::PSW => self.psw = value as u8,
+            Register::SP => self.sp = value as u8,
+            Register::IP => self.ip = value as u8,
+            Register::IE => self.ie = value as u8,
+            Register::PC => self.pc = value as u16,
+            Register::R(n) => *self.r_mut(n) = value as u8,
+            Register::RAM(n) => self.internal_ram[n as usize] = value as u8,
+            Register::Flag(flag) => self.psw_set(flag, value != 0),
+        }
+    }
+
     /// Get the value of the A register.
     pub fn a(&self) -> u8 {
         self.a
@@ -472,7 +516,7 @@ impl Cpu {
     /// Set the value of the A register.
     pub fn a_set(&mut self, value: u8) {
         self.a = value;
-        self.psw_set(PSW_P, value.count_ones() % 2 == 1);
+        self.psw_set(Flag::P, value.count_ones() % 2 == 1);
     }
 
     /// Get the value of the B register.
@@ -551,16 +595,16 @@ impl Cpu {
     }
 
     /// Get the value of a PSW flag.
-    pub fn psw(&self, flag: u8) -> bool {
-        self.psw & (1 << flag) != 0
+    pub fn psw(&self, flag: Flag) -> bool {
+        self.psw & (1 << flag as u8) != 0
     }
 
     /// Set the value of a PSW flag.
-    pub fn psw_set(&mut self, flag: u8, value: bool) {
+    pub fn psw_set(&mut self, flag: Flag, value: bool) {
         if value {
-            self.psw |= 1 << flag;
+            self.psw |= 1 << flag as u8;
         } else {
-            self.psw &= !(1 << flag);
+            self.psw &= !(1 << flag as u8);
         }
     }
 
@@ -742,16 +786,13 @@ macro_rules! op_def_read {
     };
     ($ctx:ident, DPTR) => {{ Reg16($ctx.dptr()) }};
     ($ctx:ident, C) => {
-        $ctx.psw(PSW_C)
+        $ctx.psw(Flag::C)
     };
     ($ctx:ident, OV) => {
-        $ctx.psw(PSW_OV)
+        $ctx.psw(Flag::OV)
     };
     ($ctx:ident, AC) => {
-        $ctx.psw(PSW_AC)
-    };
-    ($ctx:ident, Z) => {
-        $ctx.psw(PSW_Z)
+        $ctx.psw(Flag::AC)
     };
     ($ctx:ident, BIT, $index:expr) => {
         $ctx.0.read_bit($index.to_u8().0, $ctx.1)
@@ -812,16 +853,13 @@ macro_rules! op_def_write {
         $ctx.0.dptr_set($value.to_u16());
     }};
     ($ctx:ident, C, $value:expr) => {{
-        $ctx.0.psw_set(PSW_C, $value);
+        $ctx.0.psw_set(Flag::C, $value);
     }};
     ($ctx:ident, OV, $value:expr) => {{
-        $ctx.0.psw_set(PSW_OV, $value);
+        $ctx.0.psw_set(Flag::OV, $value);
     }};
     ($ctx:ident, AC, $value:expr) => {{
-        $ctx.0.psw_set(PSW_AC, $value);
-    }};
-    ($ctx:ident, Z, $value:expr) => {{
-        $ctx.0.psw_set(PSW_Z, $value);
+        $ctx.0.psw_set(Flag::AC, $value);
     }};
     ($ctx:ident, BIT, $index:expr, $value:expr) => {
         $ctx.0.write_bit_latch($index.to_u8().0, $value, $ctx.1)

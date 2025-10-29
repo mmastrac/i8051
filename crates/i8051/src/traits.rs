@@ -1,5 +1,7 @@
-use crate::Interrupt;
-use crate::sfr::{SFR_BASE, SFR_P2};
+use crate::{
+    cpu::Flag,
+    sfr::{SFR_BASE, SFR_P2},
+};
 
 /// A (mostly) read-only view of the CPU state with the ability to trigger
 /// interrupts.
@@ -16,14 +18,11 @@ pub trait CpuView {
     fn dptr(&self) -> u16;
     fn dpl(&self) -> u8;
     fn dph(&self) -> u8;
-    fn psw(&self, flag: u8) -> bool;
+    fn psw(&self, flag: Flag) -> bool;
     fn sp(&self) -> u8;
     fn r(&self, x: u8) -> u8;
 
     fn sfr(&self, addr: u8) -> u8;
-
-    /// Trigger an interrupt. This modifies the internal CPU state.
-    fn interrupt(&self, interrupt: Interrupt);
 }
 
 /// A context for the CPU. This can be implemented by hand, but is most
