@@ -1,6 +1,7 @@
 use std::fmt;
 
 use i8051_proc_macro::{op_def, unique};
+use tracing::trace;
 use type_mapper::map_types;
 
 use crate::regs::{Reg8, Reg16, U16Equivalent};
@@ -17,6 +18,8 @@ pub enum Register {
     DPTR,
     PSW,
     SP,
+    IP,
+    IE,
     /// Program Counter.
     PC,
     /// R0-R8
@@ -27,6 +30,7 @@ pub enum Register {
     RAM(u8),
 }
 
+#[derive(Debug)]
 pub enum Interrupt {
     External0,
     External1,
@@ -152,18 +156,7 @@ impl<CTX: CpuContext> CpuView for (&Cpu, &CTX) {
         self.0.r(x)
     }
     fn sfr(&self, addr: u8) -> u8 {
-        // Read from CPU's internal SFRs
-        match addr {
-            crate::sfr::SFR_A => self.0.a,
-            crate::sfr::SFR_B => self.0.b,
-            crate::sfr::SFR_DPH => self.0.dph,
-            crate::sfr::SFR_DPL => self.0.dpl,
-            crate::sfr::SFR_PSW => self.0.psw,
-            crate::sfr::SFR_SP => self.0.sp,
-            crate::sfr::SFR_IP => self.0.ip,
-            crate::sfr::SFR_IE => self.0.ie,
-            _ => self.1.ports().read(self, addr), // Placeholder for ports
-        }
+        self.0.sfr(addr, self.1)
     }
     fn interrupt(&self, _interrupt: Interrupt) {
         // Can't modify during a view
@@ -208,18 +201,7 @@ impl<CTX: CpuContext> CpuView for (&mut Cpu, &mut CTX) {
         self.0.r(x)
     }
     fn sfr(&self, addr: u8) -> u8 {
-        // Read from CPU's internal SFRs
-        match addr {
-            crate::sfr::SFR_A => self.0.a,
-            crate::sfr::SFR_B => self.0.b,
-            crate::sfr::SFR_DPH => self.0.dph,
-            crate::sfr::SFR_DPL => self.0.dpl,
-            crate::sfr::SFR_PSW => self.0.psw,
-            crate::sfr::SFR_SP => self.0.sp,
-            crate::sfr::SFR_IP => self.0.ip,
-            crate::sfr::SFR_IE => self.0.ie,
-            _ => self.1.ports().read(self, addr), // Placeholder for ports
-        }
+        self.0.sfr(addr, self.1)
     }
     fn interrupt(&self, _interrupt: Interrupt) {
         // Can't modify during a view
@@ -374,7 +356,7 @@ impl Cpu {
     }
 
     pub fn interrupt(&mut self, interrupt: Interrupt) {
-        if self.ie & 0x80 == 0 {
+        if self.ie & 0x80 == 0 || self.interrupt {
             return;
         }
 
@@ -390,6 +372,7 @@ impl Cpu {
             return;
         }
 
+        trace!("Interrupt: {:?} (IE = {:02X})", interrupt, self.ie);
         self.interrupt = true;
         self.push_stack16(self.pc);
         self.pc = handler;
@@ -556,7 +539,10 @@ impl Cpu {
             SFR_PSW => self.psw = value,
             SFR_SP => self.sp = value,
             SFR_IP => self.ip = value,
-            SFR_IE => self.ie = value,
+            SFR_IE => {
+                trace!("IE set to {:02X} @ {:X}", value, self.pc_ext(ctx));
+                self.ie = value;
+            }
             _ => {
                 let write = ctx.ports().prepare_write(&(&*self, &*ctx), addr, value);
                 ctx.ports_mut().write(write);
@@ -576,6 +562,26 @@ impl Cpu {
         } else {
             self.psw &= !(1 << flag);
         }
+    }
+
+    /// Get the value of the IP register.
+    pub fn ip(&self) -> u8 {
+        self.ip
+    }
+
+    /// Set the value of the IP register.
+    pub fn ip_set(&mut self, value: u8) {
+        self.ip = value;
+    }
+
+    /// Get the value of the IE register.
+    pub fn ie(&self) -> u8 {
+        self.ie
+    }
+
+    /// Set the value of the IE register.
+    pub fn ie_set(&mut self, value: u8) {
+        self.ie = value;
     }
 
     /// Get the value of the SP register.
@@ -704,6 +710,23 @@ impl Cpu {
             self.sfr_set(sfr_addr, byte, ctx);
         }
     }
+
+    fn write_bit_latch(&mut self, bit_addr: u8, value: bool, ctx: &mut impl CpuContext) {
+        match bit_addr & 0xF8 {
+            sfr @ (SFR_P0 | SFR_P1 | SFR_P2 | SFR_P3) => {
+                let byte = ctx.ports().read_latch(&(&*self, &*ctx), sfr);
+                let byte = if value {
+                    byte | 1 << (bit_addr & 0x07)
+                } else {
+                    byte & !(1 << (bit_addr & 0x07))
+                };
+                self.sfr_set(sfr, byte, ctx);
+            }
+            _ => {
+                self.write_bit(bit_addr, value, ctx);
+            }
+        }
+    }
 }
 
 // Helper macros for the proc macro to use
@@ -801,7 +824,7 @@ macro_rules! op_def_write {
         $ctx.0.psw_set(PSW_Z, $value);
     }};
     ($ctx:ident, BIT, $index:expr, $value:expr) => {
-        $ctx.0.write_bit($index.to_u8().0, $value, $ctx.1)
+        $ctx.0.write_bit_latch($index.to_u8().0, $value, $ctx.1)
     };
     ($ctx:ident, PBIT, $index:expr, $value:expr) => {
         $ctx.0.write_bit($index.to_u8().0, $value, $ctx.1)

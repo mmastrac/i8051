@@ -699,10 +699,26 @@ fn render_registers(
             ),
             reg_style(Register::PC),
         ),
-        Span::raw("  "),
+        Span::raw(" "),
         Span::styled(
             format!("SP: {}", format_value(Register::SP, format!("{:02X}", sp))),
             reg_style(Register::SP),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            format!(
+                "IP: {}",
+                format_value(Register::IP, format!("{:02X}", cpu.ip()))
+            ),
+            reg_style(Register::IP),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            format!(
+                "IE: {}",
+                format_value(Register::IE, format!("{:02X}", cpu.ie()))
+            ),
+            reg_style(Register::IE),
         ),
     ];
     lines.push(Line::from(pc_sp_line));
