@@ -450,39 +450,8 @@ impl Cpu {
         true
     }
 
-    pub fn clear_interrupt(&mut self, ctx: &mut impl CpuContext) {
+    pub fn clear_interrupt(&mut self) {
         self.interrupt = None;
-        if self.ie & IE_EA == 0 {
-            return;
-        }
-
-        if self.ie & IE_ET0 != 0 {
-            let tcon = self.sfr(SFR_TCON, ctx);
-            if tcon & TCON_TF0 != 0 {
-                trace!("Re-entering Timer 0 interrupt");
-                if self.interrupt(Interrupt::Timer0) {
-                    self.sfr_set(SFR_TCON, (tcon & !TCON_TF0) as u8, ctx);
-                }
-            }
-        }
-        if self.ie & IE_ET1 != 0 {
-            let tcon = self.sfr(SFR_TCON, ctx);
-            if tcon & TCON_TF1 != 0 {
-                trace!("Re-entering Timer 1 interrupt");
-                if self.interrupt(Interrupt::Timer1) {
-                    self.sfr_set(SFR_TCON, (tcon & !TCON_TF1) as u8, ctx);
-                }
-            }
-        }
-        if self.ie & IE_ES != 0 {
-            if self.sfr(SFR_SCON, ctx) & SCON_TI != 0 {
-                trace!("Re-entering Serial interrupt");
-                self.interrupt(Interrupt::Serial);
-            } else if self.sfr(SFR_SCON, ctx) & SCON_RI != 0 {
-                trace!("Re-entering Serial interrupt");
-                self.interrupt(Interrupt::Serial);
-            }
-        }
     }
 
     /// Decode the instruction at the current PC.
@@ -1016,7 +985,7 @@ macro_rules! op_def_call {
         $ctx.0.push_stack16(U16Equivalent::to_u16($value))
     };
     ($ctx:ident, CLEAR_INT()) => {
-        $ctx.0.clear_interrupt($ctx.1);
+        $ctx.0.clear_interrupt();
     };
     ($ctx:ident, SEXT($value:expr)) => {
         U16Equivalent::sext($value)

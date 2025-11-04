@@ -323,7 +323,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "i8051"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "bin_file",
  "bytemuck",
@@ -334,7 +334,7 @@ dependencies = [
 
 [[package]]
 name = "i8051-debug-tui"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "i8051",
  "ratatui",
@@ -345,7 +345,7 @@ dependencies = [
 
 [[package]]
 name = "i8051-proc-macro"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "i8051-test-runner"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "clap",
  "i8051",
