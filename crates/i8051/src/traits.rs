@@ -90,6 +90,56 @@ pub trait PortMapper {
     fn write(&mut self, value: Self::WriteValue);
 }
 
+impl<P: PortMapper> PortMapper for &mut P {
+    type WriteValue = P::WriteValue;
+    fn interest<C: CpuView>(&self, cpu: &C, addr: u8) -> bool {
+        (**self).interest(cpu, addr)
+    }
+    fn read<C: CpuView>(&self, cpu: &C, addr: u8) -> u8 {
+        (**self).read(cpu, addr)
+    }
+    fn prepare_write<C: CpuView>(&self, cpu: &C, addr: u8, value: u8) -> Self::WriteValue {
+        (**self).prepare_write(cpu, addr, value)
+    }
+    fn write(&mut self, value: Self::WriteValue) {
+        (**self).write(value)
+    }
+    fn extend_short_read<C: CpuView>(&self, cpu: &C, addr: u8) -> u16 {
+        (**self).extend_short_read(cpu, addr)
+    }
+    fn pc_extension<C: CpuView>(&self, cpu: &C) -> u16 {
+        (**self).pc_extension(cpu)
+    }
+    fn read_latch<C: CpuView>(&self, cpu: &C, addr: u8) -> u8 {
+        (**self).read_latch(cpu, addr)
+    }
+}
+
+impl<P: PortMapper> PortMapper for &P {
+    type WriteValue = P::WriteValue;
+    fn interest<C: CpuView>(&self, cpu: &C, addr: u8) -> bool {
+        (**self).interest(cpu, addr)
+    }
+    fn read<C: CpuView>(&self, cpu: &C, addr: u8) -> u8 {
+        (**self).read(cpu, addr)
+    }
+    fn prepare_write<C: CpuView>(&self, cpu: &C, addr: u8, value: u8) -> Self::WriteValue {
+        (**self).prepare_write(cpu, addr, value)
+    }
+    fn write(&mut self, value: Self::WriteValue) {
+        unreachable!()
+    }
+    fn extend_short_read<C: CpuView>(&self, cpu: &C, addr: u8) -> u16 {
+        (**self).extend_short_read(cpu, addr)
+    }
+    fn pc_extension<C: CpuView>(&self, cpu: &C) -> u16 {
+        (**self).pc_extension(cpu)
+    }
+    fn read_latch<C: CpuView>(&self, cpu: &C, addr: u8) -> u8 {
+        (**self).read_latch(cpu, addr)
+    }
+}
+
 impl MemoryMapper for () {
     type WriteValue = ();
     fn len(&self) -> u32 {

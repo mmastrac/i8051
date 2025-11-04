@@ -100,7 +100,6 @@ impl Serial {
                 );
                 self.sbuf_pending_write = 0;
                 self.scon |= SCON_TI;
-                cpu.interrupt(Interrupt::Serial);
 
                 // If there's a double-buffered value, start transmission again
                 if let Some(value) = self.sbuf_send_double_buffer.take() {
@@ -119,7 +118,6 @@ impl Serial {
                     if self.scon & SCON_RI == 0 {
                         self.sbuf_read = self.sbuf_pending_read;
                         self.scon |= SCON_RI;
-                        cpu.interrupt(Interrupt::Serial);
                         trace!("Serial: RX complete {:02X}, set RI", self.sbuf_read);
                     } else {
                         trace!("Serial: RX ignored, RI is already set");
@@ -337,7 +335,6 @@ impl Timer {
                     }
                     if self.th0 == 0 && self.tl0 == 0 {
                         self.tcon |= TCON_TF0;
-                        cpu.interrupt(Interrupt::Timer0);
                     }
                 }
                 mode => {
@@ -358,7 +355,6 @@ impl Timer {
                     }
                     if self.th1 == 0 && self.tl1 == 0 {
                         self.tcon |= TCON_TF1;
-                        cpu.interrupt(Interrupt::Timer1);
                     }
                 }
                 mode => {

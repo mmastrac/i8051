@@ -4,6 +4,7 @@ use i8051_proc_macro::{op_def, unique};
 use tracing::trace;
 use type_mapper::map_types;
 
+use crate::peripheral::{SCON_RI, SCON_TI, TCON_TF0, TCON_TF1};
 use crate::regs::{Reg8, Reg16, U16Equivalent};
 use crate::sfr::*;
 use crate::{CpuContext, CpuView, MemoryMapper, PortMapper, ReadOnlyMemoryMapper};
@@ -342,7 +343,7 @@ pub struct Cpu {
     sp: u8,
     ip: u8,
     ie: u8,
-    interrupt: bool,
+    interrupt: Option<Interrupt>,
 }
 
 impl Default for Cpu {
@@ -365,7 +366,7 @@ impl Cpu {
             ip: 0,
             ie: 0,
             sp: 7, // !
-            interrupt: false,
+            interrupt: None,
         }
     }
 
@@ -378,6 +379,37 @@ impl Cpu {
     ///
     /// Returns `false` if the CPU has halted.
     pub fn step(&mut self, ctx: &mut impl CpuContext) -> bool {
+        if self.ie & IE_EA != 0 {
+            if self.ie & IE_ES != 0 {
+                let scon = self.sfr(SFR_SCON, ctx);
+                if scon & SCON_RI != 0 {
+                    trace!("Serial interrupt triggered by IE set");
+                    self.interrupt(Interrupt::Serial);
+                } else if scon & SCON_TI != 0 {
+                    trace!("Serial interrupt triggered by IE set");
+                    self.interrupt(Interrupt::Serial);
+                }
+            }
+            if self.ie & IE_ET0 != 0 {
+                let tcon = self.sfr(SFR_TCON, ctx);
+                if tcon & TCON_TF0 != 0 {
+                    trace!("Timer 0 interrupt triggered by IE set");
+                    if self.interrupt(Interrupt::Timer0) {
+                        self.sfr_set(SFR_TCON, (tcon & !TCON_TF0) as u8, ctx);
+                    }
+                }
+            }
+            if self.ie & IE_ET1 != 0 {
+                let tcon = self.sfr(SFR_TCON, ctx);
+                if tcon & TCON_TF1 != 0 {
+                    trace!("Timer 1 interrupt triggered by IE set");
+                    if self.interrupt(Interrupt::Timer1) {
+                        self.sfr_set(SFR_TCON, (tcon & !TCON_TF1) as u8, ctx);
+                    }
+                }
+            }
+        }
+
         let pc = self.pc_ext(ctx);
         let op = (&*self, &*ctx).read_code(pc);
         dispatch(self, ctx);
@@ -390,31 +422,71 @@ impl Cpu {
         true
     }
 
-    pub fn interrupt(&mut self, interrupt: Interrupt) {
-        if self.ie & 0x80 == 0 || self.interrupt {
-            return;
+    pub fn interrupt(&mut self, interrupt: Interrupt) -> bool {
+        if self.ie & IE_EA == 0 || self.interrupt.is_some() {
+            if let Some(current) = self.interrupt.as_ref() {
+                trace!("Interrupt already in progress ({current:?}) while handling {interrupt:?}");
+            }
+            return false;
         }
 
         let (handler, ie) = match interrupt {
-            Interrupt::Timer0 => (0x000B, 1 << 1),
-            Interrupt::Timer1 => (0x001B, 1 << 3),
-            Interrupt::Serial => (0x0023, 1 << 4),
-            Interrupt::External0 => (0x0003, 1 << 0),
-            Interrupt::External1 => (0x0013, 1 << 2),
+            Interrupt::Timer0 => (0x000B, IE_ET0),
+            Interrupt::Timer1 => (0x001B, IE_ET1),
+            Interrupt::Serial => (0x0023, IE_ES),
+            Interrupt::External0 => (0x0003, IE_EX0),
+            Interrupt::External1 => (0x0013, IE_EX1),
         };
 
         if self.ie & ie == 0 {
-            return;
+            return false;
         }
 
         trace!("Interrupt: {:?} (IE = {:02X})", interrupt, self.ie);
-        self.interrupt = true;
+        self.interrupt = Some(interrupt);
         self.push_stack16(self.pc);
         self.pc = handler;
+
+        true
+    }
+
+    pub fn clear_interrupt(&mut self, ctx: &mut impl CpuContext) {
+        self.interrupt = None;
+        if self.ie & IE_EA == 0 {
+            return;
+        }
+
+        if self.ie & IE_ET0 != 0 {
+            let tcon = self.sfr(SFR_TCON, ctx);
+            if tcon & TCON_TF0 != 0 {
+                trace!("Re-entering Timer 0 interrupt");
+                if self.interrupt(Interrupt::Timer0) {
+                    self.sfr_set(SFR_TCON, (tcon & !TCON_TF0) as u8, ctx);
+                }
+            }
+        }
+        if self.ie & IE_ET1 != 0 {
+            let tcon = self.sfr(SFR_TCON, ctx);
+            if tcon & TCON_TF1 != 0 {
+                trace!("Re-entering Timer 1 interrupt");
+                if self.interrupt(Interrupt::Timer1) {
+                    self.sfr_set(SFR_TCON, (tcon & !TCON_TF1) as u8, ctx);
+                }
+            }
+        }
+        if self.ie & IE_ES != 0 {
+            if self.sfr(SFR_SCON, ctx) & SCON_TI != 0 {
+                trace!("Re-entering Serial interrupt");
+                self.interrupt(Interrupt::Serial);
+            } else if self.sfr(SFR_SCON, ctx) & SCON_RI != 0 {
+                trace!("Re-entering Serial interrupt");
+                self.interrupt(Interrupt::Serial);
+            }
+        }
     }
 
     /// Decode the instruction at the current PC.
-    pub fn decode_pc(&self, ctx: &mut impl CpuContext) -> Instruction {
+    pub fn decode_pc(&self, ctx: &impl CpuContext) -> Instruction {
         let pc = self.pc_ext(ctx);
         Instruction {
             pc,
@@ -423,7 +495,7 @@ impl Cpu {
     }
 
     /// Decode the instruction at the given PC.
-    pub fn decode(&self, ctx: &mut impl CpuContext, pc: u32) -> Instruction {
+    pub fn decode(&self, ctx: &impl CpuContext, pc: u32) -> Instruction {
         Instruction {
             pc,
             bytes: decode(&self, ctx, pc),
@@ -944,7 +1016,7 @@ macro_rules! op_def_call {
         $ctx.0.push_stack16(U16Equivalent::to_u16($value))
     };
     ($ctx:ident, CLEAR_INT()) => {
-        $ctx.0.interrupt = false
+        $ctx.0.clear_interrupt($ctx.1);
     };
     ($ctx:ident, SEXT($value:expr)) => {
         U16Equivalent::sext($value)
@@ -1044,7 +1116,7 @@ macro_rules! op {
             Opcode::Unknown
         }
 
-        pub fn decode(cpu: &Cpu, ctx: &mut impl CpuContext, pc: u32) -> Vec<u8> {
+        pub fn decode(cpu: &Cpu, ctx: &impl CpuContext, pc: u32) -> Vec<u8> {
             #![allow(unused)]
             #![allow(non_snake_case)]
 

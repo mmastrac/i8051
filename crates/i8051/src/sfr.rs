@@ -73,3 +73,10 @@ pub const PSW_OV: u8 = 0x02;
 pub const PSW_RES: u8 = 0x01;
 /// Parity flag: indicates even/odd number of 1s in the accumulator
 pub const PSW_P: u8 = 0x00;
+
+pub const IE_EX0: u8 = 1 << 0;
+pub const IE_ET0: u8 = 1 << 1;
+pub const IE_EX1: u8 = 1 << 2;
+pub const IE_ET1: u8 = 1 << 3;
+pub const IE_ES: u8 = 1 << 4;
+pub const IE_EA: u8 = 1 << 7;

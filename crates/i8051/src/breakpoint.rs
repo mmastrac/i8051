@@ -23,7 +23,7 @@ pub enum Action {
 }
 
 impl Action {
-    fn run(&self, cpu: &mut Cpu, breakpoints: &mut BreakpointState, ctx: &mut impl CpuContext) {
+    fn run(&self, cpu: &mut Cpu, breakpoints: &mut BreakpointState, ctx: &impl CpuContext) {
         match self {
             Self::Log(message) => info!("[BP] {}", message),
             Self::Set(register, value) => cpu.register_set(*register, *value),
@@ -66,6 +66,7 @@ struct BreakpointState {
     trace_registers: bool,
 }
 
+#[derive(Default)]
 pub struct Breakpoints {
     breakpoints_before: BTreeMap<u32, Vec<Action>>,
     breakpoints_after: BTreeMap<u32, Vec<Action>>,
