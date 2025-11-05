@@ -4,7 +4,7 @@ use i8051_proc_macro::{op_def, unique};
 use tracing::trace;
 use type_mapper::map_types;
 
-use crate::peripheral::{SCON_RI, SCON_TI, TCON_TF0, TCON_TF1};
+use crate::peripheral::{P3_INT0, P3_INT1, SCON_RI, SCON_TI, TCON_TF0, TCON_TF1};
 use crate::regs::{Reg8, Reg16, U16Equivalent};
 use crate::sfr::*;
 use crate::{CpuContext, CpuView, MemoryMapper, PortMapper, ReadOnlyMemoryMapper};
@@ -383,17 +383,17 @@ impl Cpu {
             if self.ie & IE_ES != 0 {
                 let scon = self.sfr(SFR_SCON, ctx);
                 if scon & SCON_RI != 0 {
-                    trace!("Serial interrupt triggered by IE set");
+                    trace!("Serial interrupt triggered (RI)");
                     self.interrupt(Interrupt::Serial);
                 } else if scon & SCON_TI != 0 {
-                    trace!("Serial interrupt triggered by IE set");
+                    trace!("Serial interrupt triggered (TI)");
                     self.interrupt(Interrupt::Serial);
                 }
             }
             if self.ie & IE_ET0 != 0 {
                 let tcon = self.sfr(SFR_TCON, ctx);
                 if tcon & TCON_TF0 != 0 {
-                    trace!("Timer 0 interrupt triggered by IE set");
+                    trace!("Timer 0 interrupt triggered (TF0)");
                     if self.interrupt(Interrupt::Timer0) {
                         self.sfr_set(SFR_TCON, (tcon & !TCON_TF0) as u8, ctx);
                     }
@@ -402,10 +402,24 @@ impl Cpu {
             if self.ie & IE_ET1 != 0 {
                 let tcon = self.sfr(SFR_TCON, ctx);
                 if tcon & TCON_TF1 != 0 {
-                    trace!("Timer 1 interrupt triggered by IE set");
+                    trace!("Timer 1 interrupt triggered (TF1)");
                     if self.interrupt(Interrupt::Timer1) {
                         self.sfr_set(SFR_TCON, (tcon & !TCON_TF1) as u8, ctx);
                     }
+                }
+            }
+            if self.ie & IE_EX0 != 0 {
+                let ie0 = self.sfr(SFR_P3, ctx);
+                if ie0 & P3_INT0 == 0 {
+                    trace!("External 0 interrupt triggered (INT0)");
+                    self.interrupt(Interrupt::External0);
+                }
+            }
+            if self.ie & IE_EX1 != 0 {
+                let ie1 = self.sfr(SFR_P3, ctx);
+                if ie1 & P3_INT1 == 0 {
+                    trace!("External 1 interrupt triggered (INT1)");
+                    self.interrupt(Interrupt::External1);
                 }
             }
         }
