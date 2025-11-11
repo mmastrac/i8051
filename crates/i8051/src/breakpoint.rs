@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crate::cpu::Flag;
@@ -7,7 +8,7 @@ use tracing::{Level, info};
 
 pub enum Action {
     /// Log a message to the console.
-    Log(String),
+    Log(Level, Cow<'static, str>),
     /// Set a register to a value.
     Set(Register, u16),
     /// Enable or disable tracing of instructions.
@@ -25,7 +26,21 @@ pub enum Action {
 impl Action {
     fn run(&self, cpu: &mut Cpu, breakpoints: &mut BreakpointState, ctx: &impl CpuContext) {
         match self {
-            Self::Log(message) => info!("[BP] {}", message),
+            Self::Log(Level::DEBUG, message) => {
+                tracing::debug!(target: "bp", "[BP] {}", message);
+            }
+            Self::Log(Level::INFO, message) => {
+                tracing::info!(target: "bp", "[BP] {}", message);
+            }
+            Self::Log(Level::WARN, message) => {
+                tracing::warn!(target: "bp", "[BP] {}", message);
+            }
+            Self::Log(Level::ERROR, message) => {
+                tracing::error!(target: "bp", "[BP] {}", message);
+            }
+            Self::Log(Level::TRACE, message) => {
+                tracing::trace!(target: "bp", "[BP] {}", message);
+            }
             Self::Set(register, value) => cpu.register_set(*register, *value),
             Self::SetTraceInstructions(value) => breakpoints.trace_instructions = *value,
             Self::SetTraceRegisters(value) => breakpoints.trace_registers = *value,

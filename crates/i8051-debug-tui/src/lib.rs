@@ -239,7 +239,7 @@ pub struct Debugger {
 
 impl Debugger {
     /// Create a new debugger with the given configuration
-    pub fn new(config: DebuggerConfig) -> io::Result<Self> {
+    pub fn new(config: DebuggerConfig, tracing_collector: TracingCollector) -> io::Result<Self> {
         let stdout = io::stdout();
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;
@@ -259,7 +259,7 @@ impl Debugger {
                     focus: None,
                 },
             },
-            tracing_collector: TracingCollector::new(1000),
+            tracing_collector,
         })
     }
 

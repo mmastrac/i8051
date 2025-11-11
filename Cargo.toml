@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 authors = ["Matt Mastracci <matthew@mastracci.com>"]
 license = "MIT OR Apache-2.0"
@@ -12,6 +12,6 @@ keywords = ["8051", "mcs-51", "intel"]
 categories = ["compilers", "embedded", "hardware-support", "emulators", "simulation"]
 
 [workspace.dependencies]
-i8051-proc-macro = { version = "0.9.0", path = "crates/i8051-proc-macro" }
-i8051            = { version = "0.9.0", path = "crates/i8051" }
-i8051-debug-tui  = { version = "0.9.0", path = "crates/i8051-debug-tui" }
+i8051-proc-macro = { version = "0.10.0", path = "crates/i8051-proc-macro" }
+i8051            = { version = "0.10.0", path = "crates/i8051" }
+i8051-debug-tui  = { version = "0.10.0", path = "crates/i8051-debug-tui" }

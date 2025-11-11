@@ -9,7 +9,7 @@ void timer0_isr(void) __interrupt (1)
     /* Toggle port 1 and stop timer 0 */
     TR0 = 0;
     P1 = ~P1;
-    interrupt_flag = TF0;
+    interrupt_flag = 1;
     TF0 = 0;
 }
 
@@ -28,7 +28,7 @@ void main(void)
     while (!interrupt_flag) {
     }
 
-    P1 = 1;
+    P1 = 2;
     interrupt_flag = 0;
 
     TMOD = 1; // 0b0000_0001: timer 0: mode 1 timer, 16-bit timer, auto-reload

@@ -7,7 +7,7 @@ use i8051::memory::{RAM, ROM};
 use i8051::peripheral::Timer;
 use i8051::{Cpu, CpuView, PortMapper};
 use i8051::{Flag, sfr::*};
-use i8051_debug_tui::{Debugger, DebuggerConfig};
+use i8051_debug_tui::{Debugger, DebuggerConfig, TracingCollector};
 
 use clap::Parser;
 use i8051_debug_tui::crossterm::event::{self, Event, KeyCode, KeyEvent};
@@ -162,7 +162,8 @@ fn run_debug_mode_inner(
     debug_log!(log_file, "=== Debug session started ===");
 
     let config = DebuggerConfig::default();
-    let mut debugger = Debugger::new(config).expect("Failed to create debugger");
+    let mut debugger =
+        Debugger::new(config, TracingCollector::new(1000)).expect("Failed to create debugger");
 
     debugger.enter().expect("Failed to enter debug mode");
     tracing_subscriber::registry()
