@@ -395,7 +395,7 @@ impl Cpu {
                 if tcon & TCON_TF0 != 0 {
                     trace!("Timer 0 interrupt triggered (TF0)");
                     if self.interrupt(Interrupt::Timer0) {
-                        self.sfr_set(SFR_TCON, (tcon & !TCON_TF0) as u8, ctx);
+                        self.sfr_set(SFR_TCON, tcon & !TCON_TF0, ctx);
                     }
                 }
             }
@@ -404,7 +404,7 @@ impl Cpu {
                 if tcon & TCON_TF1 != 0 {
                     trace!("Timer 1 interrupt triggered (TF1)");
                     if self.interrupt(Interrupt::Timer1) {
-                        self.sfr_set(SFR_TCON, (tcon & !TCON_TF1) as u8, ctx);
+                        self.sfr_set(SFR_TCON, tcon & !TCON_TF1, ctx);
                     }
                 }
             }
@@ -473,7 +473,7 @@ impl Cpu {
         let pc = self.pc_ext(ctx);
         Instruction {
             pc,
-            bytes: decode(&self, ctx, pc),
+            bytes: decode(self, ctx, pc),
         }
     }
 
@@ -481,7 +481,7 @@ impl Cpu {
     pub fn decode(&self, ctx: &impl CpuContext, pc: u32) -> Instruction {
         Instruction {
             pc,
-            bytes: decode(&self, ctx, pc),
+            bytes: decode(self, ctx, pc),
         }
     }
 
@@ -546,7 +546,7 @@ impl Cpu {
             .position(|instruction| instruction.pc() > focus)
         {
             instructions.truncate(index);
-            instructions.extend(pc_stream.into_iter());
+            instructions.extend(pc_stream);
             instructions.truncate(lines);
             instructions
         } else {
@@ -569,7 +569,7 @@ impl Cpu {
             Register::PC => self.pc as _,
             Register::R(n) => self.r(n) as _,
             Register::RAM(n) => self.internal_ram[n as usize] as _,
-            Register::Flag(flag) => self.psw(flag.into()) as _,
+            Register::Flag(flag) => self.psw(flag) as _,
         }
     }
 
@@ -580,12 +580,12 @@ impl Cpu {
             Register::B => self.b = value as u8,
             Register::DPL => self.dpl = value as u8,
             Register::DPH => self.dph = value as u8,
-            Register::DPTR => self.dptr_set(value as u16),
+            Register::DPTR => self.dptr_set(value),
             Register::PSW => self.psw = value as u8,
             Register::SP => self.sp = value as u8,
             Register::IP => self.ip = value as u8,
             Register::IE => self.ie = value as u8,
-            Register::PC => self.pc = value as u16,
+            Register::PC => self.pc = value,
             Register::R(n) => *self.r_mut(n) = value as u8,
             Register::RAM(n) => self.internal_ram[n as usize] = value as u8,
             Register::Flag(flag) => self.psw_set(flag, value != 0),
@@ -653,7 +653,7 @@ impl Cpu {
             SFR_SP => self.sp,
             SFR_IP => self.ip,
             SFR_IE => self.ie,
-            _ => ctx.ports().read(&(&*self, &*ctx), addr),
+            _ => ctx.ports().read(&(self, ctx), addr),
         }
     }
 
@@ -723,11 +723,11 @@ impl Cpu {
     }
 
     pub fn pc_ext(&self, ctx: &impl CpuContext) -> u32 {
-        (self.pc as u32) | (ctx.ports().pc_extension(&(&*self, &*ctx)) as u32) << 16
+        (self.pc as u32) | (ctx.ports().pc_extension(&(self, ctx)) as u32) << 16
     }
 
     pub fn pc_ext_addr(&self, ctx: &impl CpuContext, addr: u16) -> u32 {
-        (addr as u32) | (ctx.ports().pc_extension(&(&*self, &*ctx)) as u32) << 16
+        (addr as u32) | (ctx.ports().pc_extension(&(self, ctx)) as u32) << 16
     }
 
     pub fn internal_ram(&self, addr: u8) -> u8 {

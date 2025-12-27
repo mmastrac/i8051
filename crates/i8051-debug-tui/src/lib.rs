@@ -317,10 +317,10 @@ impl Debugger {
                     ..
                 }) => {
                     // Apply the edit
-                    if let DebuggerFocus::Reg(register) = self.state.focus {
-                        if let Ok(value) = u32::from_str_radix(&self.state.edit_buffer, 16) {
-                            self.apply_register_edit(cpu, ctx, register, value);
-                        }
+                    if let DebuggerFocus::Reg(register) = self.state.focus
+                        && let Ok(value) = u32::from_str_radix(&self.state.edit_buffer, 16)
+                    {
+                        self.apply_register_edit(cpu, ctx, register, value);
                     }
                     self.state.is_editing = false;
                     self.state.edit_buffer.clear();
@@ -527,8 +527,8 @@ impl Debugger {
                 state,
                 is_editing,
                 edit_buffer,
-                &code_window,
-                &trace_events,
+                code_window,
+                trace_events,
             );
         })?;
         Ok(())

@@ -2,7 +2,7 @@ use std::sync::mpsc;
 
 use tracing::{trace, warn};
 
-use crate::{Cpu, CpuContext, Interrupt, sfr::*};
+use crate::{Cpu, CpuContext, sfr::*};
 use crate::{CpuView, PortMapper};
 
 /// A serial port peripheral using `SCON` and `SBUF` that emulates UART
@@ -128,12 +128,12 @@ impl Serial {
             }
         }
 
-        if self.recv_tick_count == 0 {
-            if let Ok(value) = self.input_queue.try_recv() {
-                trace!("Serial: RX started {:02X}", value);
-                self.sbuf_pending_read = value;
-                self.recv_tick_count = self.baud_rate_ticks * bits_per_frame(self.scon);
-            }
+        if self.recv_tick_count == 0
+            && let Ok(value) = self.input_queue.try_recv()
+        {
+            trace!("Serial: RX started {:02X}", value);
+            self.sbuf_pending_read = value;
+            self.recv_tick_count = self.baud_rate_ticks * bits_per_frame(self.scon);
         }
     }
 }
@@ -396,24 +396,12 @@ impl PortMapper for Timer {
     }
     fn read<C: CpuView>(&self, _cpu: &C, addr: u8) -> u8 {
         match addr {
-            SFR_TCON => {
-                return self.tcon;
-            }
-            SFR_TMOD => {
-                return self.tmod;
-            }
-            SFR_TH0 => {
-                return self.th0;
-            }
-            SFR_TL0 => {
-                return self.tl0;
-            }
-            SFR_TH1 => {
-                return self.th1;
-            }
-            SFR_TL1 => {
-                return self.tl1;
-            }
+            SFR_TCON => self.tcon,
+            SFR_TMOD => self.tmod,
+            SFR_TH0 => self.th0,
+            SFR_TL0 => self.tl0,
+            SFR_TH1 => self.th1,
+            SFR_TL1 => self.tl1,
             _ => {
                 unreachable!()
             }

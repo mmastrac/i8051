@@ -148,9 +148,7 @@ impl MemoryMapper for () {
     fn read<C: CpuView>(&self, _cpu: &C, _addr: u32) -> u8 {
         0
     }
-    fn prepare_write<C: CpuView>(&self, _cpu: &C, _addr: u32, _value: u8) -> Self::WriteValue {
-        ()
-    }
+    fn prepare_write<C: CpuView>(&self, _cpu: &C, _addr: u32, _value: u8) -> Self::WriteValue {}
     fn write(&mut self, _value: Self::WriteValue) {}
 }
 

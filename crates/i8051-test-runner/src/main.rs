@@ -240,11 +240,11 @@ fn run_debug_mode_inner(
 
                         // Render after handling event (unless we're still running - render happens after batch)
                         let now_running = debugger.debugger_state() == DebuggerState::Running;
-                        if !now_running || !was_running {
-                            if let Err(e) = debugger.render(cpu, context) {
-                                debug_log!(log_file, "ERROR: Render failed: {}", e);
-                                should_quit = true;
-                            }
+                        if (!now_running || !was_running)
+                            && let Err(e) = debugger.render(cpu, context)
+                        {
+                            debug_log!(log_file, "ERROR: Render failed: {}", e);
+                            should_quit = true;
                         }
                     }
                     Err(e) => {
@@ -313,11 +313,11 @@ fn run_debug_mode_inner(
             }
 
             // Render after batch execution
-            if debugger.debugger_state() == DebuggerState::Running {
-                if let Err(e) = debugger.render(cpu, context) {
-                    debug_log!(log_file, "ERROR: Render failed during run: {}", e);
-                    should_quit = true;
-                }
+            if debugger.debugger_state() == DebuggerState::Running
+                && let Err(e) = debugger.render(cpu, context)
+            {
+                debug_log!(log_file, "ERROR: Render failed during run: {}", e);
+                should_quit = true;
             }
         }
     }
