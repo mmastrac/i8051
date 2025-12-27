@@ -898,7 +898,9 @@ macro_rules! op_def_read {
     ($ctx:ident, PDATA, $index:expr) => {{
         let port = $index.to_u8().0;
         match port {
-            SFR_P0 | SFR_P1 | SFR_P2 | SFR_P3 => $ctx.1.ports().read_latch(&$ctx, port),
+            SFR_P0 | SFR_P1 | SFR_P2 | SFR_P3 => {
+                $ctx.1.ports().read_latch(&$ctx, port) & $ctx.0.read(port, $ctx.1)
+            }
             _ => $ctx.0.read(port, $ctx.1),
         }
     }};
@@ -1271,21 +1273,21 @@ op! {
     OP RR "A" 0b00000011 => { A = rr(A); PC+=1 };
 
     OP ANL "A,#{imm8:02X}"    0b01010100 imm8 => {A=A&imm8; PC+=2};
-    OP ANL "A,{direct}"       0b01010101 direct => {A=A&DATA[direct]; PC+=2};
+    OP ANL "A,{direct}"       0b01010101 direct => {A=A&PDATA[direct]; PC+=2};
     OP ANL "A,@R{x}"          0b01010110 -x 0b1 => {A=A&IDATA[R[x]]; PC+=1};
     OP ANL "A,R{x}"           0b01011000 -x 0b111 => {A=A&R[x]; PC+=1};
     OP ANL "{direct},A"       0b01010010 direct => {DATA[direct]&=A; PC+=2};
     OP ANL "{direct},#{imm8}" 0b01010011 direct imm8 => {DATA[direct]&=imm8; PC+=3};
 
     OP ORL "A,#{imm8:02X}"    0b01000100 imm8 => {A=A|imm8; PC+=2};
-    OP ORL "A,{direct}"       0b01000101 direct => {A=A|DATA[direct]; PC+=2};
+    OP ORL "A,{direct}"       0b01000101 direct => {A=A|PDATA[direct]; PC+=2};
     OP ORL "A,@R{x}"          0b01000110 -x 0b1 => {A=A|IDATA[R[x]]; PC+=1};
     OP ORL "A,R{x}"           0b01001000 -x 0b111 => {A=A|R[x]; PC+=1};
     OP ORL "{direct},A"       0b01000010 direct => {DATA[direct]|=A; PC+=2};
     OP ORL "{direct},#{imm8}" 0b01000011 direct imm8 => {DATA[direct]|=imm8; PC+=3};
 
     OP XRL "A,#{imm8:02X}"    0b01100100 imm8 => {A=A^imm8; PC+=2};
-    OP XRL "A,{direct}"       0b01100101 direct => {A=A^DATA[direct]; PC+=2};
+    OP XRL "A,{direct}"       0b01100101 direct => {A=A^PDATA[direct]; PC+=2};
     OP XRL "A,@R{x}"          0b01100110 -x 0b1 => {let tmp=IDATA[R[x]]; A=A^tmp; PC+=1};
     OP XRL "A,R{x}"           0b01101000 -x 0b111 => {A=A^R[x]; PC+=1};
     OP XRL "{direct},A"       0b01100010 direct => {DATA[direct]^=A; PC+=2};
@@ -1303,7 +1305,7 @@ op! {
     OP MOV "{direct},A"            0b11110101 direct => {DATA[direct]=A; PC+=2};
     OP MOV "{direct},#{imm8:02X}"  0b01110101 direct imm8 => { DATA[direct]=imm8; PC+=3 };
     OP MOV "@R{x},#{imm8:02X}"     0b01110110 -x 0b1 imm8 => { IDATA[R[x]]=imm8; PC+=2 };
-    OP MOV "{dst},{src}"           0b10000101 src dst => { DATA[dst]=DATA[src]; PC+=3 };
+    OP MOV "{dst},{src}"           0b10000101 src dst => { DATA[dst]=PDATA[src]; PC+=3 };
     OP MOV "{direct},@R{x}"        0b10000110 -x 0b1 direct => { DATA[direct]=IDATA[R[x]]; PC+=2 };
     OP MOV "{direct},R{x}"         0b10001000 -x 0b111 direct => { DATA[direct]=R[x]; PC+=2 };
 

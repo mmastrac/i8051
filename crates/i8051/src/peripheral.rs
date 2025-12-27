@@ -337,6 +337,14 @@ impl Timer {
                         self.tcon |= TCON_TF0;
                     }
                 }
+                2 => {
+                    // 8-bit auto-reload
+                    self.tl0 = self.tl0.wrapping_add(1);
+                    if self.tl0 == 0 {
+                        self.tl0 = self.th0;
+                        self.tcon |= TCON_TF0;
+                    }
+                }
                 mode => {
                     if !self.warned_timer {
                         warn!("Timer 0: Timer mode {mode} not supported");
@@ -354,6 +362,14 @@ impl Timer {
                         self.th1 = self.th1.wrapping_add(1);
                     }
                     if self.th1 == 0 && self.tl1 == 0 {
+                        self.tcon |= TCON_TF1;
+                    }
+                }
+                2 => {
+                    // 8-bit auto-reload
+                    self.tl1 = self.tl1.wrapping_add(1);
+                    if self.tl1 == 0 {
+                        self.tl1 = self.th1;
                         self.tcon |= TCON_TF1;
                     }
                 }
