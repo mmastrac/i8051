@@ -260,6 +260,7 @@ pub struct Instruction {
     bytes: Vec<u8>,
 }
 
+#[allow(clippy::len_without_is_empty)]
 impl Instruction {
     pub fn decode(&self) -> String {
         decode_string(&self.bytes, self.pc as u16)

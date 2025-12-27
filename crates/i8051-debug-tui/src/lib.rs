@@ -535,6 +535,7 @@ impl Debugger {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_frame(
     f: &mut Frame,
     cpu: &Cpu,

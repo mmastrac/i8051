@@ -42,6 +42,7 @@ pub trait CpuContext {
 }
 
 /// A trait to provide memory read/write operations.
+#[allow(clippy::len_without_is_empty)]
 pub trait MemoryMapper {
     type WriteValue;
     fn len(&self) -> u32;
@@ -51,6 +52,7 @@ pub trait MemoryMapper {
 }
 
 /// A trait to provide read-only memory read operations.
+#[allow(clippy::len_without_is_empty)]
 pub trait ReadOnlyMemoryMapper {
     fn len(&self) -> u32;
     fn read<C: CpuView>(&self, cpu: &C, addr: u32) -> u8;
@@ -126,7 +128,7 @@ impl<P: PortMapper> PortMapper for &P {
     fn prepare_write<C: CpuView>(&self, cpu: &C, addr: u8, value: u8) -> Self::WriteValue {
         (**self).prepare_write(cpu, addr, value)
     }
-    fn write(&mut self, value: Self::WriteValue) {
+    fn write(&mut self, _value: Self::WriteValue) {
         unreachable!()
     }
     fn extend_short_read<C: CpuView>(&self, cpu: &C, addr: u8) -> u16 {

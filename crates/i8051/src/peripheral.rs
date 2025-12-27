@@ -88,7 +88,7 @@ impl Serial {
         )
     }
 
-    pub fn tick(&mut self, cpu: &mut Cpu) {
+    pub fn tick(&mut self, _cpu: &mut Cpu) {
         // Handle transmission
         if self.send_tick_count > 0 {
             self.send_tick_count -= 1;
@@ -323,7 +323,7 @@ impl Timer {
         res
     }
 
-    pub fn tick(&mut self, cpu: &mut Cpu, tick: TimerTick) {
+    pub fn tick(&mut self, _cpu: &mut Cpu, tick: TimerTick) {
         self.prev_p3 = tick.p3;
 
         if tick.tick_t0 {

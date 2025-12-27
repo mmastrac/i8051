@@ -17,10 +17,8 @@ impl MemoryMapper for RAM {
     fn prepare_write<C: CpuView>(&self, _cpu: &C, addr: u32, value: u8) -> Self::WriteValue {
         (addr as u16, value)
     }
-    fn write(&mut self, value: Self::WriteValue) {
-        match value {
-            (addr, value) => self.ram[addr as usize] = value,
-        }
+    fn write(&mut self, (addr, value): Self::WriteValue) {
+        self.ram[addr as usize] = value;
     }
 }
 
