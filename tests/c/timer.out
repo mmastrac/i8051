@@ -25,9 +25,11 @@ PORT read B0 = 00
 PORT read B0 = FF
 PORT read B0 = 00
 PORT read latch 90
+PORT read 90 = 00
 PORT write 90 = FF
 PORT write 90 = 02
 PORT read latch 90
+PORT read 90 = 02
 PORT write 90 = FD
 CPU halted at 0x00F7 after 618 instructions
   A=01  B=00  DPTR=0000  C=false OV=false AC=false F0=false

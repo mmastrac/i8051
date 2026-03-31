@@ -1,0 +1,11 @@
+PORT write A0 = 80
+PORT read latch A0
+PORT read latch A0
+PORT write A0 = 80
+PORT read latch A0
+PORT read latch A0
+PORT read B4 = 00
+CPU halted at 0x0003 after 426 instructions
+  A=42  B=28  DPTR=8000  C=false OV=false AC=false F0=false
+  R0=57 R1=05 R2=05 R3=05 R4=88 R5=02 R6=05 R7=00 
+MEM: 42 00 22 33

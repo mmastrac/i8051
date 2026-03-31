@@ -27,6 +27,7 @@ build-c NAME:
 build-asm-tests: make-build-dirs
     @just build-asm smoketest
     @just build-asm arithmetic
+    @just build-asm all_ops
 
     @just build-c smoketest
     @just build-c math
