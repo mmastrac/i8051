@@ -120,8 +120,7 @@ fn transform_expr(context: &syn::Ident, expr: &Expr) -> proc_macro2::TokenStream
                                 quote! { op_def_write!(#context, #ident, #transformed_right); }
                             }
                             _ => {
-                                let left_expr = left;
-                                quote! { #left_expr = #transformed_right; }
+                                quote! { #left = #transformed_right; }
                             }
                         }
                     } else {

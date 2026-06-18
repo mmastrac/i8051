@@ -5,7 +5,7 @@ use tracing::trace;
 use type_mapper::map_types;
 
 use crate::peripheral::{P3_INT0, P3_INT1, SCON_RI, SCON_TI, TCON_TF0, TCON_TF1};
-use crate::regs::{Reg8, Reg16, U16Equivalent};
+use crate::regs::{Reg8, Reg16, Reg32, U16Equivalent};
 use crate::sfr::*;
 use crate::{CpuContext, CpuView, MemoryMapper, PortMapper, ReadOnlyMemoryMapper};
 
@@ -257,25 +257,44 @@ pub enum ControlFlow {
 
 pub struct Instruction {
     pc: u32,
-    bytes: Vec<u8>,
+    len: u8,
+    bytes: [u8; Self::MAX_LENGTH],
 }
 
 #[allow(clippy::len_without_is_empty)]
 impl Instruction {
-    pub fn decode(&self) -> String {
-        decode_string(&self.bytes, self.pc as u16)
+    pub const MAX_LENGTH: usize = 3;
+
+    pub fn decode_from_bytes(pc: u32, bytes: &[u8]) -> Self {
+        let len = decode_length(bytes);
+        let mut ins_bytes = [0; Self::MAX_LENGTH];
+        for i in 0..len {
+            ins_bytes[i as usize] = bytes.get(i as usize).copied().unwrap_or(0);
+        }
+        Self {
+            pc,
+            len,
+            bytes: ins_bytes,
+        }
     }
 
+    pub fn as_string(&self) -> String {
+        decode_string(&self.bytes, self.pc)
+    }
+
+    #[inline(always)]
     pub fn pc(&self) -> u32 {
         self.pc
     }
 
+    #[inline(always)]
     pub fn bytes(&self) -> &[u8] {
-        &self.bytes
+        &self.bytes[..self.len as usize]
     }
 
+    #[inline(always)]
     pub fn len(&self) -> usize {
-        self.bytes.len()
+        self.len as usize
     }
 
     pub fn mnemonic(&self) -> Opcode {
@@ -283,28 +302,28 @@ impl Instruction {
     }
 
     pub fn addr(&self) -> Option<u16> {
-        addr(&self.bytes)
+        addr(&self.bytes, self.pc)
     }
 
     pub fn control_flow(&self) -> ControlFlow {
         let pc = self.pc as u16;
-        let next = pc.wrapping_add(self.bytes.len() as u16);
+        let len = self.len as u16;
+        let next = pc.wrapping_add(len);
         match self.mnemonic() {
             Opcode::LJMP => ControlFlow::Continue(self.addr().unwrap()),
             Opcode::LCALL => ControlFlow::Call(next, self.addr().unwrap()),
             Opcode::AJMP => ControlFlow::Continue((pc & 0xF800) | self.addr().unwrap()),
             Opcode::ACALL => ControlFlow::Call(next, (pc & 0xF800) | self.addr().unwrap()),
             Opcode::JMP | Opcode::RET | Opcode::RETI => ControlFlow::Diverge,
-            Opcode::SJMP => ControlFlow::Continue(
-                pc.wrapping_add_signed(self.bytes[1] as i8 as i16) + self.bytes.len() as u16,
-            ),
+            Opcode::SJMP => {
+                ControlFlow::Continue(pc.wrapping_add_signed(self.bytes[1] as i8 as i16) + len)
+            }
             _ => {
                 if has_rel(self.bytes[0]) {
                     // `rel` instructions always have a relative offset in the last byte.
                     ControlFlow::Choice(
                         next,
-                        pc.wrapping_add_signed(self.bytes[self.bytes.len() - 1] as i8 as i16)
-                            + self.bytes.len() as u16,
+                        pc.wrapping_add_signed(self.bytes[(len - 1) as usize] as i8 as i16) + len,
                     )
                 } else {
                     ControlFlow::Continue(next)
@@ -321,13 +340,13 @@ impl fmt::Display for Instruction {
             for byte in &self.bytes {
                 write!(f, "{:02X} ", byte)?;
             }
-            for _ in 0..(3 - self.bytes.len()) {
+            for _ in 0..(3 - self.len as usize) {
                 write!(f, "   ")?;
             }
-            write!(f, "{}", self.decode())?;
+            write!(f, "{}", self.as_string())?;
             Ok(())
         } else {
-            write!(f, "{}", self.decode())
+            write!(f, "{}", self.as_string())
         }
     }
 }
@@ -472,18 +491,14 @@ impl Cpu {
     /// Decode the instruction at the current PC.
     pub fn decode_pc(&self, ctx: &impl CpuContext) -> Instruction {
         let pc = self.pc_ext(ctx);
-        Instruction {
-            pc,
-            bytes: decode(self, ctx, pc),
-        }
+        let (len, bytes) = decode(self, ctx, pc);
+        Instruction { pc, len, bytes }
     }
 
     /// Decode the instruction at the given PC.
     pub fn decode(&self, ctx: &impl CpuContext, pc: u32) -> Instruction {
-        Instruction {
-            pc,
-            bytes: decode(self, ctx, pc),
-        }
+        let (len, bytes) = decode(self, ctx, pc);
+        Instruction { pc, len, bytes }
     }
 
     /// Decode an approximate range of instructions around the PC. The suggested
@@ -867,7 +882,7 @@ macro_rules! op_def_read {
         Reg8($ctx.b())
     };
     ($ctx:ident, PC) => {
-        Reg16($ctx.pc())
+        Reg32($ctx.pc_ext())
     };
     ($ctx:ident, DPTR) => {{ Reg16($ctx.dptr()) }};
     ($ctx:ident, C) => {
@@ -1018,6 +1033,29 @@ macro_rules! opcodes {
             $opcode,
         )*
         }
+
+        impl Opcode {
+            pub fn as_str(&self) -> &'static str {
+                match self {
+                    Opcode::Unknown => "???",
+                    $(
+                        Opcode::$opcode => stringify!($opcode),
+                    )*
+                }
+            }
+        }
+    };
+}
+
+macro_rules! no_cpu {
+    ($__no_cpu:ident, $pc:expr) => {
+        struct NoCpu(u32);
+        impl NoCpu {
+            fn pc_ext(&self) -> u32 {
+                self.0
+            }
+        }
+        let $__no_cpu = NoCpu($pc);
     };
 }
 
@@ -1067,9 +1105,10 @@ macro_rules! op {
         }
 
         /// Decode the absolute address of the instruction at the given PC, if one exists.
-        pub fn addr(code: &[u8]) -> Option<u16> {
+        pub fn addr(code: &[u8], pc: u32) -> Option<u16> {
             #![allow(unused)]
             let op = Reg8(code[0]);
+            no_cpu!(__no_cpu, pc);
             $(
                 if (op $(& !$mask_pattern)? == $start) {
                     $(let $mask = op & $mask_pattern;)?
@@ -1102,13 +1141,47 @@ macro_rules! op {
             Opcode::Unknown
         }
 
-        pub fn decode(cpu: &Cpu, ctx: &impl CpuContext, pc: u32) -> Vec<u8> {
+        pub fn decode_length(bytes: &[u8]) -> u8 {
+            #![allow(unused)]
+            #![allow(non_snake_case)]
+
+            let mut len: u8 = 1;
+            let op = Reg8(bytes.get(0).copied().unwrap_or(0));
+            no_cpu!(__no_cpu, 0);
+
+            $(
+                if (op $(& !$mask_pattern)? == $start) {
+                    $(let $mask = op & $mask_pattern;)?
+                    $(
+                        let b = bytes.get(len as usize).copied().unwrap_or(0);
+                        let $arg: map_types!(match $arg {
+                            direct => Direct,
+                            bit => Bit,
+                            dst => Direct,
+                            src => Direct,
+                            _ => Reg8,
+                        }) = b.into();
+                        len += 1;
+                    )*
+                    $(op_def!(__no_cpu {let $arg_mask = $arg_mask_expr;});)?
+                    len
+                } else
+            )*
+            {
+                // Unimplemented instruction
+                len
+            }
+        }
+
+        pub fn decode(cpu: &Cpu, ctx: &impl CpuContext, pc: u32) -> (u8, [u8; Instruction::MAX_LENGTH]) {
             #![allow(unused)]
             #![allow(non_snake_case)]
 
             let ctx = (&*cpu, &*ctx);
             let op = Reg8(ctx.read_code(pc));
-            let mut bytes = vec![op.0];
+            let mut len: u8 = 1;
+            let mut bytes: [u8; Instruction::MAX_LENGTH] = [op.0, 0, 0];
+            no_cpu!(__no_cpu, pc);
 
             $(
                 if (op $(& !$mask_pattern)? == $start) {
@@ -1124,23 +1197,25 @@ macro_rules! op {
                             _ => Reg8,
                         }) = b.into();
                         next_read = next_read.wrapping_add(1);
-                        bytes.push(b);
+                        bytes[len as usize] = b;
+                        len += 1;
                     )*
                     $(op_def!(__no_cpu {let $arg_mask = $arg_mask_expr;});)?
-                    bytes
+                    (len, bytes)
                 } else
             )*
             {
                 // Unimplemented instruction
-                bytes
+                (len, bytes)
             }
         }
 
-        pub fn decode_string(code: &[u8], pc: u16) -> String {
+        pub fn decode_string(code: &[u8], pc: u32) -> String {
             #![allow(unused)]
             #![allow(non_snake_case)]
 
             let op = Reg8(code[0]);
+            no_cpu!(__no_cpu, pc);
 
             $(
                 if (op $(& !$mask_pattern)? == $start) {
@@ -1158,7 +1233,22 @@ macro_rules! op {
                         next_read = next_read.wrapping_add(1);
                     )*
                     $(op_def!(__no_cpu {let $arg_mask = $arg_mask_expr;});)?
-                   format!("{} {}", stringify!($opcode), format!($name))
+
+                    // Extend addresses with additional PC bytes for display
+                    macro_rules! map_arg {
+                        ($ident:ident addr) => {
+                            let $ident = $ident as u32 | (pc & !0xffff);
+                        };
+                        ($ident:ident rel) => {
+                            let $ident = $ident.0 as u16 as u32 | (pc & !0xffff);
+                        };
+                        ($ident:ident $ident2:ident) => {};
+                    };
+                    $(
+                        map_arg!($arg $arg);
+                    )*
+
+                    format!("{} {}", stringify!($opcode), format!($name))
                 } else
             )*
             {
@@ -1175,6 +1265,7 @@ macro_rules! op {
             let pc_ext = cpu.pc_ext(ctx);
             let ctx = (cpu, ctx);
             let op = Reg8(ctx.read_code(pc_ext));
+            no_cpu!(__no_cpu, pc_ext);
 
             $(
                 if (op $(& !$mask_pattern)? == $start) {
@@ -1205,25 +1296,25 @@ op! {
     OP NOP "" 0b00000000 => {PC+=1};
     OP LJMP "#{addr:04X}" 0b00000010 imm_hi imm_lo, addr = (imm_hi<<8|imm_lo) => {PC=addr};
     OP LCALL "#{addr:04X}" 0b00010010 imm_hi imm_lo, addr = (imm_hi<<8|imm_lo) => {PUSH16(PC+3); PC=addr};
-    OP JC "{rel:+}" 0b01000000 rel, rel=(SEXT(rel)) => {if (C) {PC=PC+2+rel} else {PC+=2}};
-    OP JNC "{rel:+}" 0b01010000 rel, rel=(SEXT(rel)) => {if (!C) {PC=PC+2+rel} else {PC+=2}};
-    OP JZ "{rel:+}" 0b01100000 rel, rel=(SEXT(rel)) => {if (A==0) {PC=PC+2+rel} else {PC+=2}};
-    OP JNZ "{rel:+}" 0b01110000 rel, rel=(SEXT(rel)) => {if (A!=0) {PC=PC+2+rel} else {PC+=2}};
-    OP SJMP "{rel:+}" 0b10000000 rel, rel=(SEXT(rel)) => {PC=PC+2+rel};
+    OP JC "#{rel:04X}"   0b01000000 rel, rel=(SEXT(rel)+2+PC) => {if (C) {PC=rel} else {PC+=2}};
+    OP JNC "#{rel:04X}"  0b01010000 rel, rel=(SEXT(rel)+2+PC) => {if (!C) {PC=rel} else {PC+=2}};
+    OP JZ "#{rel:04X}"   0b01100000 rel, rel=(SEXT(rel)+2+PC) => {if (A==0) {PC=rel} else {PC+=2}};
+    OP JNZ "#{rel:04X}"  0b01110000 rel, rel=(SEXT(rel)+2+PC) => {if (A!=0) {PC=rel} else {PC+=2}};
+    OP SJMP "#{rel:04X}" 0b10000000 rel, rel=(SEXT(rel)+2+PC) => {PC=rel};
     OP RET "" 0b00100010 => {PC=POP16()};
     OP RETI "" 0b00110010 => {PC=POP16(); CLEAR_INT()};
     OP JMP "@A+DPTR"       0b01110011 => {PC=DPTR+A};
-    OP JB "{bit},{rel:+}"  0b00100000 bit rel, rel=(SEXT(rel)) => {if (PBIT[bit]) {PC=PC+3+rel} else {PC+=3}};
-    OP JNB "{bit},{rel:+}" 0b00110000 bit rel, rel=(SEXT(rel)) => {if (!PBIT[bit]) {PC=PC+3+rel} else {PC+=3}};
-    OP JBC "{bit},{rel:+}" 0b00010000 bit rel, rel=(SEXT(rel)) => {if (PBIT[bit]) {BIT[bit]=false; PC=PC+3+rel} else {PC+=3}};
+    OP JB "{bit},#{rel:04X}"    0b00100000 bit rel, rel=(SEXT(rel)+3+PC) => {if (PBIT[bit]) {PC=rel} else {PC+=3}};
+    OP JNB "{bit},#{rel:04X}"   0b00110000 bit rel, rel=(SEXT(rel)+3+PC) => {if (!PBIT[bit]) {PC=rel} else {PC+=3}};
+    OP JBC "{bit},#{rel:04X}"   0b00010000 bit rel, rel=(SEXT(rel)+3+PC) => {if (PBIT[bit]) {BIT[bit]=false; PC=rel} else {PC+=3}};
 
     // Conditional branches and compare/jump
-    OP DJNZ "{direct},{rel:+}" 0b11010101 direct rel, rel=(SEXT(rel)) => {DATA[direct]-=1; if (DATA[direct]!=0) {PC=PC+3+rel} else {PC+=3}};
-    OP DJNZ "R{x},{rel:+}" 0b11011000 -x 0b111 rel, rel=(SEXT(rel)) => {R[x]-=1; if (R[x]!=0) {PC=PC+2+rel} else {PC+=2}};
-    OP CJNE "A,{direct},{rel:+}" 0b10110101 direct rel, rel=(SEXT(rel)) => {let tmp=DATA[direct]; C=A<tmp; if (A!=tmp) {PC=PC+3+rel} else {PC+=3}};
-    OP CJNE "@R{x},#{imm8:02X},{rel:+}" 0b10110110 -x 0b1 imm8 rel, rel=(SEXT(rel)) => {C=IDATA[R[x]]<imm8; if (IDATA[R[x]]!=imm8) {PC=PC+3+rel} else {PC+=3}};
-    OP CJNE "R{x},#{imm8:02X},{rel:+}" 0b10111000 -x 0b111 imm8 rel, rel=(SEXT(rel)) => {C=R[x]<imm8; if (R[x]!=imm8) {PC=PC+3+rel} else {PC+=3}};
-    OP CJNE "A,#{imm8:02X},{rel:+}" 0b10110100 imm8 rel, rel=(SEXT(rel)) => {C=A<imm8; if (A!=imm8) { PC=PC+3+rel } else { PC+=3 }};
+    OP DJNZ "{direct},#{rel:04X}" 0b11010101 direct rel,                rel=(SEXT(rel)+3+PC) => {DATA[direct]-=1; if (DATA[direct]!=0) {PC=rel} else {PC+=3}};
+    OP DJNZ "R{x},#{rel:04X}" 0b11011000 -x 0b111 rel,                  rel=(SEXT(rel)+2+PC) => {R[x]-=1; if (R[x]!=0) {PC=rel} else {PC+=2}};
+    OP CJNE "A,{direct},#{rel:04X}" 0b10110101 direct rel,              rel=(SEXT(rel)+3+PC) => {let tmp=DATA[direct]; C=A<tmp; if (A!=tmp) {PC=rel} else {PC+=3}};
+    OP CJNE "@R{x},#{imm8:02X},#{rel:04X}" 0b10110110 -x 0b1 imm8 rel,  rel=(SEXT(rel)+3+PC) => {C=IDATA[R[x]]<imm8; if (IDATA[R[x]]!=imm8) {PC=rel} else {PC+=3}};
+    OP CJNE "R{x},#{imm8:02X},#{rel:04X}" 0b10111000 -x 0b111 imm8 rel, rel=(SEXT(rel)+3+PC) => {C=R[x]<imm8; if (R[x]!=imm8) {PC=rel} else {PC+=3}};
+    OP CJNE "A,#{imm8:02X},#{rel:04X}" 0b10110100 imm8 rel,             rel=(SEXT(rel)+3+PC) => {C=A<imm8; if (A!=imm8) { PC=rel } else { PC+=3 }};
 
     // DPTR / MOVX / MOVC
     OP MOV "DPTR,#{imm16:04X}" 0b10010000 imm_hi imm_lo, imm16 = (imm_hi<<8|imm_lo) => {DPTR=imm16; PC+=3};
@@ -1339,7 +1430,6 @@ op! {
     OP XCH "A,R{x}" 0b11001000 -x 0b111 => {(A, R[x])=(R[x], A);PC+=1};
     OP XCHD "A,@R{x}" 0b11010110 -x 0b1 => {let tmp=IDATA[R[x]]; let tmp2=A&0x0F; A=(A&0xF0)|(tmp&0x0F); IDATA[R[x]]=tmp&0xF0|tmp2; PC+=1};
 }
-pub(crate) use op;
 
 fn swap_nibbles(a: Reg8) -> Reg8 {
     Reg8(((a.0 & 0x0F) << 4) | ((a.0 & 0xF0) >> 4))

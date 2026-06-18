@@ -709,7 +709,7 @@ fn render_disassembly(
             pc_marker,
             current_pc,
             bytes_str,
-            instruction.decode(),
+            instruction.as_string(),
         );
 
         let style = if is_current {

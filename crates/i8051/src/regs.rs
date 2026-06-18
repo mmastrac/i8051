@@ -51,6 +51,19 @@ impl U16Equivalent for Reg8 {
 
 #[derive(Copy, Clone, TransparentWrapper)]
 #[repr(transparent)]
+pub struct Reg32(pub u32);
+
+impl U16Equivalent for Reg32 {
+    fn to_u16(self) -> u16 {
+        self.0 as u16
+    }
+    fn from_u16(value: u16) -> Self {
+        Self(value as u32)
+    }
+}
+
+#[derive(Copy, Clone, TransparentWrapper)]
+#[repr(transparent)]
 pub struct RegI16(pub i16);
 
 impl U16Equivalent for RegI16 {
@@ -228,7 +241,11 @@ macro_rules! derive_ops {
             }
         }
         impl fmt::UpperHex for $type {
+            #[allow(unused_comparisons)]
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                if self.0 < 0 || self.0 > 9 {
+                    f.write_str("0x")?;
+                }
                 self.0.fmt(f)
             }
         }
@@ -238,3 +255,4 @@ macro_rules! derive_ops {
 derive_ops!(Reg8);
 derive_ops!(Reg16);
 derive_ops!(RegI16);
+derive_ops!(Reg32);
