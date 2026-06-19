@@ -8,7 +8,7 @@ use crate::address::{
 };
 use crate::command::Command;
 use crate::db::{
-    Equivalent, EquivalentAt, EquivalentRange, Error, Function, Line, OperandOverride,
+    Equivalent, EquivalentAt, EquivalentRange, Error, Function, Line, OperandOverride, SpaceUsage,
 };
 use crate::labels::{ImplicitLabels, LabelCollector, Labels};
 
@@ -150,7 +150,7 @@ impl Region {
         offset: AddressValue,
         equivalent: Equivalent,
     ) -> Result<&EquivalentRange, Error> {
-        if matches!(self.equivalent_at(offset), EquivalentAt::Defined { .. }) {
+        if self.has_equivalent(offset) {
             return Err(Error::NotUndefined(offset));
         }
 
@@ -193,11 +193,21 @@ impl Region {
             .collect()
     }
 
+    pub fn has_equivalent(&self, offset: AddressValue) -> bool {
+        self.equivalent_at(offset).is_defined()
+    }
+
     pub fn get_equivalent(&self, offset: AddressValue) -> EquivalentAt<'_> {
         self.equivalent_at(offset)
     }
 
     fn equivalent_at(&self, offset: AddressValue) -> EquivalentAt<'_> {
+        if let Some(range) = self.equivalents.get(&offset) {
+            return EquivalentAt::Defined {
+                start: offset,
+                range,
+            };
+        }
         if let Some((&start, range)) = self.equivalents.range(..=offset).next_back() {
             if offset < range.end {
                 return EquivalentAt::Defined { start, range };
@@ -266,6 +276,28 @@ impl Region {
         (0..size)
             .filter_map(|i| self.read_byte(offset + i))
             .collect()
+    }
+
+    /// Count mapped bytes classified as code, data, or undefined (no equivalent).
+    pub fn space_usage(&self) -> SpaceUsage {
+        let mut usage = SpaceUsage::default();
+        for (&start, range) in &self.equivalents {
+            let span = range.end.saturating_sub(start);
+            match &range.equivalent {
+                Equivalent::Code(_) => usage.code += span,
+                Equivalent::Data(_, _) => usage.data += span,
+            }
+        }
+
+        let mapped: AddressValue = self
+            .byte_ranges
+            .iter()
+            .map(|(&start, range)| range_end(start, range).saturating_sub(start))
+            .sum();
+
+        usage.undefined = mapped.saturating_sub(usage.code).saturating_sub(usage.data);
+
+        usage
     }
 
     pub(crate) fn render(
@@ -458,10 +490,10 @@ impl Region {
 
     fn start(&self) -> AddressValue {
         [
-            self.byte_ranges.keys().copied().min(),
-            self.equivalents.keys().copied().min(),
-            self.labels.keys().copied().min(),
-            self.comments.keys().copied().min(),
+            self.byte_ranges.keys().copied().next(),
+            self.equivalents.keys().copied().next(),
+            self.labels.keys().copied().next(),
+            self.comments.keys().copied().next(),
         ]
         .into_iter()
         .flatten()
@@ -469,19 +501,19 @@ impl Region {
         .unwrap_or(0) as AddressValue
     }
 
+    /// Upper bound of mapped bytes and equivalents. With non-overlapping ranges, the
+    /// last entry in each map has the highest end address.
     fn end(&self) -> AddressValue {
-        let mut end = 0;
-        for (&start, range) in &self.byte_ranges {
-            let range_end = match range {
-                ByteRange::Mapped(_, _, data) => start.saturating_add(data.len() as AddressValue),
-                ByteRange::Constant(size, _) => start.saturating_add(*size),
-            };
-            end = end.max(range_end);
-        }
-        for range in self.equivalents.values() {
-            end = end.max(range.end);
-        }
-        end.max(self.start()) as AddressValue
+        [
+            self.byte_ranges.keys().rev().copied().next(),
+            self.equivalents.keys().rev().copied().next(),
+            self.labels.keys().rev().copied().next(),
+            self.comments.keys().rev().copied().next(),
+        ]
+        .into_iter()
+        .flatten()
+        .max()
+        .unwrap_or(0) as AddressValue
     }
 
     fn read_byte(&self, offset: AddressValue) -> Option<u8> {
@@ -623,7 +655,7 @@ impl Region {
         let mut queue = Vec::new();
         queue.push(start);
         while let Some(addr) = queue.pop() {
-            if self.get_equivalent(addr).is_defined() {
+            if self.has_equivalent(addr) {
                 continue;
             }
             addresses.push(addr);
@@ -722,7 +754,7 @@ fn range_end(start: AddressValue, range: &ByteRange) -> AddressValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{DataType, OperandOverride};
+    use crate::db::{DataType, OperandOverride, SpaceUsage};
 
     #[test]
     fn overlapping_equivalents_are_rejected() {
@@ -815,5 +847,40 @@ mod tests {
             })
             .collect();
         assert_eq!(orgs, vec![0, 0x10]);
+    }
+
+    #[test]
+    fn space_usage_counts_code_data_and_undefined() {
+        let mut region = Region::new();
+        region.set_bytes(
+            "test.bin",
+            0,
+            0,
+            &[0x02, 0x00, 0x10, 0x74, 0x01, 0xFF, 0xFF],
+        );
+        region.set_equivalent(0, Equivalent::Code(vec![])).unwrap();
+        region.set_equivalent(3, Equivalent::Code(vec![])).unwrap();
+        region
+            .set_equivalent(5, Equivalent::Data(DataType::Word, 2))
+            .unwrap();
+
+        assert_eq!(
+            region.space_usage(),
+            SpaceUsage {
+                code: 5,
+                data: 2,
+                undefined: 0,
+            }
+        );
+
+        region.clear_equivalents(5, 2);
+        assert_eq!(
+            region.space_usage(),
+            SpaceUsage {
+                code: 5,
+                data: 0,
+                undefined: 2,
+            }
+        );
     }
 }

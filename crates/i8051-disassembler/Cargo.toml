@@ -2,7 +2,7 @@
 name = "i8051-disassembler"
 description = "An i8051 disassembler, useful for structured disassembly."
 version.workspace = true
-edition.workspace = true
+edition = "2024"
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

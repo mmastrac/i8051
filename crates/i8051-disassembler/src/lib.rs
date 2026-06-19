@@ -6,10 +6,7 @@ pub mod region;
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        address::AddressSpace,
-        db::{Db, Equivalent},
-    };
+    use crate::{address::AddressSpace, db::Db};
 
     static MATH_BIN: &[u8] = &hex_literal::hex!(
         "

@@ -105,6 +105,14 @@ impl Db {
     ) -> Result<Vec<Command>, Error> {
         command.apply(self, env)
     }
+
+    /// Byte counts for mapped content classified by equivalent kind.
+    pub fn space_usage(&self, space: AddressSpace) -> SpaceUsage {
+        self.regions
+            .get(&space)
+            .map(Region::space_usage)
+            .unwrap_or_default()
+    }
 }
 
 impl Default for Db {
@@ -274,6 +282,24 @@ impl<'a> EquivalentAt<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SpaceUsage {
+    /// Bytes covered by a `Equivalent::Code` range.
+    pub code: AddressValue,
+    /// Bytes covered by a `Equivalent::Data` range.
+    pub data: AddressValue,
+    /// Mapped bytes with no equivalent (rendered as raw data).
+    pub undefined: AddressValue,
+}
+
+impl SpaceUsage {
+    pub fn total(&self) -> AddressValue {
+        self.code
+            .saturating_add(self.data)
+            .saturating_add(self.undefined)
+    }
+}
+
 #[derive(Debug)]
 pub enum Error {
     NoEnvironment,
@@ -434,6 +460,19 @@ mod tests {
             new_db.apply(command, env).expect("command should apply");
         }
         assert_eq!(new_db.to_sdas(), db.to_sdas());
+    }
+
+    #[test]
+    fn test_db_space_usage() {
+        let db = make_test_db();
+        assert_eq!(
+            db.space_usage(AddressSpace::Code),
+            SpaceUsage {
+                code: 12,
+                data: 0,
+                undefined: 0,
+            }
+        );
     }
 
     #[test]
