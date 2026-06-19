@@ -1,8 +1,10 @@
 pub mod address;
 pub mod command;
+pub mod data;
 pub mod db;
 pub mod labels;
 pub mod region;
+pub mod sdas;
 
 #[cfg(test)]
 mod tests {

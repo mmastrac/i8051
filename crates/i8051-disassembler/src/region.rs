@@ -18,6 +18,15 @@ pub enum ByteRange {
     Constant(AddressValue, u8),
 }
 
+impl ByteRange {
+    pub fn len(&self) -> AddressValue {
+        match self {
+            ByteRange::Mapped(_, _, data) => data.len() as AddressValue,
+            ByteRange::Constant(size, _) => *size,
+        }
+    }
+}
+
 pub struct Region {
     byte_ranges: BTreeMap<AddressValue, ByteRange>,
     equivalents: BTreeMap<AddressValue, EquivalentRange>,
@@ -83,7 +92,7 @@ impl Region {
         let end = offset.saturating_add(size);
         self.byte_ranges
             .iter()
-            .filter(|(start, range)| range_end(**start, range) > offset && **start < end)
+            .filter(|(start, range)| range.len() > offset && **start < end)
             .map(|(start, range)| (*start as AddressValue, range.clone()))
             .collect()
     }
@@ -292,7 +301,7 @@ impl Region {
         let mapped: AddressValue = self
             .byte_ranges
             .iter()
-            .map(|(&start, range)| range_end(start, range).saturating_sub(start))
+            .map(|(&start, range)| range.len().saturating_sub(start))
             .sum();
 
         usage.undefined = mapped.saturating_sub(usage.code).saturating_sub(usage.data);
@@ -501,19 +510,26 @@ impl Region {
         .unwrap_or(0) as AddressValue
     }
 
-    /// Upper bound of mapped bytes and equivalents. With non-overlapping ranges, the
-    /// last entry in each map has the highest end address.
+    /// Upper bound (exclusive) of mapped bytes and equivalents.
     fn end(&self) -> AddressValue {
         [
-            self.byte_ranges.keys().rev().copied().next(),
-            self.equivalents.keys().rev().copied().next(),
-            self.labels.keys().rev().copied().next(),
-            self.comments.keys().rev().copied().next(),
+            self.byte_ranges
+                .iter()
+                .next_back()
+                .map(|(&start, range)| start + range.len()),
+            self.equivalents
+                .iter()
+                .next_back()
+                .map(|(&start, range)| start + range.end),
+            self.labels.keys().next_back().copied(),
+            self.comments.keys().next_back().copied(),
+            self.functions.keys().next_back().copied(),
         ]
         .into_iter()
         .flatten()
         .max()
-        .unwrap_or(0) as AddressValue
+        .map(|addr| addr + 1)
+        .unwrap_or(0)
     }
 
     fn read_byte(&self, offset: AddressValue) -> Option<u8> {
@@ -742,13 +758,6 @@ fn ranges_overlap(
     b_end: AddressValue,
 ) -> bool {
     a_start < b_end && b_start < a_end
-}
-
-fn range_end(start: AddressValue, range: &ByteRange) -> AddressValue {
-    match range {
-        ByteRange::Mapped(_, _, data) => start.saturating_add(data.len() as AddressValue),
-        ByteRange::Constant(size, _) => start.saturating_add(*size),
-    }
 }
 
 #[cfg(test)]

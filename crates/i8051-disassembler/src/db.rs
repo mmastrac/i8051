@@ -173,56 +173,7 @@ impl Line {
     }
 
     pub fn to_sdas(&self) -> String {
-        match self {
-            Self::Org { addr } => format!(".org 0x{addr:X}\n"),
-            Self::Blank => "\n".to_string(),
-            Self::Comment { text, .. } => format!("; {text}\n"),
-            Self::Label { name, .. } => format!("_{name}:\n"),
-            Self::Instruction { text, .. } => format!("{text}\n"),
-            Self::Data { bytes, .. } => {
-                let db = bytes
-                    .iter()
-                    .map(|b| format!("0x{b:02X}"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("    .db {db}\n")
-            }
-            Self::Raw { addr, bytes } => {
-                let mut out = String::new();
-                for (i, chunk) in bytes.chunks(8).enumerate() {
-                    let chunk_addr = addr.saturating_add((i * 8) as AddressValue);
-                    let db = chunk
-                        .iter()
-                        .map(|b| format!("0x{b:02X}"))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    if i == 0 {
-                        out.push_str(&format!(
-                            "; Unknown bytes at 0x{chunk_addr:04X}\n    .db {db}\n"
-                        ));
-                    } else {
-                        out.push_str(&format!("    .db {db}\n"));
-                    }
-                }
-                out
-            }
-            Self::Function {
-                addr,
-                name,
-                signature,
-                length,
-                noreturn,
-            } => {
-                let sig = signature.as_deref().unwrap_or("()");
-                let mut line = format!("0x{addr:05X}: fn {name}{sig}");
-                if *noreturn {
-                    line.push_str("; noreturn");
-                } else {
-                    line.push_str(&format!("; len = 0x{length:X}"));
-                }
-                format!("{line}\n")
-            }
-        }
+        crate::sdas::line_to_sdas(self)
     }
 }
 
@@ -444,6 +395,7 @@ mod tests {
             "    MOV     DPTR,#0x0010\n",
             "    MOVC    A,@A+DPTR\n",
             "    SJMP    loop\n",
+            "_loc_0010:\n"
         );
         assert_eq!(db.to_sdas(), expected);
     }
