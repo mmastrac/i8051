@@ -547,16 +547,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "i8051-proc-macro"
-version = "0.20.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.111",
-]
-
-[[package]]
-name = "i8051-program"
+name = "i8051-disassembler"
 version = "0.20.0"
 dependencies = [
  "hex-literal",
@@ -564,6 +555,15 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "i8051-proc-macro"
+version = "0.20.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.111",
 ]
 
 [[package]]
