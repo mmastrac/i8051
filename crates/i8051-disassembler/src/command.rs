@@ -25,6 +25,10 @@ pub enum Command {
         offset: AddressValue,
         equivalent: Equivalent,
     },
+    AutoDisassemble {
+        space: AddressSpace,
+        start: AddressValue,
+    },
     ClearEquivalents {
         space: AddressSpace,
         offset: AddressValue,
@@ -75,6 +79,10 @@ impl Command {
             offset,
             label: None,
         }
+    }
+
+    pub fn auto_disassemble(space: AddressSpace, start: AddressValue) -> Self {
+        Self::AutoDisassemble { space, start }
     }
 
     pub fn set_equivalent(
@@ -220,6 +228,18 @@ impl Command {
                     });
                 }
                 Ok(undo)
+            }
+            Command::AutoDisassemble { space, start } => {
+                let region = db.region_mut(space);
+                let commands = region.auto_disassemble(start);
+                Ok(commands
+                    .into_iter()
+                    .map(|addr| Command::ClearEquivalents {
+                        space,
+                        offset: addr,
+                        size: 1,
+                    })
+                    .collect())
             }
             Command::ClearEquivalents {
                 space,

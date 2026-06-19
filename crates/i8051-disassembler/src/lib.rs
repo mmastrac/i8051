@@ -11,7 +11,8 @@ mod tests {
         db::{Db, Equivalent},
     };
 
-    static MATH_BIN: &[u8] = &hex_literal::hex!("
+    static MATH_BIN: &[u8] = &hex_literal::hex!(
+        "
         02 00 4c 00 00 00 00 00  00 00 e2 fb ea f2 80 2c
         00 00 e0 fb ea f0 80 24  e6 b5 02 02 eb f6 22 00
         e2 b5 02 02 eb f2 22 00  e0 b5 02 02 eb f0 22 30
@@ -44,7 +45,8 @@ mod tests {
         30 e7 0d d2 d5 e4 c3 95  82 f5 82 e4 95 83 f5 83
         e5 11 30 e7 0d b2 d5 e4  c3 95 10 f5 10 e4 95 11
         f5 11 12 01 6d 30 d5 0b  e4 c3 95 82 f5 82 e4 95
-        83 f5 83 22 75 82 00 22");                 
+        83 f5 83 22 75 82 00 22"
+    );
 
     #[test]
     fn test_asm_examples() {
@@ -52,19 +54,10 @@ mod tests {
         db.region_mut(AddressSpace::Code)
             .set_bytes("test.bin", 0, 0, MATH_BIN);
 
-        db.region_mut(AddressSpace::Code)
-            .set_equivalent(0, Equivalent::Code(vec![]))
-            .unwrap();
-        let end = db
-            .region_mut(AddressSpace::Code)
-            .set_equivalent(0x4c, Equivalent::Code(vec![]))
-            .unwrap()
-            .end;
-        let _end = db
-            .region_mut(AddressSpace::Code)
-            .set_equivalent(end, Equivalent::Code(vec![]))
-            .unwrap()
-            .end;
+        db.region_mut(AddressSpace::Code).auto_disassemble(0);
+        db.region_mut(AddressSpace::Code).auto_disassemble(0xa);
+        db.region_mut(AddressSpace::Code).auto_disassemble(0x12);
+        db.region_mut(AddressSpace::Code).auto_disassemble(0x18);
         eprintln!("{}", db.to_sdas());
     }
 }

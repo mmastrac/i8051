@@ -655,8 +655,8 @@ fn render_disassembly(
         control_flow: ControlFlow,
     ) -> Option<(&'static str, u32)> {
         match control_flow {
-            ControlFlow::Call(_, pc) => Some((" ↦ ", cpu.pc_ext_addr(ctx, pc))),
-            ControlFlow::Choice(_, pc) => Some((" ↔ ", cpu.pc_ext_addr(ctx, pc))),
+            ControlFlow::Call(_, pc) => Some((" ↦ ", pc)),
+            ControlFlow::Choice(_, pc) => Some((" ↔ ", pc)),
             _ => None,
         }
     }

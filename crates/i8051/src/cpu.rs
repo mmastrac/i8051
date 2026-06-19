@@ -246,11 +246,11 @@ impl<CTX: CpuContext> CpuView for (&mut Cpu, &mut CTX) {
 
 pub enum ControlFlow {
     /// Continue execution from the given PC.
-    Continue(u16),
+    Continue(u32),
     /// Call the given PC, eventually returning to the given PC.
-    Call(u16, u16),
+    Call(u32, u32),
     /// Choose between two branches.
-    Choice(u16, u16),
+    Choice(u32, u32),
     /// Diverges, unknown control flow.
     Diverge,
 }
@@ -301,30 +301,25 @@ impl Instruction {
         opcode(self.bytes[0])
     }
 
-    pub fn addr(&self) -> Option<u16> {
+    /// Get the absolute target address of this instruction, if one exists.
+    pub fn addr(&self) -> Option<u32> {
         addr(&self.bytes, self.pc)
     }
 
     pub fn control_flow(&self) -> ControlFlow {
         let pc = self.pc as u16;
         let len = self.len as u16;
-        let next = pc.wrapping_add(len);
+        let next = pc.wrapping_add(len) as u32 | (self.pc & !0xffff);
         match self.mnemonic() {
-            Opcode::LJMP => ControlFlow::Continue(self.addr().unwrap()),
-            Opcode::LCALL => ControlFlow::Call(next, self.addr().unwrap()),
-            Opcode::AJMP => ControlFlow::Continue((pc & 0xF800) | self.addr().unwrap()),
-            Opcode::ACALL => ControlFlow::Call(next, (pc & 0xF800) | self.addr().unwrap()),
-            Opcode::JMP | Opcode::RET | Opcode::RETI => ControlFlow::Diverge,
-            Opcode::SJMP => {
-                ControlFlow::Continue(pc.wrapping_add_signed(self.bytes[1] as i8 as i16) + len)
+            Opcode::LJMP | Opcode::AJMP | Opcode::SJMP => {
+                ControlFlow::Continue(self.addr().unwrap())
             }
+            Opcode::LCALL | Opcode::ACALL => ControlFlow::Call(next, self.addr().unwrap()),
+            Opcode::JMP | Opcode::RET | Opcode::RETI => ControlFlow::Diverge,
             _ => {
                 if has_rel(self.bytes[0]) {
                     // `rel` instructions always have a relative offset in the last byte.
-                    ControlFlow::Choice(
-                        next,
-                        pc.wrapping_add_signed(self.bytes[(len - 1) as usize] as i8 as i16) + len,
-                    )
+                    ControlFlow::Choice(next, self.addr().unwrap())
                 } else {
                     ControlFlow::Continue(next)
                 }
@@ -1105,7 +1100,7 @@ macro_rules! op {
         }
 
         /// Decode the absolute address of the instruction at the given PC, if one exists.
-        pub fn addr(code: &[u8], pc: u32) -> Option<u16> {
+        pub fn addr(code: &[u8], pc: u32) -> Option<u32> {
             #![allow(unused)]
             let op = Reg8(code[0]);
             no_cpu!(__no_cpu, pc);
@@ -1123,7 +1118,10 @@ macro_rules! op {
                             let $arg_mask = $arg_mask_expr;
                         });
                         if stringify!($arg_mask) == "addr" {
-                            return Some($arg_mask.to_u16());
+                            return Some($arg_mask.to_u16() as u32 | (pc & !0xffff));
+                        }
+                        if stringify!($arg_mask) == "rel" {
+                            return Some($arg_mask.to_u16() as u32 | (pc & !0xffff));
                         }
                         return None;
                     )?
@@ -1289,8 +1287,8 @@ macro_rules! op {
 }
 
 op! {
-    OP AJMP "#{addr:X}" 0b00000001 - mask 0b11100000 imm8, addr = (mask<<3|imm8) => { PC=(PC&0xF800)|addr; };
-    OP ACALL "#{addr:X}" 0b00010001 - mask 0b11100000 imm8, addr = (mask<<3|imm8) => { PUSH16(PC+2); PC=(PC&0xF800)|addr; };
+    OP AJMP "#{addr:X}" 0b00000001 - mask 0b11100000 imm8, addr = ((PC&0xF800)|(mask<<3|imm8)) => { PC=addr; };
+    OP ACALL "#{addr:X}" 0b00010001 - mask 0b11100000 imm8, addr = ((PC&0xF800)|(mask<<3|imm8)) => { PUSH16(PC+2); PC=addr; };
 
     // Control flow
     OP NOP "" 0b00000000 => {PC+=1};

@@ -1,4 +1,4 @@
-use i8051::Instruction;
+use i8051::{ControlFlow, Instruction};
 use std::collections::BTreeMap;
 use std::range::Range;
 
@@ -614,6 +614,41 @@ impl Region {
             apply_operand_overrides(&decoded, &merged)
         };
         sdas_indent_instruction(&text)
+    }
+
+    /// Auto-disassembles code addresses recursively. Will not modify any address that already
+    /// has an equivalent.
+    pub fn auto_disassemble(&mut self, start: u32) -> Vec<AddressValue> {
+        let mut addresses = Vec::new();
+        let mut queue = Vec::new();
+        queue.push(start);
+        while let Some(addr) = queue.pop() {
+            if self.get_equivalent(addr).is_defined() {
+                continue;
+            }
+            addresses.push(addr);
+            let Ok(_) = self.set_equivalent(addr, Equivalent::Code(vec![])) else {
+                return addresses;
+            };
+            if let Some(ins) = self.decode_at(addr) {
+                let flow = ins.control_flow();
+                match flow {
+                    ControlFlow::Continue(addr) => queue.push(addr),
+                    ControlFlow::Call(next, addr) => {
+                        queue.push(next);
+                        queue.push(addr);
+                    }
+                    ControlFlow::Choice(next, addr) => {
+                        queue.push(next);
+                        queue.push(addr);
+                    }
+                    ControlFlow::Diverge => {
+                        continue;
+                    }
+                }
+            }
+        }
+        addresses
     }
 }
 

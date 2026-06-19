@@ -268,6 +268,12 @@ pub enum EquivalentAt<'a> {
     },
 }
 
+impl<'a> EquivalentAt<'a> {
+    pub fn is_defined(&self) -> bool {
+        matches!(self, Self::Defined { .. })
+    }
+}
+
 #[derive(Debug)]
 pub enum Error {
     NoEnvironment,
