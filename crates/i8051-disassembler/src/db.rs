@@ -8,6 +8,7 @@ use crate::command::{Command, Environment};
 use crate::labels::{ImplicitLabels, LabelCollector};
 pub use crate::region::{ByteRange, Region};
 use crate::render::Line;
+use crate::render::sdas::SdasWriter;
 
 pub struct Db {
     regions: BTreeMap<AddressSpace, Region>,
@@ -76,19 +77,20 @@ impl Db {
     }
 
     pub fn to_sdas(&self) -> String {
-        let mut s = String::new();
+        let mut writer = SdasWriter::default();
         let implicit_labels = self.implicit_labels();
 
         for &space in &AREA_ORDER {
             let Some(region) = self.regions.get(&space) else {
                 continue;
             };
-            s.push_str(space.area_header());
+            writer.write(space.area_header());
             for line in region.render(space, &implicit_labels) {
-                s.push_str(&line.to_sdas());
+                writer.write_line(&line);
             }
         }
-        s
+
+        writer.into_string()
     }
 
     pub fn to_commands(&self) -> Vec<Command> {

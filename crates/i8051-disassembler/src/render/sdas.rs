@@ -3,13 +3,65 @@ use crate::db::DataType;
 use crate::render::Line;
 use crate::render::data::{DataChunk, DataHeuristics};
 
-pub fn line_to_sdas(line: &Line) -> String {
-    match line {
+pub struct SdasWriter {
+    code: String,
+    used_registers: [bool; 256],
+}
+
+impl Default for SdasWriter {
+    fn default() -> Self {
+        Self {
+            code: String::new(),
+            used_registers: [false; 256],
+        }
+    }
+}
+
+impl SdasWriter {
+    pub fn write(&mut self, string: &str) {
+        self.code.push_str(string);
+    }
+
+    pub fn write_line(&mut self, line: &Line) {
+        line_to_sdas(self, line);
+    }
+
+    pub fn use_named_register(&mut self, register: u8) {
+        self.used_registers[register as usize] = true;
+    }
+
+    pub fn into_string(self) -> String {
+        let mut prefix = String::new();
+        let mut register_count = 0;
+        for i in 0..32 {
+            if self.used_registers[i] {
+                if register_count == 0 {
+                    prefix.push_str("; Registers:\n");
+                }
+                register_count += 1;
+                prefix.push_str(&format!("R{}_BANK{} = {}\n", i % 8, i / 8, i));
+            }
+        }
+        if register_count > 0 {
+            prefix.push_str("\n");
+        }
+
+        format!("{prefix}{}", self.code)
+    }
+}
+
+fn line_to_sdas(writer: &mut SdasWriter, line: &Line) {
+    let s = match line {
         Line::Org { addr } => format!(".org 0x{addr:X}\n"),
         Line::Blank => "\n".to_string(),
         Line::Comment { text, .. } => format!("; {text}\n"),
         Line::Label { name, .. } => format!("{name}:\n"),
-        Line::Instruction { text, .. } => format!("{text}\n"),
+        Line::Instruction { text, direct, .. } => {
+            if let Some(direct) = direct {
+                writer.use_named_register(*direct);
+            }
+            format!("{text}\n")
+        }
         Line::Data {
             addr,
             bytes,
@@ -23,7 +75,7 @@ pub fn line_to_sdas(line: &Line) -> String {
         Line::Raw { addr, bytes } => {
             let body = emit_unknown_bytes(*addr, bytes);
             if body.is_empty() {
-                return String::new();
+                return;
             }
             format!("; Unknown bytes at 0x{addr:04X}\n{body}")
         }
@@ -43,7 +95,8 @@ pub fn line_to_sdas(line: &Line) -> String {
             }
             format!("{line}\n")
         }
-    }
+    };
+    writer.write(&s);
 }
 
 fn emit_bytes(address: AddressValue, bytes: &[u8]) -> String {
@@ -126,4 +179,12 @@ fn emit_words(bytes: &[u8]) -> String {
         out.push_str("; WARNING: Leftover bytes\n");
     }
     out
+}
+
+pub fn prefix() -> String {
+    let mut s = String::new();
+    for i in 0..32 {
+        s.push_str(&format!("R{}BANK{} = {}\n", i % 8, i / 8, i));
+    }
+    s
 }

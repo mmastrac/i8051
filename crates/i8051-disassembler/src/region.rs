@@ -486,6 +486,7 @@ impl Region {
                         let text = self.format_instruction(addr, &insn, overrides, labels);
                         lines.push(Line::Instruction {
                             addr,
+                            direct: insn.direct(),
                             text,
                             bytes: insn.bytes().to_vec(),
                         });
@@ -1046,7 +1047,7 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        assert!(insn.contains("RAM(32),target"));
+        assert!(insn.contains("RAM_20,target"));
     }
 
     #[test]

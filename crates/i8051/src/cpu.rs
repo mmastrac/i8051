@@ -99,10 +99,10 @@ impl From<u8> for Direct {
 impl fmt::Display for Direct {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Ram(value @ 0..31) => write!(f, "R{}.BANK{}", value % 8, value / 8),
-            Self::Ram(value) => write!(f, "RAM({})", value),
+            Self::Ram(value @ 0..31) => write!(f, "R{}_BANK{}", value % 8, value / 8),
+            Self::Ram(value) => write!(f, "0x{:02X}", value),
             Self::Sfr(SFR_P0) => write!(f, "P0"),
-            Self::Sfr(SFR_A) => write!(f, "A"),
+            Self::Sfr(SFR_A) => write!(f, "ACC"),
             Self::Sfr(SFR_B) => write!(f, "B"),
             Self::Sfr(SFR_PSW) => write!(f, "PSW"),
             Self::Sfr(SFR_SP) => write!(f, "SP"),
@@ -128,7 +128,7 @@ impl fmt::Display for Direct {
             Self::Sfr(SFR_RCAP2H) => write!(f, "RCAP2H"),
             Self::Sfr(SFR_TL2) => write!(f, "TL2"),
             Self::Sfr(SFR_TH2) => write!(f, "TH2"),
-            Self::Sfr(sfr) => write!(f, "SFR({})", sfr),
+            Self::Sfr(sfr) => write!(f, "SFR_{:02X}", sfr),
         }
     }
 }
@@ -151,7 +151,8 @@ impl From<u8> for Bit {
 impl fmt::Display for Bit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Ram(value) => write!(f, "RAM(#{:02X}).{}", (value >> 3) + 0x20, value & 0x07),
+            // These correspond to 0x20 -> 0x2f inclusive
+            Self::Ram(value) => write!(f, "0x{:02X}", value),
             Self::Sfr(value) => {
                 Direct::from(value & 0xF8).fmt(f)?;
                 write!(f, ".{}", value & 0x07)
@@ -304,6 +305,13 @@ impl Instruction {
     /// Get the absolute target address of this instruction, if one exists.
     pub fn addr(&self) -> Option<u32> {
         addr(&self.bytes, self.pc)
+    }
+
+    /// If this instruction references an internal memory address, return it.
+    ///
+    /// This will miss an instruction that uses two direct operands.
+    pub fn direct(&self) -> Option<u8> {
+        direct(&self.bytes, self.pc)
     }
 
     pub fn control_flow(&self) -> ControlFlow {
@@ -1130,6 +1138,39 @@ macro_rules! op {
             None
         }
 
+        /// If this instruction references an internal memory address, return it.
+        ///
+        /// Technically we're missing dst+src for one direct-to-direct move.
+        pub fn direct(code: &[u8], pc: u32) -> Option<u8> {
+            #![allow(unused)]
+            let op = Reg8(code[0]);
+            no_cpu!(__no_cpu, pc);
+            $(
+                if (op $(& !$mask_pattern)? == $start) {
+                    $(let $mask = op & $mask_pattern;)?
+                    let mut next_read = 1;
+                    $(
+                        let b = code[next_read];
+                        let $arg: Reg8 = b.into();
+                        if stringify!($arg) == "direct" {
+                            return Some($arg.0);
+                        }
+                        if stringify!($arg) == "src" {
+                            return Some($arg.0);
+                        }
+                        next_read = next_read.wrapping_add(1);
+                    )*
+                    $(
+                        op_def!(__no_cpu {
+                            let $arg_mask = $arg_mask_expr;
+                        });
+                        return None;
+                    )?
+                }
+            )*
+            None
+        }
+
         pub fn opcode(op: u8) -> Opcode {
             $(
                 if (op $(& !$mask_pattern)? == $start) {
@@ -1411,15 +1452,15 @@ op! {
     OP CLR "C" 0b11000011 => {C=false; PC+=1};
     OP SETB "C" 0b11010011 => {C=true; PC+=1};
     OP CPL "C" 0b10110011 => {C=!C; PC+=1};
-    OP CLR "#{bit}" 0b11000010 bit => {BIT[bit]=false; PC+=2};
-    OP SETB "#{bit}" 0b11010010 bit => {BIT[bit]=true; PC+=2};
-    OP CPL "#{bit}" 0b10110010 bit => {BIT[bit]=!BIT[bit]; PC+=2};
-    OP MOV "C,#{bit}" 0b10100010 bit => {C=PBIT[bit]; PC+=2};
-    OP MOV "#{bit},C" 0b10010010 bit => {PBIT[bit]=C; PC+=2};
-    OP ANL "C,#{bit}" 0b10000010 bit => {C&=PBIT[bit]; PC+=2};
-    OP ANL "C,/#{bit}" 0b10110000 bit => {C&=!PBIT[bit]; PC+=2};
-    OP ORL "C,#{bit}" 0b01110010 bit => {C|=PBIT[bit]; PC+=2};
-    OP ORL "C,/#{bit}" 0b10100000 bit => {C|=!PBIT[bit]; PC+=2};
+    OP CLR "{bit}" 0b11000010 bit => {BIT[bit]=false; PC+=2};
+    OP SETB "{bit}" 0b11010010 bit => {BIT[bit]=true; PC+=2};
+    OP CPL "{bit}" 0b10110010 bit => {BIT[bit]=!BIT[bit]; PC+=2};
+    OP MOV "C,{bit}" 0b10100010 bit => {C=PBIT[bit]; PC+=2};
+    OP MOV "{bit},C" 0b10010010 bit => {PBIT[bit]=C; PC+=2};
+    OP ANL "C,{bit}" 0b10000010 bit => {C&=PBIT[bit]; PC+=2};
+    OP ANL "C,/{bit}" 0b10110000 bit => {C&=!PBIT[bit]; PC+=2};
+    OP ORL "C,{bit}" 0b01110010 bit => {C|=PBIT[bit]; PC+=2};
+    OP ORL "C,/{bit}" 0b10100000 bit => {C|=!PBIT[bit]; PC+=2};
 
     // Exchange
     OP SWAP "A" 0b11000100 => {A=swap_nibbles(A); PC+=1};

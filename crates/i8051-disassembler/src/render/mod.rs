@@ -19,6 +19,7 @@ pub enum Line {
     },
     Instruction {
         addr: AddressValue,
+        direct: Option<u8>, // not ideal, should use a register list instead
         text: String,
         bytes: Vec<u8>,
     },
@@ -52,9 +53,5 @@ impl Line {
             | Self::Raw { addr, .. } => *addr,
             Self::Blank => 0,
         }
-    }
-
-    pub fn to_sdas(&self) -> String {
-        sdas::line_to_sdas(self)
     }
 }

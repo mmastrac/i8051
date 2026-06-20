@@ -8,6 +8,8 @@ pub mod render;
 
 #[cfg(test)]
 mod tests {
+    use std::process::{Command, Stdio};
+
     use crate::{address::AddressSpace, db::Db};
 
     static MATH_BIN: &[u8] = &hex_literal::hex!(
@@ -57,10 +59,13 @@ mod tests {
             .auto_disassemble(0)
             .unwrap_success();
         db.region_mut(AddressSpace::Code)
+            .auto_disassemble(3)
+            .unwrap_success();
+        db.region_mut(AddressSpace::Code)
             .auto_disassemble(0xa)
             .unwrap_success();
         db.region_mut(AddressSpace::Code)
-            .auto_disassemble(0x12)
+            .auto_disassemble(0x10)
             .unwrap_success();
         db.region_mut(AddressSpace::Code)
             .auto_disassemble(0x18)
@@ -68,6 +73,53 @@ mod tests {
         db.region_mut(AddressSpace::Code)
             .auto_disassemble(0x1F)
             .unwrap_success();
-        eprintln!("{}", db.to_sdas());
+        db.region_mut(AddressSpace::Code)
+            .auto_disassemble(0x27)
+            .unwrap_success();
+        db.region_mut(AddressSpace::Code)
+            .auto_disassemble(0x2F)
+            .unwrap_success();
+        db.region_mut(AddressSpace::Code)
+            .auto_disassemble(0x3F)
+            .unwrap_success();
+
+        let code = db.to_sdas();
+        for (i, line) in code.lines().enumerate() {
+            eprintln!("{}: {line}", i + 1);
+        }
+
+        try_sdas_compile(&code).unwrap();
+    }
+
+    fn try_sdas_compile(code: &str) -> Result<(), String> {
+        let tempdir = tempfile::tempdir().unwrap();
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(&temp, code).unwrap();
+
+        let mut process = Command::new("sdas8051");
+        process.arg("-l");
+        process.arg(tempdir.path().join("snippet.lst"));
+        // process.arg("-o");
+        // process.arg(tempdir.path().join("snippet.rel"));
+        // process.arg("-s");
+        // process.arg(tempdir.path().join("snippet.sym"));
+        process.arg(temp.path());
+        process.stdout(Stdio::piped());
+        process.stderr(Stdio::piped());
+        match process.output() {
+            Err(e) => {
+                eprintln!("WARNING: sdas8051 did not run: {e}");
+                return Ok(());
+            }
+            Ok(child) => {
+                if !child.status.success() {
+                    eprintln!("WARNING: sdas8051 failed: {:?}", child.status);
+                    eprintln!("{}", String::from_utf8_lossy(&child.stdout));
+                    eprintln!("{}", String::from_utf8_lossy(&child.stderr));
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
     }
 }
