@@ -9,11 +9,12 @@ use crate::address::{
 };
 use crate::command::Command;
 use crate::db::{
-    Equivalent, EquivalentAt, EquivalentKind, EquivalentRange, Error, Function, Line,
-    OperandOverride, SpaceUsage,
+    Equivalent, EquivalentAt, EquivalentKind, EquivalentRange, Error, Function, OperandOverride,
+    SpaceUsage,
 };
 use crate::labels::{ImplicitLabels, LabelCollector, Labels};
 use crate::pattern::BytePattern;
+use crate::render::Line;
 
 #[derive(Debug, Clone)]
 pub enum ByteRange {

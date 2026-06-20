@@ -1,11 +1,10 @@
 pub mod address;
 pub mod command;
-pub mod data;
 pub mod db;
 pub mod labels;
 pub mod pattern;
 pub mod region;
-pub mod sdas;
+pub mod render;
 
 #[cfg(test)]
 mod tests {

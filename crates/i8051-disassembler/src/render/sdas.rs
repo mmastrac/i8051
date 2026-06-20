@@ -1,6 +1,7 @@
 use crate::address::AddressValue;
-use crate::data::{DataChunk, DataHeuristics};
-use crate::db::{DataType, Line};
+use crate::db::DataType;
+use crate::render::Line;
+use crate::render::data::{DataChunk, DataHeuristics};
 
 pub fn line_to_sdas(line: &Line) -> String {
     match line {
