@@ -66,6 +66,9 @@ mod tests {
         db.region_mut(AddressSpace::Code)
             .auto_disassemble(0x18)
             .unwrap_success();
+        db.region_mut(AddressSpace::Code)
+            .auto_disassemble(0x1F)
+            .unwrap_success();
         eprintln!("{}", db.to_sdas());
     }
 }

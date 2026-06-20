@@ -7,7 +7,7 @@ pub fn line_to_sdas(line: &Line) -> String {
         Line::Org { addr } => format!(".org 0x{addr:X}\n"),
         Line::Blank => "\n".to_string(),
         Line::Comment { text, .. } => format!("; {text}\n"),
-        Line::Label { name, .. } => format!("_{name}:\n"),
+        Line::Label { name, .. } => format!("{name}:\n"),
         Line::Instruction { text, .. } => format!("{text}\n"),
         Line::Data {
             addr,
@@ -34,7 +34,7 @@ pub fn line_to_sdas(line: &Line) -> String {
             ..
         } => {
             let sig = signature.as_deref().unwrap_or("()");
-            let mut line = format!("_{name}: ; fn {name}{sig}");
+            let mut line = format!("{name}: ; fn {name}{sig}");
             if *noreturn {
                 line.push_str("; noreturn");
             } else {
@@ -47,7 +47,11 @@ pub fn line_to_sdas(line: &Line) -> String {
 
 fn emit_bytes(address: AddressValue, bytes: &[u8]) -> String {
     let heuristics = DataHeuristics::default();
-    emit_chunks(&heuristics, address, heuristics.iterate(address, None, bytes))
+    emit_chunks(
+        &heuristics,
+        address,
+        heuristics.iterate(address, None, bytes),
+    )
 }
 
 fn emit_unknown_bytes(base_addr: AddressValue, bytes: &[u8]) -> String {

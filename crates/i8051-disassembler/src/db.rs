@@ -401,16 +401,16 @@ mod tests {
             ".area CODE (CODE,ABS)\n",
             ".org 0x0\n",
             "\n",
-            "_start:\n",
-            "    LJMP    #0x0010\n",
+            "start:\n",
+            "    LJMP    loc_0010\n",
             "; Start of loop\n",
-            "_loop:\n",
+            "loop:\n",
             "    MOV     A,#01\n",
             "    MOVX    @DPTR,A\n",
             "    MOV     DPTR,#0x0010\n",
             "    MOVC    A,@A+DPTR\n",
             "    SJMP    loop\n",
-            "_loc_0010:\n"
+            "loc_0010:\n"
         );
         assert_eq!(db.to_sdas(), expected);
     }

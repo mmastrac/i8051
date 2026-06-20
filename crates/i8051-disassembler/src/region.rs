@@ -482,7 +482,7 @@ impl Region {
                         let insn = self
                             .decode_at(addr)
                             .expect("validated code equivalent must decode");
-                        let text = self.format_instruction(addr, &insn, overrides);
+                        let text = self.format_instruction(addr, &insn, overrides, labels);
                         lines.push(Line::Instruction {
                             addr,
                             text,
@@ -756,6 +756,7 @@ impl Region {
         _addr: AddressValue,
         insn: &Instruction,
         overrides: &[Option<OperandOverride>],
+        implicit_labels: &Labels,
     ) -> String {
         let decoded = insn.as_string();
         let mut merged = overrides.to_vec();
@@ -766,7 +767,10 @@ impl Region {
                 merged.push(None);
             }
             if merged[idx].is_none() {
-                if let Some(label) = self.get_label(target) {
+                let label = self
+                    .get_label(target)
+                    .or_else(|| implicit_labels.get(&target).map(String::as_str));
+                if let Some(label) = label {
                     merged[idx] = Some(OperandOverride::Label(label.to_string()));
                 }
             }
@@ -941,6 +945,7 @@ impl AutoDisassembleResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::address::AddressSpace;
     use crate::db::{DataType, OperandOverride, SpaceUsage};
 
     #[test]
@@ -990,6 +995,30 @@ mod tests {
             "Expected None, got {:?}",
             region.decode_at(0).unwrap().as_string()
         );
+    }
+
+    #[test]
+    fn branch_target_uses_implicit_label() {
+        let mut region = Region::new();
+        region.set_bytes("test.bin", 0, 0, &[0x12, 0x01, 0x6D, 0x02, 0x03, 0x04]);
+        region.set_equivalent(0, Equivalent::Code(vec![])).unwrap();
+        region.set_equivalent(3, Equivalent::Code(vec![])).unwrap();
+
+        let mut collector = LabelCollector::default();
+        region.collect_refs(AddressSpace::Code, &mut collector);
+        let implicit_labels = collector.into_implicit_labels();
+
+        let lines = region.render(AddressSpace::Code, &implicit_labels);
+        let insn = lines
+            .iter()
+            .find_map(|line| match line {
+                Line::Instruction { addr: 0, text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(insn.contains("LCALL"), "{insn}");
+        assert!(insn.contains("loc_016D"), "{insn}");
+        assert!(!insn.contains("#0x016D"), "{insn}");
     }
 
     #[test]
