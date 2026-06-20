@@ -3,6 +3,7 @@ pub mod command;
 pub mod data;
 pub mod db;
 pub mod labels;
+pub mod pattern;
 pub mod region;
 pub mod sdas;
 
@@ -53,10 +54,18 @@ mod tests {
         db.region_mut(AddressSpace::Code)
             .set_bytes("test.bin", 0, 0, MATH_BIN);
 
-        db.region_mut(AddressSpace::Code).auto_disassemble(0);
-        db.region_mut(AddressSpace::Code).auto_disassemble(0xa);
-        db.region_mut(AddressSpace::Code).auto_disassemble(0x12);
-        db.region_mut(AddressSpace::Code).auto_disassemble(0x18);
+        db.region_mut(AddressSpace::Code)
+            .auto_disassemble(0)
+            .unwrap_success();
+        db.region_mut(AddressSpace::Code)
+            .auto_disassemble(0xa)
+            .unwrap_success();
+        db.region_mut(AddressSpace::Code)
+            .auto_disassemble(0x12)
+            .unwrap_success();
+        db.region_mut(AddressSpace::Code)
+            .auto_disassemble(0x18)
+            .unwrap_success();
         eprintln!("{}", db.to_sdas());
     }
 }

@@ -27,14 +27,14 @@ pub fn line_to_sdas(line: &Line) -> String {
             format!("; Unknown bytes at 0x{addr:04X}\n{body}")
         }
         Line::Function {
-            addr,
             name,
             signature,
             length,
             noreturn,
+            ..
         } => {
             let sig = signature.as_deref().unwrap_or("()");
-            let mut line = format!("0x{addr:05X}: fn {name}{sig}");
+            let mut line = format!("_{name}: ; fn {name}{sig}");
             if *noreturn {
                 line.push_str("; noreturn");
             } else {
@@ -47,37 +47,50 @@ pub fn line_to_sdas(line: &Line) -> String {
 
 fn emit_bytes(address: AddressValue, bytes: &[u8]) -> String {
     let heuristics = DataHeuristics::default();
-    emit_chunks(heuristics.iterate(address, None, bytes))
+    emit_chunks(&heuristics, address, heuristics.iterate(address, None, bytes))
 }
 
 fn emit_unknown_bytes(base_addr: AddressValue, bytes: &[u8]) -> String {
     let heuristics = DataHeuristics::default();
-    emit_chunks(heuristics.iterate(base_addr, None, bytes))
+    emit_chunks(
+        &heuristics,
+        base_addr,
+        heuristics.iterate(base_addr, None, bytes),
+    )
 }
 
-fn emit_chunks<'a>(chunks: impl IntoIterator<Item = DataChunk<'a, u8>>) -> String {
+fn emit_db_line(row: &[u8]) -> String {
+    let db = row
+        .iter()
+        .map(|b| format!("0x{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("    .db {db}\n")
+}
+
+fn emit_chunks<'a>(
+    heuristics: &DataHeuristics,
+    mut addr: AddressValue,
+    chunks: impl IntoIterator<Item = DataChunk<'a, u8>>,
+) -> String {
     let mut out = String::new();
     for chunk in chunks {
         match chunk {
-            DataChunk::Literal(row) => out.push_str(&{
-                let db = row
-                    .iter()
-                    .map(|b| format!("0x{b:02X}"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("    .db {db}\n")
-            }),
-            DataChunk::Run(value, len) => match value {
-                0 => {
-                    let len = len;
-                    out.push_str(&format!("    .ds {len}\n"));
+            DataChunk::Literal(row) => {
+                for sub in heuristics.literal_rows(addr, row) {
+                    out.push_str(&emit_db_line(sub));
                 }
-                value => {
-                    out.push_str(&format!(
+                addr += row.len() as AddressValue;
+            }
+            DataChunk::Run(value, len) => {
+                match value {
+                    0 => out.push_str(&format!("    .ds {len}\n")),
+                    value => out.push_str(&format!(
                         "    .rept {len}\n        .db 0x{value:02X}\n    .endm\n"
-                    ));
+                    )),
                 }
-            },
+                addr += len as AddressValue;
+            }
             DataChunk::BlockRun(row, count) => {
                 let db = row
                     .iter()
@@ -85,6 +98,7 @@ fn emit_chunks<'a>(chunks: impl IntoIterator<Item = DataChunk<'a, u8>>) -> Strin
                     .collect::<Vec<_>>()
                     .join(", ");
                 out.push_str(&format!("    .rept {count}\n        .db {db}\n    .endm\n"));
+                addr += (row.len() * count) as AddressValue;
             }
         }
     }

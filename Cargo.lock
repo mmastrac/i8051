@@ -553,6 +553,7 @@ dependencies = [
  "hex-literal",
  "i8051",
  "pretty_assertions",
+ "regex",
  "serde",
  "serde_json",
 ]

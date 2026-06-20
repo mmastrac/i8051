@@ -1,5 +1,6 @@
 use i8051::{ControlFlow, Instruction};
 use std::collections::BTreeMap;
+use std::ops::{Bound, RangeBounds};
 use std::range::Range;
 
 use crate::address::{
@@ -8,9 +9,11 @@ use crate::address::{
 };
 use crate::command::Command;
 use crate::db::{
-    Equivalent, EquivalentAt, EquivalentRange, Error, Function, Line, OperandOverride, SpaceUsage,
+    Equivalent, EquivalentAt, EquivalentKind, EquivalentRange, Error, Function, Line,
+    OperandOverride, SpaceUsage,
 };
 use crate::labels::{ImplicitLabels, LabelCollector, Labels};
+use crate::pattern::BytePattern;
 
 #[derive(Debug, Clone)]
 pub enum ByteRange {
@@ -79,6 +82,71 @@ impl Region {
         self.clear_bytes(offset, size);
         self.byte_ranges
             .insert(offset, ByteRange::Constant(size, value));
+    }
+
+    pub fn find_bytes(&self, pattern: &BytePattern) -> impl Iterator<Item = Range<AddressValue>> {
+        self.find_bytes_in(pattern, ..)
+    }
+
+    /// Find bytes in a specific range (`..` searches the whole region).
+    ///
+    /// Cross-byte-range matches and constant-byte-range matches do not
+    /// currently work.
+    pub fn find_bytes_in(
+        &self,
+        pattern: &BytePattern,
+        range: impl RangeBounds<AddressValue>,
+    ) -> impl Iterator<Item = Range<AddressValue>> {
+        let range_start_inclusive = match range.start_bound() {
+            Bound::Included(addr) => *addr,
+            Bound::Excluded(addr) => addr.saturating_add(1),
+            Bound::Unbounded => 0,
+        };
+        let range_end_inclusive = match range.end_bound() {
+            Bound::Included(addr) => *addr,
+            Bound::Excluded(addr) => addr.saturating_sub(1),
+            Bound::Unbounded => AddressValue::MAX,
+        };
+        self.byte_ranges
+            .iter()
+            .map(move |(addr, range)| match range {
+                ByteRange::Mapped(_, _, data) => {
+                    if ranges_overlap_inclusive(
+                        range_start_inclusive,
+                        range_end_inclusive,
+                        *addr,
+                        *addr + data.len() as AddressValue,
+                    ) {
+                        let data_start = range_start_inclusive.saturating_sub(*addr) as usize;
+                        let data_end = range_end_inclusive
+                            .saturating_sub(*addr)
+                            .min((data.len() - 1) as AddressValue)
+                            as usize;
+                        Some(
+                            pattern
+                                .find_all(&data[data_start..=data_end])
+                                .map(move |range| {
+                                    Range::from(
+                                        range
+                                            .start
+                                            .saturating_add(data_start)
+                                            .saturating_add(*addr as usize)
+                                            ..range
+                                                .end
+                                                .saturating_add(data_start)
+                                                .saturating_add(*addr as usize),
+                                    )
+                                }),
+                        )
+                    } else {
+                        None
+                    }
+                }
+                ByteRange::Constant(..) => None,
+            })
+            .flatten()
+            .flatten()
+            .map(|range| Range::from(range.start as AddressValue..range.end as AddressValue))
     }
 
     pub(crate) fn snapshot_byte_ranges(
@@ -203,7 +271,39 @@ impl Region {
     }
 
     pub fn has_equivalent(&self, offset: AddressValue) -> bool {
-        self.equivalent_at(offset).is_defined()
+        if self.equivalents.contains_key(&offset) {
+            return true;
+        }
+        if let Some((&_, range)) = self.equivalents.range(..=offset).next_back() {
+            return offset < range.end;
+        }
+        return false;
+    }
+
+    pub fn has_equivalent_exact(&self, offset: AddressValue) -> bool {
+        if self.equivalents.contains_key(&offset) {
+            return true;
+        }
+        return false;
+    }
+
+    pub fn get_equivalent_kind(&self, offset: AddressValue) -> Option<EquivalentKind> {
+        if let Some(range) = self.equivalents.get(&offset) {
+            return Some(range.equivalent.kind());
+        }
+        if let Some((&_, range)) = self.equivalents.range(..=offset).next_back() {
+            if offset < range.end {
+                return Some(range.equivalent.kind());
+            }
+        }
+        return None;
+    }
+
+    pub fn get_equivalent_kind_exact(&self, offset: AddressValue) -> Option<EquivalentKind> {
+        if let Some(range) = self.equivalents.get(&offset) {
+            return Some(range.equivalent.kind());
+        }
+        return None;
     }
 
     pub fn get_equivalent(&self, offset: AddressValue) -> EquivalentAt<'_> {
@@ -279,6 +379,22 @@ impl Region {
 
     pub fn clear_function(&mut self, offset: AddressValue) {
         self.functions.remove(&(offset as AddressValue));
+    }
+
+    pub fn byte_at(&self, offset: AddressValue) -> Option<u8> {
+        self.read_byte(offset)
+    }
+
+    pub fn read_u16_le(&self, offset: AddressValue) -> Option<u16> {
+        let low = self.read_byte(offset)?;
+        let high = self.read_byte(offset.saturating_add(1))?;
+        Some((low as u16) | ((high as u16) << 8))
+    }
+
+    pub fn read_u16_be(&self, offset: AddressValue) -> Option<u16> {
+        let high = self.read_byte(offset)?;
+        let low = self.read_byte(offset.saturating_add(1))?;
+        Some((high as u16) | ((low as u16) << 8))
     }
 
     pub fn bytes_at(&self, offset: AddressValue, size: AddressValue) -> Vec<u8> {
@@ -666,18 +782,37 @@ impl Region {
 
     /// Auto-disassembles code addresses recursively. Will not modify any address that already
     /// has an equivalent.
-    pub fn auto_disassemble(&mut self, start: u32) -> Vec<AddressValue> {
-        let mut addresses = Vec::new();
+    pub fn auto_disassemble(&mut self, start: u32) -> AutoDisassembleResult {
         let mut queue = Vec::new();
+        let mut result = AutoDisassembleResult::default();
         queue.push(start);
         while let Some(addr) = queue.pop() {
-            if self.has_equivalent(addr) {
-                continue;
+            match self.get_equivalent_kind(addr) {
+                Some(EquivalentKind::Code) => {
+                    // Exact address means we ran into an existing code block
+                    // successfully
+                    if self.equivalents.contains_key(&addr) {
+                        continue;
+                    }
+                    result
+                        .errors
+                        .push((addr, AutoDisassembleError::Overlapped(EquivalentKind::Code)));
+                }
+                Some(EquivalentKind::Data) => {
+                    result
+                        .errors
+                        .push((addr, AutoDisassembleError::Overlapped(EquivalentKind::Data)));
+                    continue;
+                }
+                None => {}
             }
-            addresses.push(addr);
             let Ok(_) = self.set_equivalent(addr, Equivalent::Code(vec![])) else {
-                return addresses;
+                result
+                    .errors
+                    .push((addr, AutoDisassembleError::Overlapped(EquivalentKind::Code)));
+                continue;
             };
+            result.success.push(addr);
             if let Some(ins) = self.decode_at(addr) {
                 let flow = ins.control_flow();
                 match flow {
@@ -696,7 +831,7 @@ impl Region {
                 }
             }
         }
-        addresses
+        result
     }
 }
 
@@ -751,6 +886,7 @@ fn apply_operand_overrides(decoded: &str, overrides: &[Option<OperandOverride>])
     out
 }
 
+/// A and B are inclusive start, exclusive end.
 fn ranges_overlap(
     a_start: AddressValue,
     a_end: AddressValue,
@@ -758,6 +894,48 @@ fn ranges_overlap(
     b_end: AddressValue,
 ) -> bool {
     a_start < b_end && b_start < a_end
+}
+
+/// A and B are inclusive start, inclusive end.
+fn ranges_overlap_inclusive(
+    a_start: AddressValue,
+    a_end: AddressValue,
+    b_start: AddressValue,
+    b_end: AddressValue,
+) -> bool {
+    a_start <= b_end && b_start <= a_end
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutoDisassembleError {
+    /// Adding an instruction would have overlapped non-code bytes, or partially
+    /// overlapped other code.
+    Overlapped(EquivalentKind),
+}
+
+/// Result of auto-disassembling a region.
+#[must_use]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AutoDisassembleResult {
+    pub success: Vec<AddressValue>,
+    pub errors: Vec<(AddressValue, AutoDisassembleError)>,
+}
+
+impl AutoDisassembleResult {
+    pub fn is_success(&self) -> bool {
+        self.errors.is_empty()
+    }
+
+    pub fn unwrap_success(self) -> Vec<AddressValue> {
+        if self.errors.is_empty() {
+            self.success
+        } else {
+            if let Some(error) = self.errors.first() {
+                panic!("Auto-disassembly failed (first error at {:04X}))", error.0);
+            }
+            panic!("Auto-disassembly partially failed");
+        }
+    }
 }
 
 #[cfg(test)]

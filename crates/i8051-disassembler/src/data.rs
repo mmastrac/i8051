@@ -121,10 +121,37 @@ impl DataHeuristics {
         self.segment(address, edge, bytes).into_iter()
     }
 
+    /// Split a literal span into `.db` rows per `block_size` and `row_alignment`.
+    pub fn literal_rows<'a>(&self, address: AddressValue, bytes: &'a [u8]) -> Vec<&'a [u8]> {
+        if bytes.is_empty() {
+            return Vec::new();
+        }
+        let bs = self.block_size.max(1);
+        match self.row_alignment {
+            RowAlignment::Packed | RowAlignment::Block => bytes.chunks(bs).map(|row| row).collect(),
+            RowAlignment::Global => {
+                let mut rows = Vec::new();
+                let mut i = 0;
+                let start_mod = (address as usize) % bs;
+                if start_mod != 0 {
+                    let first_len = (bs - start_mod).min(bytes.len());
+                    rows.push(&bytes[0..first_len]);
+                    i = first_len;
+                }
+                while i < bytes.len() {
+                    let end = (i + bs).min(bytes.len());
+                    rows.push(&bytes[i..end]);
+                    i = end;
+                }
+                rows
+            }
+        }
+    }
+
     fn segment<'a>(
         &self,
-        address: AddressValue,
-        edge: Option<Edge>,
+        _address: AddressValue,
+        _edge: Option<Edge>,
         bytes: &'a [u8],
     ) -> Vec<DataChunk<'a, u8>> {
         let mut out = Vec::new();
@@ -396,6 +423,28 @@ mod tests {
             run(&h, &[1, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),
             vec![Literal(&[1]), Run(0xFF, 5)]
         );
+    }
+
+    #[test]
+    fn literal_rows_pack_by_block_size() {
+        let h = DataHeuristics::default();
+        let bytes = (0..40).collect::<Vec<_>>();
+        let rows = h.literal_rows(0, &bytes);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].len(), 16);
+        assert_eq!(rows[1].len(), 16);
+        assert_eq!(rows[2].len(), 8);
+    }
+
+    #[test]
+    fn literal_rows_global_aligns_to_address() {
+        let mut h = DataHeuristics::default();
+        h.row_alignment = RowAlignment::Global;
+        let bytes = (0..20).collect::<Vec<_>>();
+        let rows = h.literal_rows(4, &bytes);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].len(), 12);
+        assert_eq!(rows[1].len(), 8);
     }
 
     #[test]

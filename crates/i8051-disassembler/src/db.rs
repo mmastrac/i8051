@@ -212,6 +212,21 @@ pub enum Equivalent {
     Data(DataType, AddressValue),
 }
 
+impl Equivalent {
+    pub fn kind(&self) -> EquivalentKind {
+        match self {
+            Self::Code(_) => EquivalentKind::Code,
+            Self::Data(_, _) => EquivalentKind::Data,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub enum EquivalentKind {
+    Code,
+    Data,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct EquivalentRange {
     pub end: AddressValue,

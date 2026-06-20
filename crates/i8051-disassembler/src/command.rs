@@ -231,8 +231,8 @@ impl Command {
             }
             Command::AutoDisassemble { space, start } => {
                 let region = db.region_mut(space);
-                let commands = region.auto_disassemble(start);
-                Ok(commands
+                let addresses = region.auto_disassemble(start).success;
+                Ok(addresses
                     .into_iter()
                     .map(|addr| Command::ClearEquivalents {
                         space,
