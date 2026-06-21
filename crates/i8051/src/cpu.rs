@@ -99,7 +99,6 @@ impl From<u8> for Direct {
 impl fmt::Display for Direct {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Ram(value @ 0..31) => write!(f, "R{}_BANK{}", value % 8, value / 8),
             Self::Ram(value) => write!(f, "0x{:02X}", value),
             Self::Sfr(SFR_P0) => write!(f, "P0"),
             Self::Sfr(SFR_A) => write!(f, "ACC"),
@@ -1287,7 +1286,11 @@ macro_rules! op {
                         map_arg!($arg $arg);
                     )*
 
-                    format!("{} {}", stringify!($opcode), format!($name))
+                    if $name == "" {
+                        format!("{}", stringify!($opcode))
+                    } else {
+                        format!("{} {}", stringify!($opcode), format!($name))
+                    }
                 } else
             )*
             {
@@ -1335,25 +1338,25 @@ op! {
     OP NOP "" 0b00000000 => {PC+=1};
     OP LJMP "#{addr:04X}" 0b00000010 imm_hi imm_lo, addr = (imm_hi<<8|imm_lo) => {PC=addr};
     OP LCALL "#{addr:04X}" 0b00010010 imm_hi imm_lo, addr = (imm_hi<<8|imm_lo) => {PUSH16(PC+3); PC=addr};
-    OP JC "#{rel:04X}"   0b01000000 rel, rel=(SEXT(rel)+2+PC) => {if (C) {PC=rel} else {PC+=2}};
-    OP JNC "#{rel:04X}"  0b01010000 rel, rel=(SEXT(rel)+2+PC) => {if (!C) {PC=rel} else {PC+=2}};
-    OP JZ "#{rel:04X}"   0b01100000 rel, rel=(SEXT(rel)+2+PC) => {if (A==0) {PC=rel} else {PC+=2}};
-    OP JNZ "#{rel:04X}"  0b01110000 rel, rel=(SEXT(rel)+2+PC) => {if (A!=0) {PC=rel} else {PC+=2}};
-    OP SJMP "#{rel:04X}" 0b10000000 rel, rel=(SEXT(rel)+2+PC) => {PC=rel};
+    OP JC "#0x{rel:04X}"   0b01000000 rel, rel=(SEXT(rel)+2+PC) => {if (C) {PC=rel} else {PC+=2}};
+    OP JNC "#0x{rel:04X}"  0b01010000 rel, rel=(SEXT(rel)+2+PC) => {if (!C) {PC=rel} else {PC+=2}};
+    OP JZ "#0x{rel:04X}"   0b01100000 rel, rel=(SEXT(rel)+2+PC) => {if (A==0) {PC=rel} else {PC+=2}};
+    OP JNZ "#0x{rel:04X}"  0b01110000 rel, rel=(SEXT(rel)+2+PC) => {if (A!=0) {PC=rel} else {PC+=2}};
+    OP SJMP "#0x{rel:04X}" 0b10000000 rel, rel=(SEXT(rel)+2+PC) => {PC=rel};
     OP RET "" 0b00100010 => {PC=POP16()};
     OP RETI "" 0b00110010 => {PC=POP16(); CLEAR_INT()};
     OP JMP "@A+DPTR"       0b01110011 => {PC=DPTR+A};
-    OP JB "{bit},#{rel:04X}"    0b00100000 bit rel, rel=(SEXT(rel)+3+PC) => {if (PBIT[bit]) {PC=rel} else {PC+=3}};
-    OP JNB "{bit},#{rel:04X}"   0b00110000 bit rel, rel=(SEXT(rel)+3+PC) => {if (!PBIT[bit]) {PC=rel} else {PC+=3}};
-    OP JBC "{bit},#{rel:04X}"   0b00010000 bit rel, rel=(SEXT(rel)+3+PC) => {if (PBIT[bit]) {BIT[bit]=false; PC=rel} else {PC+=3}};
+    OP JB "{bit},#0x{rel:04X}"    0b00100000 bit rel, rel=(SEXT(rel)+3+PC) => {if (PBIT[bit]) {PC=rel} else {PC+=3}};
+    OP JNB "{bit},#0x{rel:04X}"   0b00110000 bit rel, rel=(SEXT(rel)+3+PC) => {if (!PBIT[bit]) {PC=rel} else {PC+=3}};
+    OP JBC "{bit},#0x{rel:04X}"   0b00010000 bit rel, rel=(SEXT(rel)+3+PC) => {if (PBIT[bit]) {BIT[bit]=false; PC=rel} else {PC+=3}};
 
     // Conditional branches and compare/jump
-    OP DJNZ "{direct},#{rel:04X}" 0b11010101 direct rel,                rel=(SEXT(rel)+3+PC) => {DATA[direct]-=1; if (DATA[direct]!=0) {PC=rel} else {PC+=3}};
-    OP DJNZ "R{x},#{rel:04X}" 0b11011000 -x 0b111 rel,                  rel=(SEXT(rel)+2+PC) => {R[x]-=1; if (R[x]!=0) {PC=rel} else {PC+=2}};
-    OP CJNE "A,{direct},#{rel:04X}" 0b10110101 direct rel,              rel=(SEXT(rel)+3+PC) => {let tmp=DATA[direct]; C=A<tmp; if (A!=tmp) {PC=rel} else {PC+=3}};
-    OP CJNE "@R{x},#{imm8:02X},#{rel:04X}" 0b10110110 -x 0b1 imm8 rel,  rel=(SEXT(rel)+3+PC) => {C=IDATA[R[x]]<imm8; if (IDATA[R[x]]!=imm8) {PC=rel} else {PC+=3}};
-    OP CJNE "R{x},#{imm8:02X},#{rel:04X}" 0b10111000 -x 0b111 imm8 rel, rel=(SEXT(rel)+3+PC) => {C=R[x]<imm8; if (R[x]!=imm8) {PC=rel} else {PC+=3}};
-    OP CJNE "A,#{imm8:02X},#{rel:04X}" 0b10110100 imm8 rel,             rel=(SEXT(rel)+3+PC) => {C=A<imm8; if (A!=imm8) { PC=rel } else { PC+=3 }};
+    OP DJNZ "{direct},#0x{rel:04X}" 0b11010101 direct rel,                rel=(SEXT(rel)+3+PC) => {DATA[direct]-=1; if (DATA[direct]!=0) {PC=rel} else {PC+=3}};
+    OP DJNZ "R{x},#0x{rel:04X}" 0b11011000 -x 0b111 rel,                  rel=(SEXT(rel)+2+PC) => {R[x]-=1; if (R[x]!=0) {PC=rel} else {PC+=2}};
+    OP CJNE "A,{direct},#0x{rel:04X}" 0b10110101 direct rel,              rel=(SEXT(rel)+3+PC) => {let tmp=DATA[direct]; C=A<tmp; if (A!=tmp) {PC=rel} else {PC+=3}};
+    OP CJNE "@R{x},#{imm8:02X},#0x{rel:04X}" 0b10110110 -x 0b1 imm8 rel,  rel=(SEXT(rel)+3+PC) => {C=IDATA[R[x]]<imm8; if (IDATA[R[x]]!=imm8) {PC=rel} else {PC+=3}};
+    OP CJNE "R{x},#{imm8:02X},#0x{rel:04X}" 0b10111000 -x 0b111 imm8 rel, rel=(SEXT(rel)+3+PC) => {C=R[x]<imm8; if (R[x]!=imm8) {PC=rel} else {PC+=3}};
+    OP CJNE "A,#{imm8:02X},#0x{rel:04X}" 0b10110100 imm8 rel,             rel=(SEXT(rel)+3+PC) => {C=A<imm8; if (A!=imm8) { PC=rel } else { PC+=3 }};
 
     // DPTR / MOVX / MOVC
     OP MOV "DPTR,#{imm16:04X}" 0b10010000 imm_hi imm_lo, imm16 = (imm_hi<<8|imm_lo) => {DPTR=imm16; PC+=3};
@@ -1408,21 +1411,21 @@ op! {
     OP ANL "A,@R{x}"          0b01010110 -x 0b1 => {A=A&IDATA[R[x]]; PC+=1};
     OP ANL "A,R{x}"           0b01011000 -x 0b111 => {A=A&R[x]; PC+=1};
     OP ANL "{direct},A"       0b01010010 direct => {DATA[direct]&=A; PC+=2};
-    OP ANL "{direct},#{imm8}" 0b01010011 direct imm8 => {DATA[direct]&=imm8; PC+=3};
+    OP ANL "{direct},#{imm8:02X}" 0b01010011 direct imm8 => {DATA[direct]&=imm8; PC+=3};
 
     OP ORL "A,#{imm8:02X}"    0b01000100 imm8 => {A=A|imm8; PC+=2};
     OP ORL "A,{direct}"       0b01000101 direct => {A=A|PDATA[direct]; PC+=2};
     OP ORL "A,@R{x}"          0b01000110 -x 0b1 => {A=A|IDATA[R[x]]; PC+=1};
     OP ORL "A,R{x}"           0b01001000 -x 0b111 => {A=A|R[x]; PC+=1};
     OP ORL "{direct},A"       0b01000010 direct => {DATA[direct]|=A; PC+=2};
-    OP ORL "{direct},#{imm8}" 0b01000011 direct imm8 => {DATA[direct]|=imm8; PC+=3};
+    OP ORL "{direct},#{imm8:02X}" 0b01000011 direct imm8 => {DATA[direct]|=imm8; PC+=3};
 
     OP XRL "A,#{imm8:02X}"    0b01100100 imm8 => {A=A^imm8; PC+=2};
     OP XRL "A,{direct}"       0b01100101 direct => {A=A^PDATA[direct]; PC+=2};
     OP XRL "A,@R{x}"          0b01100110 -x 0b1 => {let tmp=IDATA[R[x]]; A=A^tmp; PC+=1};
     OP XRL "A,R{x}"           0b01101000 -x 0b111 => {A=A^R[x]; PC+=1};
     OP XRL "{direct},A"       0b01100010 direct => {DATA[direct]^=A; PC+=2};
-    OP XRL "{direct},#{imm8}" 0b01100011 direct imm8 => {DATA[direct]^=imm8; PC+=3};
+    OP XRL "{direct},#{imm8:02X}" 0b01100011 direct imm8 => {DATA[direct]^=imm8; PC+=3};
 
     OP DA "A" 0b11010100 => {(A,C,AC)=decimal_adjust(A,C,AC); PC+=1};
 

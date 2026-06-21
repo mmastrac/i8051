@@ -344,22 +344,22 @@ mod tests {
             }]
         );
 
-        let expected = concat!(
-            ".area CODE (CODE,ABS)\n",
-            ".org 0x0\n",
-            "\n",
-            "start:\n",
-            "    LJMP    loc_0010\n",
-            "; Start of loop\n",
-            "loop:\n",
-            "    MOV     A,#01\n",
-            "    MOVX    @DPTR,A\n",
-            "    MOV     DPTR,#0x0010\n",
-            "    MOVC    A,@A+DPTR\n",
-            "    SJMP    loop\n",
-            "loc_0010:\n"
-        );
-        assert_eq!(db.to_sdas(), expected);
+        let expected = r#"
+.area CODE (CODE,ABS)
+.org 0x0
+
+start:
+    LJMP    loc_0010
+; Start of loop
+loop:
+    MOV     A,#01
+    MOVX    @DPTR,A
+    MOV     DPTR,#0x0010
+    MOVC    A,@A+DPTR
+    SJMP    loop
+loc_0010:
+        "#;
+        assert_eq!(db.to_sdas().trim(), expected.trim());
     }
 
     #[test]

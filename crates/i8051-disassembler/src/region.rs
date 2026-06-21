@@ -1047,7 +1047,7 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        assert!(insn.contains("RAM_20,target"));
+        assert!(insn.contains("0x20,target"));
     }
 
     #[test]
