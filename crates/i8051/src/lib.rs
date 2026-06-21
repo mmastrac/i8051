@@ -27,18 +27,19 @@
 //!  - CODE (External Program Memory), used for off-chip ROM and accessed via
 //!    `MOVC` opcodes.
 //!
-//! See the [`mod@ops`] module for a list of all supported instructions.
+//! See [`Mnemonic`] for a list of all supported instructions.
 
 pub mod breakpoint;
 mod cpu;
 pub mod memory;
+mod op;
 pub mod peripheral;
 mod regs;
 pub mod sfr;
 mod traits;
 
-pub use cpu::ops;
-pub use cpu::{ControlFlow, Cpu, Flag, Instruction, Interrupt, Opcode, Register};
+pub use cpu::{ControlFlow, Cpu, Flag, Instruction, Interrupt, Register};
+pub use op::Mnemonic;
 pub use traits::{
     CpuContext, CpuView, DefaultPortMapper, MemoryMapper, PortMapper, ReadOnlyMemoryMapper,
 };

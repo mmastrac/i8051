@@ -1,4 +1,4 @@
-use i8051::{ControlFlow, Instruction, Opcode};
+use i8051::{ControlFlow, Instruction, Mnemonic};
 use serde::{Deserialize, Serialize};
 
 pub type AddressValue = u32;
@@ -58,7 +58,9 @@ pub fn branch_target_operand_index(insn: &Instruction) -> Option<usize> {
         return None;
     }
     match insn.mnemonic() {
-        Opcode::LJMP | Opcode::LCALL | Opcode::AJMP | Opcode::ACALL | Opcode::SJMP => Some(0),
+        Mnemonic::LJMP | Mnemonic::LCALL | Mnemonic::AJMP | Mnemonic::ACALL | Mnemonic::SJMP => {
+            Some(0)
+        }
         _ => {
             let decoded = insn.as_string();
             let operand_count = decoded.split_once(' ').map_or(0, |(_, rest)| {
@@ -125,9 +127,9 @@ pub fn xrefs_to_target(
         .collect()
 }
 
-fn xref_type_for(opcode: Opcode) -> XrefType {
+fn xref_type_for(opcode: Mnemonic) -> XrefType {
     match opcode {
-        Opcode::LCALL | Opcode::ACALL => XrefType::Call,
+        Mnemonic::LCALL | Mnemonic::ACALL => XrefType::Call,
         _ => XrefType::Jump,
     }
 }

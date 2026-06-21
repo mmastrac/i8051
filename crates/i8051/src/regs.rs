@@ -13,6 +13,7 @@ pub trait U16Equivalent: Copy + Clone {
     fn to_u8(self) -> Reg8 {
         Reg8(self.to_u16() as u8)
     }
+    #[allow(dead_code)]
     fn sext(self) -> RegI16 {
         RegI16(self.to_u16() as i8 as i16)
     }
@@ -62,6 +63,7 @@ impl U16Equivalent for Reg32 {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Copy, Clone, TransparentWrapper)]
 #[repr(transparent)]
 pub struct RegI16(pub i16);

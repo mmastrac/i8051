@@ -79,7 +79,7 @@ pub trait PortMapper {
     /// `SFR_P0`..`SFR_P3`, and only for instructions that operate on latched
     /// data rather than the input data.
     ///
-    /// Instructions in [`crate::ops`] that operate on latch are indicated by
+    /// Instructions in [`crate::Mnemonic`] that operate on latch are indicated by
     /// use of `PBIT` and `PDATA` operands (rather than `BIT` and `DATA`
     /// operands).
     fn read_latch<C: CpuView>(&self, _cpu: &C, #[expect(unused)] addr: u8) -> u8 {
@@ -225,15 +225,19 @@ where
     B: PortMapper,
 {
     type WriteValue = WriteChoice<A::WriteValue, B::WriteValue>;
+    #[inline]
     fn interest<C: CpuView>(&self, cpu: &C, addr: u8) -> bool {
         self.0.interest(cpu, addr) || self.1.interest(cpu, addr)
     }
+    #[inline]
     fn extend_short_read<C: CpuView>(&self, cpu: &C, addr: u8) -> u16 {
         self.0.extend_short_read(cpu, addr)
     }
+    #[inline]
     fn pc_extension<C: CpuView>(&self, cpu: &C) -> u16 {
         self.0.pc_extension(cpu)
     }
+    #[inline]
     fn read<C: CpuView>(&self, cpu: &C, addr: u8) -> u8 {
         if self.0.interest(cpu, addr) {
             self.0.read(cpu, addr)
@@ -243,6 +247,7 @@ where
             unreachable!()
         }
     }
+    #[inline]
     fn read_latch<C: CpuView>(&self, cpu: &C, addr: u8) -> u8 {
         if self.0.interest(cpu, addr) {
             self.0.read_latch(cpu, addr)
@@ -252,6 +257,7 @@ where
             unreachable!()
         }
     }
+    #[inline]
     fn prepare_write<C: CpuView>(&self, cpu: &C, addr: u8, value: u8) -> Self::WriteValue {
         if self.0.interest(cpu, addr) {
             WriteChoice::A(self.0.prepare_write(cpu, addr, value))
@@ -261,6 +267,7 @@ where
             unreachable!()
         }
     }
+    #[inline]
     fn write(&mut self, value: Self::WriteValue) {
         match value {
             WriteChoice::A(value) => self.0.write(value),
@@ -297,21 +304,27 @@ impl<A: PortMapper, X: MemoryMapper, C: ReadOnlyMemoryMapper> CpuContext for (A,
     type Ports = A;
     type Xdata = X;
     type Code = C;
+    #[inline]
     fn ports(&self) -> &Self::Ports {
         &self.0
     }
+    #[inline]
     fn ports_mut(&mut self) -> &mut Self::Ports {
         &mut self.0
     }
+    #[inline]
     fn xdata(&self) -> &Self::Xdata {
         &self.1
     }
+    #[inline]
     fn xdata_mut(&mut self) -> &mut Self::Xdata {
         &mut self.1
     }
+    #[inline]
     fn code(&self) -> &Self::Code {
         &self.2
     }
+    #[inline]
     fn code_mut(&mut self) -> &mut Self::Code {
         &mut self.2
     }

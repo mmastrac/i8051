@@ -28,6 +28,7 @@ build-asm-tests: make-build-dirs
     @just build-asm smoketest
     @just build-asm arithmetic
     @just build-asm all_ops
+    @just build-asm loop
 
     @just build-c smoketest
     @just build-c math
@@ -42,7 +43,7 @@ test-asm NAME:
 test-c NAME:
     @echo "[C] testing {{NAME}}..."
     @target/debug/test-runner {{ASM_OUTPUT_DIR}}/c/{{NAME}}.bin > {{ASM_OUTPUT_DIR}}/c/{{NAME}}.log
-    @diff -u {{ASM_OUTPUT_DIR}}/c/{{NAME}}.log tests/c/{{NAME}}.out | tee {{ASM_OUTPUT_DIR}}/c/{{NAME}}.diff | head -n 20
+    @diff -u tests/c/{{NAME}}.out {{ASM_OUTPUT_DIR}}/c/{{NAME}}.log| tee {{ASM_OUTPUT_DIR}}/c/{{NAME}}.diff | head -n 20
 
 test: build-asm-tests build-rust
     @for asm in tests/asm/*.asm; do just test-asm $(basename $asm .asm); done

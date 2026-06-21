@@ -649,11 +649,7 @@ fn render_disassembly(
     }
     code_window.start.set(instructions.first().unwrap().pc());
 
-    fn control_flow_addr(
-        cpu: &Cpu,
-        ctx: &impl CpuContext,
-        control_flow: ControlFlow,
-    ) -> Option<(&'static str, u32)> {
+    fn control_flow_addr(control_flow: ControlFlow) -> Option<(&'static str, u32)> {
         match control_flow {
             ControlFlow::Call(_, pc) => Some((" ↦ ", pc)),
             ControlFlow::Choice(_, pc) => Some((" ↔ ", pc)),
@@ -665,12 +661,12 @@ fn render_disassembly(
         .iter()
         .find(|instruction| instruction.pc() == focus_addr)
         .map(|instruction| instruction.control_flow())
-        .and_then(|control_flow| control_flow_addr(cpu, ctx, control_flow));
+        .and_then(|control_flow| control_flow_addr(control_flow));
     let control_flow_pc = instructions
         .iter()
         .find(|instruction| instruction.pc() == pc)
         .map(|instruction| instruction.control_flow())
-        .and_then(|control_flow| control_flow_addr(cpu, ctx, control_flow));
+        .and_then(|control_flow| control_flow_addr(control_flow));
 
     for instruction in instructions {
         let bytes_str = instruction

@@ -44,6 +44,7 @@ fn decode_test() {
         }
 
         let instruction = Instruction::decode_from_bytes(0x1000, &bytes);
+        assert_eq!(instruction.len(), bytes.len());
         actual.push_str(bytes_str);
         actual.push_str(": ");
         actual.push_str(&instruction.as_string());

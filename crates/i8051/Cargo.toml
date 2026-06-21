@@ -18,3 +18,8 @@ tracing = "0.1"
 [dev-dependencies]
 pretty_assertions = "1.4"
 tempfile = "3.27"
+divan = "0.1.21"
+
+[[bench]]
+name = "decode"
+harness = false
