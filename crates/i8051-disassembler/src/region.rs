@@ -1,11 +1,11 @@
 use i8051::{ControlFlow, Instruction};
 use std::collections::BTreeMap;
-use std::ops::{Bound, RangeBounds};
+use std::ops::RangeBounds;
 use std::range::Range;
 
 use crate::address::{
-    AddressSpace, AddressValue, PhysicalAddr, Xref, branch_target, branch_target_operand_index,
-    xrefs_from_instruction, xrefs_to_target,
+    AddressRange, AddressSpace, AddressValue, PhysicalAddr, Xref, branch_target,
+    branch_target_operand_index, xrefs_from_instruction, xrefs_to_target,
 };
 use crate::command::Command;
 use crate::db::{
@@ -98,28 +98,20 @@ impl Region {
         pattern: &BytePattern,
         range: impl RangeBounds<AddressValue>,
     ) -> impl Iterator<Item = Range<AddressValue>> {
-        let range_start_inclusive = match range.start_bound() {
-            Bound::Included(addr) => *addr,
-            Bound::Excluded(addr) => addr.saturating_add(1),
-            Bound::Unbounded => 0,
-        };
-        let range_end_inclusive = match range.end_bound() {
-            Bound::Included(addr) => *addr,
-            Bound::Excluded(addr) => addr.saturating_sub(1),
-            Bound::Unbounded => AddressValue::MAX,
-        };
+        let range = AddressRange::from(range);
         self.byte_ranges
             .iter()
-            .map(move |(addr, range)| match range {
+            .map(move |(addr, byte_range)| match byte_range {
                 ByteRange::Mapped(_, _, data) => {
                     if ranges_overlap_inclusive(
-                        range_start_inclusive,
-                        range_end_inclusive,
+                        range.start,
+                        range.end,
                         *addr,
                         *addr + data.len() as AddressValue,
                     ) {
-                        let data_start = range_start_inclusive.saturating_sub(*addr) as usize;
-                        let data_end = range_end_inclusive
+                        let data_start = range.start.saturating_sub(*addr) as usize;
+                        let data_end = range
+                            .end
                             .saturating_sub(*addr)
                             .min((data.len() - 1) as AddressValue)
                             as usize;
@@ -779,7 +771,7 @@ impl Region {
         }
 
         let text = if merged.iter().all(|o| o.is_none()) {
-            decoded
+            decoded.to_string()
         } else {
             apply_operand_overrides(&decoded, &merged)
         };

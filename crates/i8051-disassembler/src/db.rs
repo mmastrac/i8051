@@ -6,18 +6,22 @@ use serde::{Deserialize, Serialize};
 use crate::address::{AREA_ORDER, AddressSpace, AddressValue, PhysicalAddr, Xref};
 use crate::command::{Command, Environment};
 use crate::labels::{ImplicitLabels, LabelCollector};
+pub use crate::note::{Note, NoteDb, NoteField, NoteGlobalIndex, NoteId, NotePath, Notes,
+                      NoteAddressIndex};
 pub use crate::region::{ByteRange, Region};
 use crate::render::Line;
 use crate::render::sdas::SdasWriter;
 
 pub struct Db {
     regions: BTreeMap<AddressSpace, Region>,
+    pub notes: NoteDb,
 }
 
 impl Db {
     pub fn new() -> Self {
         Self {
             regions: BTreeMap::new(),
+            notes: NoteDb::default(),
         }
     }
 
@@ -115,6 +119,37 @@ impl Db {
             .get(&space)
             .map(Region::space_usage)
             .unwrap_or_default()
+    }
+
+    pub fn clear_note(
+        &mut self,
+        id: &NoteId,
+    ) -> Option<(AddressSpace, crate::address::AddressRange, Note)> {
+        self.notes.clear_address(id)
+    }
+
+    pub fn note_tip(&self) -> Option<NoteId> {
+        self.notes.tip()
+    }
+
+    pub fn create_note(&mut self, content: impl Into<String>) -> Note {
+        self.notes.create(content)
+    }
+
+    pub fn get_notes_overlapping(
+        &self,
+        space: AddressSpace,
+        range: impl std::ops::RangeBounds<AddressValue>,
+    ) -> Vec<&Note> {
+        self.notes.get_notes_overlapping(space, range)
+    }
+
+    pub fn get_notes_inside(
+        &self,
+        space: AddressSpace,
+        range: impl std::ops::RangeBounds<AddressValue>,
+    ) -> Vec<&Note> {
+        self.notes.get_notes_inside(space, range)
     }
 }
 

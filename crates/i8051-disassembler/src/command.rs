@@ -1,7 +1,7 @@
 use std::io;
 
-use crate::address::{AddressSpace, AddressValue};
-use crate::db::{Equivalent, Error, Function};
+use crate::address::{AddressRange, AddressSpace, AddressValue};
+use crate::db::{Equivalent, Error, Function, Note, NoteId};
 use serde::{Deserialize, Serialize};
 
 pub trait Environment {
@@ -61,6 +61,14 @@ pub enum Command {
         space: AddressSpace,
         offset: AddressValue,
         function: Option<Function>,
+    },
+    SetNote {
+        space: AddressSpace,
+        range: AddressRange,
+        note: Note,
+    },
+    ClearNote {
+        id: NoteId,
     },
 }
 
@@ -332,6 +340,30 @@ impl Command {
                     offset,
                     function: before,
                 }])
+            }
+            Command::SetNote { space, range, note } => {
+                let id = note.id.clone();
+                let before = db.notes.note_range(space, &id).and_then(|old_range| {
+                    db.notes
+                        .get(&id)
+                        .cloned()
+                        .map(|old_note| (old_range, old_note))
+                });
+                db.notes.set_address(space, range, note);
+                match before {
+                    Some((old_range, old_note)) => Ok(vec![Command::SetNote {
+                        space,
+                        range: old_range,
+                        note: old_note,
+                    }]),
+                    None => Ok(vec![Command::ClearNote { id }]),
+                }
+            }
+            Command::ClearNote { id } => {
+                let Some((space, range, note)) = db.notes.clear_address(&id) else {
+                    return Ok(vec![]);
+                };
+                Ok(vec![Command::SetNote { space, range, note }])
             }
         }
     }
