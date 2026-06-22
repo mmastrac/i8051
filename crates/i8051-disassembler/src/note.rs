@@ -295,11 +295,7 @@ impl NoteAddressIndex {
         self.ranges.get(id).copied()
     }
 
-    pub fn overlapping<'a>(
-        &'a self,
-        range: AddressRange,
-        notes: &'a Notes,
-    ) -> Vec<&'a Note> {
+    pub fn overlapping<'a>(&'a self, range: AddressRange, notes: &'a Notes) -> Vec<&'a Note> {
         self.positions
             .overlapping(range.start..range.end)
             .flat_map(|(_, ids)| ids.iter())
@@ -418,10 +414,7 @@ impl NoteDb {
     pub fn set_address(&mut self, space: AddressSpace, range: AddressRange, note: Note) {
         let id = note.id.clone();
         self.notes.insert(note);
-        self.address
-            .entry(space)
-            .or_default()
-            .insert(range, id);
+        self.address.entry(space).or_default().insert(range, id);
     }
 
     pub fn set_global(&mut self, path: NotePath, note: Note) {
@@ -439,10 +432,7 @@ impl NoteDb {
         Some(note)
     }
 
-    pub fn clear_address(
-        &mut self,
-        id: &NoteId,
-    ) -> Option<(AddressSpace, AddressRange, Note)> {
+    pub fn clear_address(&mut self, id: &NoteId) -> Option<(AddressSpace, AddressRange, Note)> {
         let mut located = None;
         for (&space, index) in &mut self.address {
             if let Some(range) = index.remove(id) {
@@ -491,9 +481,7 @@ fn hash_payload(previous_tip: Option<&NoteId>, content: &str) -> u64 {
         Some(tip) => {
             let tip_bytes = tip.as_str().as_bytes();
             let content_bytes = content.as_bytes();
-            let mut combined = Vec::with_capacity(
-                2 + tip_bytes.len() + 2 + content_bytes.len(),
-            );
+            let mut combined = Vec::with_capacity(2 + tip_bytes.len() + 2 + content_bytes.len());
             combined.extend_from_slice(&(tip_bytes.len() as u16).to_le_bytes());
             combined.extend_from_slice(tip_bytes);
             combined.extend_from_slice(&(content_bytes.len() as u16).to_le_bytes());
@@ -575,7 +563,10 @@ mod tests {
 
         assert!(first.id < second.id);
         assert!(second.id < third.id);
-        assert_eq!(NoteId::tip([&first.id, &second.id, &third.id]), Some(third.id.clone()));
+        assert_eq!(
+            NoteId::tip([&first.id, &second.id, &third.id]),
+            Some(third.id.clone())
+        );
     }
 
     #[test]
@@ -584,9 +575,20 @@ mod tests {
         let second = Note::new(Some(&first.id), "beta");
         let third = Note::new(Some(&second.id), "gamma");
 
-        let mut sorted = [first.id.to_string(), second.id.to_string(), third.id.to_string()];
+        let mut sorted = [
+            first.id.to_string(),
+            second.id.to_string(),
+            third.id.to_string(),
+        ];
         sorted.sort();
-        assert_eq!(sorted, [first.id.to_string(), second.id.to_string(), third.id.to_string()]);
+        assert_eq!(
+            sorted,
+            [
+                first.id.to_string(),
+                second.id.to_string(),
+                third.id.to_string()
+            ]
+        );
         assert_eq!(sorted.last().unwrap(), &third.id.to_string());
     }
 
@@ -716,7 +718,13 @@ mod tests {
 
         db.clear(&id);
         assert!(db.notes.is_empty());
-        assert!(db.get_by_path(&NotePath::parse("project.vt420").unwrap()).is_none());
-        assert!(db.get_notes_overlapping(AddressSpace::Code, 0..4).is_empty());
+        assert!(
+            db.get_by_path(&NotePath::parse("project.vt420").unwrap())
+                .is_none()
+        );
+        assert!(
+            db.get_notes_overlapping(AddressSpace::Code, 0..4)
+                .is_empty()
+        );
     }
 }

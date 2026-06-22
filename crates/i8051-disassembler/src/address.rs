@@ -116,18 +116,15 @@ pub fn branch_target_operand_index(insn: &Instruction) -> Option<usize> {
 }
 
 pub fn branch_target(insn: &Instruction) -> Option<u32> {
-    let next = insn.pc().wrapping_add(insn.len() as u32);
     match insn.control_flow() {
-        ControlFlow::Continue(addr) if u32::from(addr) != next => Some(u32::from(addr)),
-        ControlFlow::Call(_, addr) => Some(u32::from(addr)),
-        ControlFlow::Choice(_, addr) => Some(u32::from(addr)),
+        ControlFlow::Jump { target } => Some(target),
+        ControlFlow::Call { target, .. } => Some(target),
+        ControlFlow::Choice { branch_target, .. } => Some(branch_target),
         _ => None,
     }
 }
 
 pub fn xrefs_from_instruction(instruction: &Instruction, source: PhysicalAddr) -> Vec<Xref> {
-    let next = instruction.pc().wrapping_add(instruction.len() as u32);
-
     let mut xrefs = Vec::new();
     let mut push = |to_offset: u32, xref_type: XrefType| {
         xrefs.push(Xref {
@@ -141,11 +138,11 @@ pub fn xrefs_from_instruction(instruction: &Instruction, source: PhysicalAddr) -
     };
 
     match instruction.control_flow() {
-        ControlFlow::Continue(addr) if u32::from(addr) != next => {
-            push(u32::from(addr), xref_type_for(instruction.mnemonic()));
+        ControlFlow::Jump { target } => {
+            push(target, xref_type_for(instruction.mnemonic()));
         }
-        ControlFlow::Call(_, addr) => push(u32::from(addr), XrefType::Call),
-        ControlFlow::Choice(_, addr) => push(u32::from(addr), XrefType::Jump),
+        ControlFlow::Call { target, .. } => push(target, XrefType::Call),
+        ControlFlow::Choice { branch_target, .. } => push(branch_target, XrefType::Jump),
         _ => {}
     }
 

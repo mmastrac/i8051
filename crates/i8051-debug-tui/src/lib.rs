@@ -651,8 +651,8 @@ fn render_disassembly(
 
     fn control_flow_addr(control_flow: ControlFlow) -> Option<(&'static str, u32)> {
         match control_flow {
-            ControlFlow::Call(_, pc) => Some((" ↦ ", pc)),
-            ControlFlow::Choice(_, pc) => Some((" ↔ ", pc)),
+            ControlFlow::Call { target, .. } => Some((" ↦ ", target)),
+            ControlFlow::Choice { branch_target, .. } => Some((" ↔ ", branch_target)),
             _ => None,
         }
     }

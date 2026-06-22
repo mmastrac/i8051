@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 use crate::address::{AREA_ORDER, AddressSpace, AddressValue, PhysicalAddr, Xref};
 use crate::command::{Command, Environment};
 use crate::labels::{ImplicitLabels, LabelCollector};
-pub use crate::note::{Note, NoteDb, NoteField, NoteGlobalIndex, NoteId, NotePath, Notes,
-                      NoteAddressIndex};
+pub use crate::note::{
+    Note, NoteAddressIndex, NoteDb, NoteField, NoteGlobalIndex, NoteId, NotePath, Notes,
+};
 pub use crate::region::{ByteRange, Region};
 use crate::render::Line;
 use crate::render::sdas::SdasWriter;

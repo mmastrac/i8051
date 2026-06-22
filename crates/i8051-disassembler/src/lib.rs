@@ -1,4 +1,6 @@
 pub mod address;
+#[cfg(feature = "analysis")]
+pub mod analysis;
 pub mod command;
 pub mod db;
 pub mod labels;
@@ -6,10 +8,6 @@ pub mod note;
 pub mod pattern;
 pub mod region;
 pub mod render;
-
-pub use note::{
-    Note, NoteAddressIndex, NoteDb, NoteField, NoteGlobalIndex, NoteId, NotePath, Notes,
-};
 
 #[cfg(test)]
 mod tests {

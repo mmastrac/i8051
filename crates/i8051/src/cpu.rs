@@ -1,11 +1,8 @@
-use std::fmt;
-
 use tracing::trace;
 
+use crate::op::Instruction;
 use crate::peripheral::{P3_INT0, P3_INT1, SCON_RI, SCON_TI, TCON_TF0, TCON_TF1};
-use crate::{
-    CpuContext, CpuView, MemoryMapper, Mnemonic, PortMapper, ReadOnlyMemoryMapper, sfr::*,
-};
+use crate::{CpuContext, CpuView, MemoryMapper, PortMapper, ReadOnlyMemoryMapper, sfr::*};
 
 /// Flags available in the PSW register.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,115 +173,6 @@ impl<CTX: CpuContext> CpuView for (&mut Cpu, &mut CTX) {
     }
 }
 
-pub enum ControlFlow {
-    /// Continue execution from the given PC.
-    Continue(u32),
-    /// Call the given PC, eventually returning to the given PC.
-    Call(u32, u32),
-    /// Choose between two branches.
-    Choice(u32, u32),
-    /// Diverges, unknown control flow.
-    Diverge,
-}
-
-pub struct Instruction {
-    pc: u32,
-    len: u8,
-    bytes: [u8; Self::MAX_LENGTH],
-}
-
-#[allow(clippy::len_without_is_empty)]
-impl Instruction {
-    pub const MAX_LENGTH: usize = 3;
-
-    pub fn decode_from_bytes(pc: u32, bytes: &[u8]) -> Self {
-        let len = crate::op::decode_length(bytes);
-        let mut ins_bytes = [0; Self::MAX_LENGTH];
-        for i in 0..len {
-            ins_bytes[i as usize] = bytes.get(i as usize).copied().unwrap_or(0);
-        }
-        Self {
-            pc,
-            len,
-            bytes: ins_bytes,
-        }
-    }
-
-    pub fn as_string(&self) -> String {
-        crate::op::decode_string(&self.bytes, self.pc)
-    }
-
-    #[inline(always)]
-    pub fn pc(&self) -> u32 {
-        self.pc
-    }
-
-    #[inline(always)]
-    pub fn bytes(&self) -> &[u8] {
-        &self.bytes[..self.len as usize]
-    }
-
-    #[inline(always)]
-    pub fn len(&self) -> usize {
-        self.len as usize
-    }
-
-    pub fn mnemonic(&self) -> Mnemonic {
-        crate::op::opcode(self.bytes[0])
-    }
-
-    /// Get the absolute target address of this instruction, if one exists.
-    pub fn addr(&self) -> Option<u32> {
-        crate::op::addr(&self.bytes, self.pc)
-    }
-
-    /// If this instruction references an internal memory address, return it.
-    ///
-    /// This will miss an instruction that uses two direct operands.
-    pub fn direct(&self) -> Option<u8> {
-        crate::op::direct(&self.bytes, self.pc)
-    }
-
-    pub fn control_flow(&self) -> ControlFlow {
-        let pc = self.pc as u16;
-        let len = self.len as u16;
-        let next = pc.wrapping_add(len) as u32 | (self.pc & !0xffff);
-        match self.mnemonic() {
-            Mnemonic::LJMP | Mnemonic::AJMP | Mnemonic::SJMP => {
-                ControlFlow::Continue(self.addr().unwrap())
-            }
-            Mnemonic::LCALL | Mnemonic::ACALL => ControlFlow::Call(next, self.addr().unwrap()),
-            Mnemonic::JMP | Mnemonic::RET | Mnemonic::RETI => ControlFlow::Diverge,
-            _ => {
-                if crate::op::has_rel(self.bytes[0]) {
-                    // `rel` instructions always have a relative offset in the last byte.
-                    ControlFlow::Choice(next, self.addr().unwrap())
-                } else {
-                    ControlFlow::Continue(next)
-                }
-            }
-        }
-    }
-}
-
-impl fmt::Display for Instruction {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if f.alternate() {
-            write!(f, "{:04X}: ", self.pc)?;
-            for byte in &self.bytes {
-                write!(f, "{:02X} ", byte)?;
-            }
-            for _ in 0..(3 - self.len as usize) {
-                write!(f, "   ")?;
-            }
-            write!(f, "{}", self.as_string())?;
-            Ok(())
-        } else {
-            write!(f, "{}", self.as_string())
-        }
-    }
-}
-
 /// The 8051 CPU.
 pub struct Cpu {
     pub pc: u16,
@@ -426,13 +314,13 @@ impl Cpu {
     pub fn decode_pc(&self, ctx: &impl CpuContext) -> Instruction {
         let pc = self.pc_ext(ctx);
         let (len, bytes) = crate::op::decode_fetch(self, ctx, pc);
-        Instruction { pc, len, bytes }
+        Instruction::decode_from_bytes(pc, &bytes[..len as usize])
     }
 
     /// Decode the instruction at the given PC.
     pub fn decode(&self, ctx: &impl CpuContext, pc: u32) -> Instruction {
         let (len, bytes) = crate::op::decode_fetch(self, ctx, pc);
-        Instruction { pc, len, bytes }
+        Instruction::decode_from_bytes(pc, &bytes[..len as usize])
     }
 
     /// Decode an approximate range of instructions around the PC. The suggested

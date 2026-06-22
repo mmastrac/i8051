@@ -32,14 +32,14 @@
 pub mod breakpoint;
 mod cpu;
 pub mod memory;
-mod op;
+pub mod op;
 pub mod peripheral;
 mod regs;
 pub mod sfr;
 mod traits;
 
-pub use cpu::{ControlFlow, Cpu, Flag, Instruction, Interrupt, Register};
-pub use op::Mnemonic;
+pub use cpu::{Cpu, Flag, Interrupt, Register};
+pub use op::{ControlFlow, Instruction, Mnemonic};
 pub use traits::{
     CpuContext, CpuView, DefaultPortMapper, MemoryMapper, PortMapper, ReadOnlyMemoryMapper,
 };

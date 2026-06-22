@@ -478,7 +478,7 @@ impl Region {
                         let text = self.format_instruction(addr, &insn, overrides, labels);
                         lines.push(Line::Instruction {
                             addr,
-                            direct: insn.direct(),
+                            direct: insn.direct_addr(),
                             text,
                             bytes: insn.bytes().to_vec(),
                         });
@@ -814,14 +814,18 @@ impl Region {
             if let Some(ins) = self.decode_at(addr) {
                 let flow = ins.control_flow();
                 match flow {
-                    ControlFlow::Continue(addr) => queue.push(addr),
-                    ControlFlow::Call(next, addr) => {
-                        queue.push(next);
-                        queue.push(addr);
+                    ControlFlow::Continue { next } => queue.push(next),
+                    ControlFlow::Jump { target } => queue.push(target),
+                    ControlFlow::Call { target, return_pc } => {
+                        queue.push(return_pc);
+                        queue.push(target);
                     }
-                    ControlFlow::Choice(next, addr) => {
-                        queue.push(next);
-                        queue.push(addr);
+                    ControlFlow::Choice {
+                        fall_through,
+                        branch_target,
+                    } => {
+                        queue.push(fall_through);
+                        queue.push(branch_target);
                     }
                     ControlFlow::Diverge => {
                         continue;

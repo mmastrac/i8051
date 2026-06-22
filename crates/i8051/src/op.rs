@@ -290,15 +290,78 @@ impl Operands {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+/// How execution proceeds after an instruction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlFlow {
+    /// Fall through to `next`.
+    Continue { next: u32 },
+    /// Unconditional jump to `target`.
+    Jump { target: u32 },
+    /// Call `target`, returning to `return_pc`.
+    Call { target: u32, return_pc: u32 },
+    /// Branch to `branch_target` or fall through to `fall_through`.
+    Choice {
+        fall_through: u32,
+        branch_target: u32,
+    },
+    /// Unknown or data-dependent control flow.
+    Diverge,
+}
+
+#[derive(Debug, Clone)]
 pub struct Instruction {
-    pub mnemonic: Mnemonic,
-    pub operands: Operands,
-    pub len: u8,
-    pub pc: u32,
+    pc: u32,
+    len: u8,
+    bytes: [u8; Self::MAX_LENGTH],
+    mnemonic: Mnemonic,
+    operands: Operands,
 }
 
 impl Instruction {
+    pub const MAX_LENGTH: usize = 3;
+
+    pub fn decode_from_bytes(pc: u32, bytes: &[u8]) -> Self {
+        let len = decode_length(bytes);
+        let mut ins_bytes = [0u8; Self::MAX_LENGTH];
+        for (i, &byte) in bytes.iter().take(len as usize).enumerate() {
+            ins_bytes[i] = byte;
+        }
+        if let Some(decoded) = decode(&ins_bytes[..len as usize], pc) {
+            decoded
+        } else {
+            Self {
+                pc,
+                len,
+                bytes: ins_bytes,
+                mnemonic: Mnemonic::Unknown,
+                operands: Operands::new(),
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub fn pc(&self) -> u32 {
+        self.pc
+    }
+
+    #[inline(always)]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes[..self.len as usize]
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    pub fn mnemonic(&self) -> Mnemonic {
+        self.mnemonic
+    }
+
+    pub fn operands(&self) -> &Operands {
+        &self.operands
+    }
+
     /// If this instruction references an internal memory address, return it.
     ///
     /// Technically we're missing dst+src for one direct-to-direct move.
@@ -340,6 +403,25 @@ impl Instruction {
         s
     }
 
+    pub fn control_flow(&self) -> ControlFlow {
+        let fall_through = self.pc + self.len as u32;
+        match self.mnemonic {
+            Mnemonic::LJMP | Mnemonic::AJMP | Mnemonic::SJMP => ControlFlow::Jump {
+                target: self.target().unwrap(),
+            },
+            Mnemonic::LCALL | Mnemonic::ACALL => ControlFlow::Call {
+                target: self.target().unwrap(),
+                return_pc: fall_through,
+            },
+            Mnemonic::JMP | Mnemonic::RET | Mnemonic::RETI => ControlFlow::Diverge,
+            _ if self.has_rel() => ControlFlow::Choice {
+                fall_through,
+                branch_target: self.target().unwrap(),
+            },
+            _ => ControlFlow::Continue { next: fall_through },
+        }
+    }
+
     fn push_operand(&self, s: &mut String, op: &Operand) {
         use Operand::*;
         match op {
@@ -373,6 +455,24 @@ impl Instruction {
             Rel(_) | Addr11(_) | Addr16(_) => {
                 let _ = write!(s, "#0x{:04X}", self.target().unwrap_or(0));
             }
+        }
+    }
+}
+
+impl std::fmt::Display for Instruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if f.alternate() {
+            write!(f, "{:04X}: ", self.pc)?;
+            for byte in self.bytes() {
+                write!(f, "{:02X} ", byte)?;
+            }
+            for _ in 0..(Self::MAX_LENGTH - self.len()) {
+                write!(f, "   ")?;
+            }
+            write!(f, "{}", self.as_string())?;
+            Ok(())
+        } else {
+            write!(f, "{}", self.as_string())
         }
     }
 }
@@ -526,7 +626,13 @@ macro_rules! isa {
                         let mut n = 1usize;
                         let mut operands = Operands::new();
                         $( isa!(@bind op, code, n, operands, pc, [$($op)*]); )*
-                        return Some(Instruction { mnemonic: Mnemonic::$mnem, operands, len, pc });
+                        return Some(Instruction {
+                            pc,
+                            len,
+                            bytes: code,
+                            mnemonic: Mnemonic::$mnem,
+                            operands,
+                        });
                     }
                 }
             )* )*
@@ -677,7 +783,7 @@ pub fn has_rel(op: u8) -> bool {
 
 pub fn opcode(op: u8) -> Mnemonic {
     decode(&[op], 0)
-        .map(|i| i.mnemonic)
+        .map(|i| i.mnemonic())
         .unwrap_or(Mnemonic::Unknown)
 }
 
