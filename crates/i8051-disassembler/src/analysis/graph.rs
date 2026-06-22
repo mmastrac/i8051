@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use i8051::{ControlFlow, Instruction, Mnemonic, op::Operand};
+use i8051::{ControlFlow, Instruction, Mnemonic, Operand};
 use leiden_rs::{GraphDataBuilder, Leiden, LeidenConfig, LeidenError};
 
 use crate::address::{AddressSpace, AddressValue};

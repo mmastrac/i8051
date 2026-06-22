@@ -1,3 +1,5 @@
+//! Register types and traits.
+
 use std::cmp::PartialEq;
 use std::fmt;
 use std::ops::{

@@ -1,3 +1,4 @@
+//! Breakpoint support for the i8051 microcontroller.
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 

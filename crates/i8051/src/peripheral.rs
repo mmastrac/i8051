@@ -1,3 +1,5 @@
+//! Peripheral implementations for the i8051 microcontroller.
+
 use std::sync::mpsc;
 
 use tracing::{trace, warn};

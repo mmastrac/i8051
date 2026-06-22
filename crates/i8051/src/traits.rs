@@ -163,6 +163,7 @@ impl ReadOnlyMemoryMapper for () {
     }
 }
 
+/// The default port mapper, providing access to all SFRs.
 pub struct DefaultPortMapper {
     sfr: [u8; 128],
 }

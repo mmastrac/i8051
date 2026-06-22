@@ -1,3 +1,5 @@
+//! Instruction definitions and execution.
+
 use std::fmt::Write as _;
 
 use i8051_proc_macro::op_def;
@@ -267,10 +269,10 @@ pub enum Operand {
     Addr16(u16),
 }
 
-/// Stack-allocated operand list (no deps, no heap). 8051 max arity is 3.
+/// Stack-allocated operand list.
 #[derive(Debug, Clone, Copy)]
 pub struct Operands {
-    buf: [Operand; 3],
+    buf: [Operand; Instruction::MAX_LENGTH],
     len: u8,
 }
 
@@ -308,6 +310,7 @@ pub enum ControlFlow {
     Diverge,
 }
 
+/// An instruction decoded from a sequence of bytes.
 #[derive(Debug, Clone)]
 pub struct Instruction {
     pc: u32,
@@ -318,7 +321,10 @@ pub struct Instruction {
 }
 
 impl Instruction {
+    /// The maximum byte length of an instruction.
     pub const MAX_LENGTH: usize = 3;
+    /// The maximum number of operands an instruction can have.
+    pub const MAX_OPERANDS: usize = 3;
 
     pub fn decode_from_bytes(pc: u32, bytes: &[u8]) -> Self {
         let len = decode_length(bytes);
@@ -759,32 +765,6 @@ pub const fn decode_length(bytes: &[u8]) -> u8 {
         return 1;
     }
     INSTRUCTION_LENGTHS[bytes[0] as usize]
-}
-
-pub fn decode_string(code: &[u8], pc: u32) -> String {
-    decode(code, pc)
-        .map(|i| i.as_string())
-        .unwrap_or_else(|| "???".to_string())
-}
-
-/// Decode the absolute address of the instruction at the given PC, if one exists.
-pub fn addr(code: &[u8], pc: u32) -> Option<u32> {
-    decode(code, pc).and_then(|i| i.target())
-}
-
-/// If this instruction references an internal memory address, return it.
-pub fn direct(code: &[u8], pc: u32) -> Option<u8> {
-    decode(code, pc).and_then(|i| i.direct_addr())
-}
-
-pub fn has_rel(op: u8) -> bool {
-    decode(&[op], 0).map(|i| i.has_rel()).unwrap_or(false)
-}
-
-pub fn opcode(op: u8) -> Mnemonic {
-    decode(&[op], 0)
-        .map(|i| i.mnemonic())
-        .unwrap_or(Mnemonic::Unknown)
 }
 
 /// Fetch and length-decode the instruction at `pc` from CPU code memory.
