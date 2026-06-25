@@ -4,7 +4,7 @@ use std::range::Range;
 use serde::{Deserialize, Serialize};
 
 use crate::address::{AREA_ORDER, AddressSpace, AddressValue, PhysicalAddr, Xref};
-use crate::command::{Command, Environment};
+use crate::commands::{Command, Environment};
 use crate::labels::{ImplicitLabels, LabelCollector};
 pub use crate::note::{
     Note, NoteAddressIndex, NoteDb, NoteField, NoteGlobalIndex, NoteId, NotePath, Notes,
@@ -266,7 +266,7 @@ mod tests {
 
     use super::*;
     use crate::address::XrefType;
-    use crate::command::Command;
+    use crate::commands::Command;
     use pretty_assertions::assert_eq;
 
     static TEST_BINARY: [u8; 12] = [
@@ -406,7 +406,7 @@ loc_0010:
         let mut new_db = Db::new();
         for command in commands {
             let env =
-                matches!(command, Command::MapBytes { .. }).then_some(&env as &dyn Environment);
+                matches!(command, Command::MapBytes(_)).then_some(&env as &dyn Environment);
             new_db.apply(command, env).expect("command should apply");
         }
         assert_eq!(new_db.to_sdas(), db.to_sdas());

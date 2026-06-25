@@ -7,7 +7,7 @@ use crate::address::{
     AddressRange, AddressSpace, AddressValue, PhysicalAddr, Xref, branch_target,
     branch_target_operand_index, xrefs_from_instruction, xrefs_to_target,
 };
-use crate::command::Command;
+use crate::commands::Command;
 use crate::db::{
     Equivalent, EquivalentAt, EquivalentKind, EquivalentRange, Error, Function, OperandOverride,
     SpaceUsage,

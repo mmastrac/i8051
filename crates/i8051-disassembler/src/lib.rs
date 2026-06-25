@@ -1,7 +1,7 @@
 pub mod address;
 #[cfg(feature = "analysis")]
 pub mod analysis;
-pub mod command;
+pub mod commands;
 pub mod db;
 pub mod labels;
 pub mod note;

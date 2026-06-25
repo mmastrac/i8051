@@ -3,6 +3,9 @@ use std::ops::{Bound, RangeBounds};
 use i8051::{ControlFlow, Instruction, Mnemonic};
 use serde::{Deserialize, Serialize};
 
+pub type SpaceAddressValue = (AddressSpace, AddressValue);
+pub type SpaceAddressRange = (AddressSpace, AddressRange);
+
 pub type AddressValue = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
