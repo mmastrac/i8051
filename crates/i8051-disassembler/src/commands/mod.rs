@@ -7,7 +7,7 @@
 /// serialize_test!(
 ///     auto_disassemble,
 ///     "auto_disassemble(address=CODE:0x1234)",
-///     AutoDisassemble { address: (AddressSpace::Code, 0x1234) }
+///     AutoDisassemble { address: (AddressSpace::Code, 0x1234).into() }
 /// );
 /// ```
 macro_rules! serialize_test {
@@ -47,6 +47,9 @@ pub use note::{ClearNote, SetNote};
 use crate::address::{AddressRange, AddressSpace, AddressValue};
 use crate::db::{Db, Equivalent, Error, Function, Note};
 
+// Builders take `space` + offset/range separately and rely on the tuple
+// `From` impls on `SpaceAddressValue` / `SpaceAddressRange` (`.into()`).
+
 pub trait Environment {
     fn load_file_bytes(
         &self,
@@ -78,20 +81,20 @@ pub enum Command {
 impl Command {
     pub fn set_label(space: AddressSpace, offset: AddressValue, label: impl Into<String>) -> Self {
         Self::SetLabel(SetLabel {
-            address: (space, offset),
+            address: (space, offset).into(),
             label: label.into(),
         })
     }
 
     pub fn clear_label(space: AddressSpace, offset: AddressValue) -> Self {
         Self::ClearLabel(ClearLabel {
-            address: (space, offset),
+            address: (space, offset).into(),
         })
     }
 
     pub fn auto_disassemble(space: AddressSpace, start: AddressValue) -> Self {
         Self::AutoDisassemble(AutoDisassemble {
-            address: (space, start),
+            address: (space, start).into(),
         })
     }
 
@@ -101,7 +104,7 @@ impl Command {
         equivalent: Equivalent,
     ) -> Self {
         Self::SetEquivalent(SetEquivalent {
-            address: (space, offset),
+            address: (space, offset).into(),
             equivalent,
         })
     }
@@ -112,7 +115,7 @@ impl Command {
         size: AddressValue,
     ) -> Self {
         Self::ClearEquivalents(ClearEquivalents {
-            range: (space, AddressRange::new(offset, offset + size)),
+            range: (space, AddressRange::new(offset, offset + size)).into(),
         })
     }
 
@@ -122,14 +125,14 @@ impl Command {
         comment: impl Into<String>,
     ) -> Self {
         Self::SetComment(SetComment {
-            address: (space, offset),
+            address: (space, offset).into(),
             comment: comment.into(),
         })
     }
 
     pub fn clear_comment(space: AddressSpace, offset: AddressValue) -> Self {
         Self::ClearComment(ClearComment {
-            address: (space, offset),
+            address: (space, offset).into(),
         })
     }
 
@@ -141,7 +144,7 @@ impl Command {
         size: AddressValue,
     ) -> Self {
         Self::MapBytes(MapBytes {
-            address: (space, offset),
+            address: (space, offset).into(),
             file: file.into(),
             file_offset,
             size,
@@ -150,7 +153,7 @@ impl Command {
 
     pub fn clear_bytes(space: AddressSpace, offset: AddressValue, size: AddressValue) -> Self {
         Self::ClearBytes(ClearBytes {
-            range: (space, AddressRange::new(offset, offset + size)),
+            range: (space, AddressRange::new(offset, offset + size)).into(),
         })
     }
 
@@ -161,27 +164,27 @@ impl Command {
         value: u8,
     ) -> Self {
         Self::SetConstantBytes(SetConstantBytes {
-            range: (space, AddressRange::new(offset, offset + size)),
+            range: (space, AddressRange::new(offset, offset + size)).into(),
             value,
         })
     }
 
     pub fn set_function(space: AddressSpace, offset: AddressValue, function: Function) -> Self {
         Self::SetFunction(SetFunction {
-            address: (space, offset),
+            address: (space, offset).into(),
             function,
         })
     }
 
     pub fn clear_function(space: AddressSpace, offset: AddressValue) -> Self {
         Self::ClearFunction(ClearFunction {
-            address: (space, offset),
+            address: (space, offset).into(),
         })
     }
 
     pub fn set_note(space: AddressSpace, range: AddressRange, note: Note) -> Self {
         Self::SetNote(SetNote {
-            address: (space, range),
+            address: (space, range).into(),
             note,
         })
     }

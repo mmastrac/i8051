@@ -1,12 +1,10 @@
 use crate::address::{AddressRange, SpaceAddressRange, SpaceAddressValue};
 use crate::db::{Db, Equivalent, Error};
-use crate::store::fields;
 
 use super::Command;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SetEquivalent {
-    #[serde(with = "fields::space_address")]
     pub address: SpaceAddressValue,
     pub equivalent: Equivalent,
 }
@@ -18,17 +16,17 @@ impl SetEquivalent {
         _env: Option<&dyn super::Environment>,
     ) -> Result<Vec<Command>, Error> {
         let Self { address, equivalent } = self;
-        let (space, offset) = address;
+        let SpaceAddressValue { space, offset } = address;
         let region = db.region_mut(space);
         let span = region.equivalent_span(offset, &equivalent)?;
         let before = region.snapshot_equivalents(offset, span);
         region.set_equivalent(offset, equivalent)?;
         let mut undo = vec![Command::ClearEquivalents(ClearEquivalents {
-            range: (space, AddressRange::new(offset, offset + span)),
+            range: (space, AddressRange::new(offset, offset + span)).into(),
         })];
         for (start, range) in before {
             undo.push(Command::SetEquivalent(SetEquivalent {
-                address: (space, start),
+                address: (space, start).into(),
                 equivalent: range.equivalent,
             }));
         }
@@ -38,7 +36,6 @@ impl SetEquivalent {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ClearEquivalents {
-    #[serde(with = "fields::space_address_range")]
     pub range: SpaceAddressRange,
 }
 
@@ -49,7 +46,7 @@ impl ClearEquivalents {
         _env: Option<&dyn super::Environment>,
     ) -> Result<Vec<Command>, Error> {
         let Self { range } = self;
-        let (space, address_range) = range;
+        let SpaceAddressRange { space, range: address_range } = range;
         let offset = address_range.start;
         let size = address_range.end - address_range.start;
         let region = db.region_mut(space);
@@ -58,7 +55,7 @@ impl ClearEquivalents {
         let mut undo = Vec::new();
         for (start, range) in before {
             undo.push(Command::SetEquivalent(SetEquivalent {
-                address: (space, start),
+                address: (space, start).into(),
                 equivalent: range.equivalent,
             }));
         }
@@ -77,7 +74,7 @@ serialize_test!(
     equivalent_code_with_options,
     r#"set_equivalent(address=CODE:0x10, equivalent=Equivalent::Code([OperandOverride::Label("loop"), None]))"#,
     SetEquivalent {
-        address: (AddressSpace::Code, 0x10),
+        address: (AddressSpace::Code, 0x10).into(),
         equivalent: Equivalent::Code(vec![
             Some(OperandOverride::Label("loop".into())),
             None,
@@ -91,7 +88,7 @@ serialize_test!(
     operand_override_struct_variant,
     r#"set_equivalent(address=CODE:0x0, equivalent=Equivalent::Code([OperandOverride::LabelOffset(label="tbl", offset=0x4)]))"#,
     SetEquivalent {
-        address: (AddressSpace::Code, 0x0),
+        address: (AddressSpace::Code, 0x0).into(),
         equivalent: Equivalent::Code(vec![Some(OperandOverride::LabelOffset {
             label: "tbl".into(),
             offset: 4,
@@ -105,7 +102,7 @@ serialize_test!(
     equivalent_data_recursive_datatype,
     "set_equivalent(address=CODE:0x20, equivalent=Equivalent::Data(DataType::Array(DataType::Byte, 0x10), 0x10))",
     SetEquivalent {
-        address: (AddressSpace::Code, 0x20),
+        address: (AddressSpace::Code, 0x20).into(),
         equivalent: Equivalent::Data(DataType::Array(Box::new(DataType::Byte), 0x10), 0x10),
     }
 );

@@ -10,8 +10,8 @@ use serde::de::{
 };
 use serde::forward_to_deserialize_any;
 
+use crate::address::{ADDRESS_RANGE_TOKEN, ADDRESS_TOKEN};
 use crate::store::error::DslError;
-use crate::store::fields::{ADDRESS_RANGE_TOKEN, ADDRESS_TOKEN};
 use crate::store::value::{EnumArgs, Value};
 
 /// Reconstruct a value from the DSL AST.

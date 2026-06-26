@@ -1,12 +1,10 @@
 use crate::address::SpaceAddressValue;
 use crate::db::{Db, Error};
-use crate::store::fields;
 
 use super::Command;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SetComment {
-    #[serde(with = "fields::space_address")]
     pub address: SpaceAddressValue,
     pub comment: String,
 }
@@ -18,7 +16,7 @@ impl SetComment {
         _env: Option<&dyn super::Environment>,
     ) -> Result<Vec<Command>, Error> {
         let Self { address, comment } = self;
-        let (space, offset) = address;
+        let SpaceAddressValue { space, offset } = address;
         let region = db.region_mut(space);
         let before = region.get_comment(offset).map(str::to_owned);
         region.set_comment(offset, &comment);
@@ -31,7 +29,6 @@ impl SetComment {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ClearComment {
-    #[serde(with = "fields::space_address")]
     pub address: SpaceAddressValue,
 }
 
@@ -42,7 +39,7 @@ impl ClearComment {
         _env: Option<&dyn super::Environment>,
     ) -> Result<Vec<Command>, Error> {
         let Self { address } = self;
-        let (space, offset) = address;
+        let SpaceAddressValue { space, offset } = address;
         let region = db.region_mut(space);
         let before = region.get_comment(offset).map(str::to_owned);
         region.clear_comment(offset);
