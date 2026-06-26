@@ -31,7 +31,7 @@ impl Db {
     }
 
     pub fn region_mut(&mut self, space: AddressSpace) -> &mut Region {
-        self.regions.entry(space).or_insert_with(Region::new)
+        self.regions.entry(space).or_default()
     }
 
     pub fn xrefs_to(&self, target: &PhysicalAddr) -> Vec<Xref> {

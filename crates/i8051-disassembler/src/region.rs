@@ -29,6 +29,10 @@ impl ByteRange {
             ByteRange::Constant(size, _) => *size,
         }
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 pub struct Region {
@@ -37,6 +41,12 @@ pub struct Region {
     labels: BTreeMap<AddressValue, String>,
     comments: BTreeMap<AddressValue, String>,
     functions: BTreeMap<AddressValue, Function>,
+}
+
+impl Default for Region {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Region {
@@ -101,7 +111,7 @@ impl Region {
         let range = AddressRange::from(range);
         self.byte_ranges
             .iter()
-            .map(move |(addr, byte_range)| match byte_range {
+            .filter_map(move |(addr, byte_range)| match byte_range {
                 ByteRange::Mapped(_, _, data) => {
                     if ranges_overlap_inclusive(
                         range.start,
@@ -137,7 +147,6 @@ impl Region {
                 }
                 ByteRange::Constant(..) => None,
             })
-            .flatten()
             .flatten()
             .map(|range| Range::from(range.start as AddressValue..range.end as AddressValue))
     }
@@ -270,33 +279,32 @@ impl Region {
         if let Some((&_, range)) = self.equivalents.range(..=offset).next_back() {
             return offset < range.end;
         }
-        return false;
+        false
     }
 
     pub fn has_equivalent_exact(&self, offset: AddressValue) -> bool {
         if self.equivalents.contains_key(&offset) {
             return true;
         }
-        return false;
+        false
     }
 
     pub fn get_equivalent_kind(&self, offset: AddressValue) -> Option<EquivalentKind> {
         if let Some(range) = self.equivalents.get(&offset) {
             return Some(range.equivalent.kind());
         }
-        if let Some((&_, range)) = self.equivalents.range(..=offset).next_back() {
-            if offset < range.end {
+        if let Some((&_, range)) = self.equivalents.range(..=offset).next_back()
+            && offset < range.end {
                 return Some(range.equivalent.kind());
             }
-        }
-        return None;
+        None
     }
 
     pub fn get_equivalent_kind_exact(&self, offset: AddressValue) -> Option<EquivalentKind> {
         if let Some(range) = self.equivalents.get(&offset) {
             return Some(range.equivalent.kind());
         }
-        return None;
+        None
     }
 
     pub fn get_equivalent(&self, offset: AddressValue) -> EquivalentAt<'_> {
@@ -310,11 +318,10 @@ impl Region {
                 range,
             };
         }
-        if let Some((&start, range)) = self.equivalents.range(..=offset).next_back() {
-            if offset < range.end {
+        if let Some((&start, range)) = self.equivalents.range(..=offset).next_back()
+            && offset < range.end {
                 return EquivalentAt::Defined { start, range };
             }
-        }
         EquivalentAt::Undefined(self.undefined_range_at(offset))
     }
 
@@ -495,17 +502,15 @@ impl Region {
                     }
                 },
                 EquivalentAt::Undefined(undefined) => {
-                    let span = self.raw_run_until_next_annotation(addr, undefined.end, &labels);
+                    let span = self.raw_run_until_next_annotation(addr, undefined.end, labels);
                     if span == 0 {
                         if let Some((&next_mapped, _)) =
                             self.byte_ranges.range(addr.saturating_add(1)..).next()
-                        {
-                            if next_mapped < undefined.end {
+                            && next_mapped < undefined.end {
                                 addr = next_mapped;
                                 need_org = true;
                                 continue;
                             }
-                        }
                         addr += 1;
                         continue;
                     }
@@ -706,11 +711,10 @@ impl Region {
         span: AddressValue,
     ) -> Result<(), Error> {
         let end = offset.saturating_add(span);
-        if let Some((&other_start, other)) = self.equivalents.range(..end).next_back() {
-            if other.end > offset {
+        if let Some((&other_start, other)) = self.equivalents.range(..end).next_back()
+            && other.end > offset {
                 return Err(Error::Overlap(other_start));
             }
-        }
         Ok(())
     }
 

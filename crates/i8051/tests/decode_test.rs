@@ -18,7 +18,7 @@ fn decode_test() {
         }
         if testcase.starts_with("#") {
             actual.push_str(testcase);
-            actual.push_str("\n");
+            actual.push('\n');
             continue;
         }
         let (bytes_str, mut output) = testcase.split_once(":").unwrap();
@@ -48,7 +48,7 @@ fn decode_test() {
         actual.push_str(bytes_str);
         actual.push_str(": ");
         actual.push_str(&instruction.as_string());
-        actual.push_str("\n");
+        actual.push('\n');
     }
 
     if byte_mismatches.is_empty() {
@@ -90,7 +90,7 @@ echo "Done!"
     }
     fs::write(
         &input,
-        &format!(".area CODE (CODE,ABS)\n.org 0x1000\n{s}\n"),
+        format!(".area CODE (CODE,ABS)\n.org 0x1000\n{s}\n"),
     )
     .unwrap();
 
@@ -112,6 +112,6 @@ echo "Done!"
         String::from_utf8_lossy(&process_output.stderr)
     );
 
-    let bytes = fs::read(&output).unwrap();
-    bytes
+    
+    fs::read(&output).unwrap()
 }

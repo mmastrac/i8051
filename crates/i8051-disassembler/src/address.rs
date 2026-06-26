@@ -93,9 +93,7 @@ pub enum XrefType {
 }
 
 pub fn branch_target_operand_index(insn: &Instruction) -> Option<usize> {
-    if branch_target(insn).is_none() {
-        return None;
-    }
+    branch_target(insn)?;
     match insn.mnemonic() {
         Mnemonic::LJMP | Mnemonic::LCALL | Mnemonic::AJMP | Mnemonic::ACALL | Mnemonic::SJMP => {
             Some(0)

@@ -43,7 +43,7 @@ impl SdasWriter {
             }
         }
         if register_count > 0 {
-            prefix.push_str("\n");
+            prefix.push('\n');
         }
 
         format!("{prefix}{}", self.code)

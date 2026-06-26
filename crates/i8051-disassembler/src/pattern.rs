@@ -32,7 +32,7 @@ fn compile_pattern(pattern: &str) -> Result<regex::bytes::Regex, String> {
     regex.push_str("(?s-u)");
     for part in pattern.split_whitespace() {
         if part == "??" {
-            regex.push_str(".");
+            regex.push('.');
         } else if let Ok(byte) = u8::from_str_radix(part, 16) {
             regex.push_str(&format!(r#"\x{:02X}"#, byte));
         } else {

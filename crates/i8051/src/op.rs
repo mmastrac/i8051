@@ -320,6 +320,7 @@ pub struct Instruction {
     operands: Operands,
 }
 
+#[allow(clippy::len_without_is_empty)]
 impl Instruction {
     /// The maximum byte length of an instruction.
     pub const MAX_LENGTH: usize = 3;
@@ -645,7 +646,7 @@ macro_rules! isa {
             None
         }
 
-        #[allow(unused_mut, unused_variables, unused_assignments, non_snake_case, redundant_semicolons, unconditional_panic)]
+        #[allow(unused_mut, unused_variables, unused_assignments, non_snake_case, redundant_semicolons, unconditional_panic, clippy::out_of_bounds_indexing)]
         #[inline]
         pub fn dispatch(cpu: &mut Cpu, ctx: &mut impl CpuContext) {
             let mut pc = cpu.pc_ext(ctx);
@@ -761,7 +762,7 @@ macro_rules! isa {
 }
 
 pub const fn decode_length(bytes: &[u8]) -> u8 {
-    if bytes.len() == 0 {
+    if bytes.is_empty() {
         return 1;
     }
     INSTRUCTION_LENGTHS[bytes[0] as usize]

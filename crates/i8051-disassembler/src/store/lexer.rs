@@ -181,7 +181,8 @@ impl<'a> Lexer<'a> {
             return Err(DslError::new(offset, "expected digits"));
         }
 
-        let value = u64::from_str_radix(&text, 10)
+        let value = text
+            .parse::<u64>()
             .map_err(|_| DslError::new(offset, format!("invalid integer {text}")))?;
         Ok(Token::Int(value))
     }

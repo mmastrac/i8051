@@ -128,7 +128,7 @@ impl DataHeuristics {
         }
         let bs = self.block_size.max(1);
         match self.row_alignment {
-            RowAlignment::Packed | RowAlignment::Block => bytes.chunks(bs).map(|row| row).collect(),
+            RowAlignment::Packed | RowAlignment::Block => bytes.chunks(bs).collect(),
             RowAlignment::Global => {
                 let mut rows = Vec::new();
                 let mut i = 0;
@@ -214,24 +214,22 @@ impl DataHeuristics {
 
         // edge rule sets (relaxed thresholds) take precedence over interior;
         // a matching `Literal` rule short-circuits to "don't compress"
-        if at_start {
-            if let Some(edge) = &self.leading {
+        if at_start
+            && let Some(edge) = &self.leading {
                 match decide(&edge.rules) {
                     RuleDecision::Compress => return true,
                     RuleDecision::ForceLiteral => return false,
                     RuleDecision::NoMatch => {}
                 }
             }
-        }
-        if at_end {
-            if let Some(edge) = &self.trailing {
+        if at_end
+            && let Some(edge) = &self.trailing {
                 match decide(&edge.rules) {
                     RuleDecision::Compress => return true,
                     RuleDecision::ForceLiteral => return false,
                     RuleDecision::NoMatch => {}
                 }
             }
-        }
         matches!(decide(&self.interior), RuleDecision::Compress)
     }
 
@@ -438,8 +436,10 @@ mod tests {
 
     #[test]
     fn literal_rows_global_aligns_to_address() {
-        let mut h = DataHeuristics::default();
-        h.row_alignment = RowAlignment::Global;
+        let h = DataHeuristics {
+            row_alignment: RowAlignment::Global,
+            ..Default::default()
+        };
         let bytes = (0..20).collect::<Vec<_>>();
         let rows = h.literal_rows(4, &bytes);
         assert_eq!(rows.len(), 2);

@@ -21,12 +21,9 @@ impl SetNote {
         let Self { address, note } = self;
         let (space, range) = address;
         let id = note.id.clone();
-        let before = db.notes.note_range(space, &id).and_then(|old_range| {
-            db.notes
+        let before = db.notes.note_range(space, &id).zip(db.notes
                 .get(&id)
-                .cloned()
-                .map(|old_note| (old_range, old_note))
-        });
+                .cloned());
         db.notes.set_address(space, range, note);
         match before {
             Some((old_range, old_note)) => Ok(vec![Command::SetNote(SetNote {
