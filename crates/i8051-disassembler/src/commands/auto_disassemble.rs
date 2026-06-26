@@ -1,7 +1,9 @@
-use crate::address::{AddressRange, SpaceAddressValue};
+use crate::address::{AddressRange, AddressSpace, AddressValue, SpaceAddressValue};
 use crate::db::{Db, Error};
 
-use super::{ClearEquivalents, Command};
+use super::{Apply, ClearEquivalents, Command, Environment, boxed};
+
+register_commands!(AutoDisassemble);
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AutoDisassemble {
@@ -9,11 +11,19 @@ pub struct AutoDisassemble {
 }
 
 impl AutoDisassemble {
-    pub fn apply(
+    pub fn new(space: AddressSpace, start: AddressValue) -> Self {
+        Self {
+            address: (space, start).into(),
+        }
+    }
+}
+
+impl Apply for AutoDisassemble {
+    fn apply(
         self,
         db: &mut Db,
-        _env: Option<&dyn super::Environment>,
-    ) -> Result<Vec<Command>, Error> {
+        _env: Option<&dyn Environment>,
+    ) -> Result<Vec<Box<dyn Command>>, Error> {
         let Self { address } = self;
         let SpaceAddressValue { space, offset: start } = address;
         let region = db.region_mut(space);
@@ -21,7 +31,7 @@ impl AutoDisassemble {
         Ok(addresses
             .into_iter()
             .map(|addr| {
-                Command::ClearEquivalents(ClearEquivalents {
+                boxed(ClearEquivalents {
                     range: (space, AddressRange::new(addr, addr + 1)).into(),
                 })
             })

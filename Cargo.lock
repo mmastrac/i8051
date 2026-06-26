@@ -347,6 +347,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctor"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01334b89b69ff726750c5ce5073fc8bd860e99aa9a8fc5ca11b04730e3aee97a"
+dependencies = [
+ "link-section",
+ "linktime-proc-macro",
+]
+
+[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -467,6 +477,12 @@ checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
 dependencies = [
  "litrs",
 ]
+
+[[package]]
+name = "dtor"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d738e43aa64edab57c983d56de890d65fea7dc05605490c74451ce721dfd84b"
 
 [[package]]
 name = "either"
@@ -646,7 +662,7 @@ checksum = "e712f64ec3850b98572bffac52e2c6f282b29fe6c5fa6d42334b30be438d95c1"
 
 [[package]]
 name = "i8051"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "bytemuck",
  "divan",
@@ -659,7 +675,7 @@ dependencies = [
 
 [[package]]
 name = "i8051-debug-tui"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "i8051",
  "ratatui",
@@ -669,7 +685,7 @@ dependencies = [
 
 [[package]]
 name = "i8051-disassembler"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "hex-literal",
  "i8051",
@@ -677,6 +693,7 @@ dependencies = [
  "pretty_assertions",
  "rangemap",
  "regex",
+ "scattered-collect",
  "serde",
  "serde_json",
  "tempfile",
@@ -685,7 +702,7 @@ dependencies = [
 
 [[package]]
 name = "i8051-proc-macro"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -694,7 +711,7 @@ dependencies = [
 
 [[package]]
 name = "i8051-test-runner"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "clap",
  "i8051",
@@ -832,6 +849,32 @@ checksum = "5f4de44e98ddbf09375cbf4d17714d18f39195f4f4894e8524501726fd9a8a4a"
 dependencies = [
  "bitflags 2.10.0",
 ]
+
+[[package]]
+name = "link-section"
+version = "0.18.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24670b639492630905459a6c7d47f063d33c2d4fcd5362f6e5827c5613976c9f"
+dependencies = [
+ "linktime-proc-macro",
+]
+
+[[package]]
+name = "linktime"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24c0237789ca078da896c7e98f9f885790fa66c3214d5977a22718a261e1b74e"
+dependencies = [
+ "ctor",
+ "dtor",
+ "link-section",
+]
+
+[[package]]
+name = "linktime-proc-macro"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c7b0a3383c2a1002d11349c92c85a666a5fb679e96c79d782cf0dbe557fd6ee"
 
 [[package]]
 name = "linux-raw-sys"
@@ -1429,6 +1472,29 @@ name = "ryu"
 version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a50f4cf475b65d88e057964e0e9bb1f0aa9bbb2036dc65c64596b42932536984"
+
+[[package]]
+name = "safe_arch"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f7caad094bd561859bcd467734a720c3c1f5d1f338995351fefe2190c45efed"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
+name = "scattered-collect"
+version = "0.21.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4f48f1f3ec8e86804c586cc788357ffde4c7f2486cf094000b1f0c3efb505c6"
+dependencies = [
+ "ctor",
+ "link-section",
+ "linktime",
+ "linktime-proc-macro",
+ "wide",
+ "xxhash-rust",
+]
 
 [[package]]
 name = "scopeguard"
@@ -2043,6 +2109,16 @@ dependencies = [
  "lazy_static",
  "serde",
  "wezterm-dynamic",
+]
+
+[[package]]
+name = "wide"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dfdfe6a32973f2d1b268b8895845a8a96cac2f0191e72c27cc929036060dbf89"
+dependencies = [
+ "bytemuck",
+ "safe_arch",
 ]
 
 [[package]]

@@ -1,7 +1,9 @@
-use crate::address::{AddressRange, SpaceAddressRange, SpaceAddressValue};
+use crate::address::{AddressRange, AddressSpace, AddressValue, SpaceAddressRange, SpaceAddressValue};
 use crate::db::{Db, Equivalent, Error};
 
-use super::Command;
+use super::{Apply, Command, Environment, boxed};
+
+register_commands!(SetEquivalent, ClearEquivalents);
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SetEquivalent {
@@ -10,22 +12,31 @@ pub struct SetEquivalent {
 }
 
 impl SetEquivalent {
-    pub fn apply(
+    pub fn new(space: AddressSpace, offset: AddressValue, equivalent: Equivalent) -> Self {
+        Self {
+            address: (space, offset).into(),
+            equivalent,
+        }
+    }
+}
+
+impl Apply for SetEquivalent {
+    fn apply(
         self,
         db: &mut Db,
-        _env: Option<&dyn super::Environment>,
-    ) -> Result<Vec<Command>, Error> {
+        _env: Option<&dyn Environment>,
+    ) -> Result<Vec<Box<dyn Command>>, Error> {
         let Self { address, equivalent } = self;
         let SpaceAddressValue { space, offset } = address;
         let region = db.region_mut(space);
         let span = region.equivalent_span(offset, &equivalent)?;
         let before = region.snapshot_equivalents(offset, span);
         region.set_equivalent(offset, equivalent)?;
-        let mut undo = vec![Command::ClearEquivalents(ClearEquivalents {
+        let mut undo = vec![boxed(ClearEquivalents {
             range: (space, AddressRange::new(offset, offset + span)).into(),
         })];
         for (start, range) in before {
-            undo.push(Command::SetEquivalent(SetEquivalent {
+            undo.push(boxed(SetEquivalent {
                 address: (space, start).into(),
                 equivalent: range.equivalent,
             }));
@@ -40,11 +51,19 @@ pub struct ClearEquivalents {
 }
 
 impl ClearEquivalents {
-    pub fn apply(
+    pub fn new(space: AddressSpace, offset: AddressValue, size: AddressValue) -> Self {
+        Self {
+            range: (space, AddressRange::new(offset, offset + size)).into(),
+        }
+    }
+}
+
+impl Apply for ClearEquivalents {
+    fn apply(
         self,
         db: &mut Db,
-        _env: Option<&dyn super::Environment>,
-    ) -> Result<Vec<Command>, Error> {
+        _env: Option<&dyn Environment>,
+    ) -> Result<Vec<Box<dyn Command>>, Error> {
         let Self { range } = self;
         let SpaceAddressRange { space, range: address_range } = range;
         let offset = address_range.start;
@@ -54,7 +73,7 @@ impl ClearEquivalents {
         region.clear_equivalents(offset, size);
         let mut undo = Vec::new();
         for (start, range) in before {
-            undo.push(Command::SetEquivalent(SetEquivalent {
+            undo.push(boxed(SetEquivalent {
                 address: (space, start).into(),
                 equivalent: range.equivalent,
             }));
@@ -63,8 +82,6 @@ impl ClearEquivalents {
     }
 }
 
-#[cfg(test)]
-use crate::address::AddressSpace;
 #[cfg(test)]
 use crate::db::{DataType, OperandOverride};
 

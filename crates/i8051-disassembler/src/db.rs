@@ -98,7 +98,7 @@ impl Db {
         writer.into_string()
     }
 
-    pub fn to_commands(&self) -> Vec<Command> {
+    pub fn to_commands(&self) -> Vec<Box<dyn Command>> {
         let mut commands = Vec::new();
         for (&space, region) in &self.regions {
             commands.extend(region.to_commands(space));
@@ -108,9 +108,9 @@ impl Db {
 
     pub fn apply(
         &mut self,
-        command: Command,
+        command: Box<dyn Command>,
         env: Option<&dyn Environment>,
-    ) -> Result<Vec<Command>, Error> {
+    ) -> Result<Vec<Box<dyn Command>>, Error> {
         command.apply(self, env)
     }
 
@@ -266,7 +266,7 @@ mod tests {
 
     use super::*;
     use crate::address::XrefType;
-    use crate::commands::Command;
+    use crate::commands::{Command, boxed, ClearBytes, MapBytes, SetConstantBytes};
     use pretty_assertions::assert_eq;
 
     static TEST_BINARY: [u8; 12] = [
@@ -316,7 +316,7 @@ mod tests {
         }
     }
 
-    fn apply_all(db: &mut Db, commands: Vec<Command>, env: &TestEnvironment) {
+    fn apply_all(db: &mut Db, commands: Vec<Box<dyn Command>>, env: &TestEnvironment) {
         for command in commands {
             db.apply(command, Some(env)).unwrap();
         }
@@ -405,8 +405,7 @@ loc_0010:
         let env = TestEnvironment::new().with_file("test.bin", TEST_BINARY.to_vec());
         let mut new_db = Db::new();
         for command in commands {
-            let env =
-                matches!(command, Command::MapBytes(_)).then_some(&env as &dyn Environment);
+            let env = (command.name() == "map_bytes").then_some(&env as &dyn Environment);
             new_db.apply(command, env).expect("command should apply");
         }
         assert_eq!(new_db.to_sdas(), db.to_sdas());
@@ -432,7 +431,7 @@ loc_0010:
             .with_file("other.bin", vec![4, 5]);
         let mut db = Db::new();
         db.apply(
-            Command::map_bytes(AddressSpace::Code, 0, "test.bin", 0, 3),
+            boxed(MapBytes::new(AddressSpace::Code, 0, "test.bin", 0, 3)),
             Some(&env),
         )
         .unwrap();
@@ -442,7 +441,7 @@ loc_0010:
 
         let undo = db
             .apply(
-                Command::map_bytes(AddressSpace::Code, 0, "other.bin", 0, 2),
+                boxed(MapBytes::new(AddressSpace::Code, 0, "other.bin", 0, 2)),
                 Some(&env),
             )
             .unwrap();
@@ -463,13 +462,13 @@ loc_0010:
         let env = TestEnvironment::new().with_file("test.bin", vec![1, 2, 3, 4, 5]);
         let mut db = Db::new();
         db.apply(
-            Command::map_bytes(AddressSpace::Code, 0, "test.bin", 0, 5),
+            boxed(MapBytes::new(AddressSpace::Code, 0, "test.bin", 0, 5)),
             Some(&env),
         )
         .unwrap();
 
         let undo = db
-            .apply(Command::clear_bytes(AddressSpace::Code, 1, 2), None)
+            .apply(boxed(ClearBytes::new(AddressSpace::Code, 1, 2)), None)
             .unwrap();
         assert_eq!(
             db.region(AddressSpace::Code).unwrap().bytes_at(0, 5),
@@ -488,14 +487,14 @@ loc_0010:
         let env = TestEnvironment::new().with_file("test.bin", vec![1, 2, 3]);
         let mut db = Db::new();
         db.apply(
-            Command::map_bytes(AddressSpace::Code, 0, "test.bin", 0, 3),
+            boxed(MapBytes::new(AddressSpace::Code, 0, "test.bin", 0, 3)),
             Some(&env),
         )
         .unwrap();
 
         let undo = db
             .apply(
-                Command::set_constant_bytes(AddressSpace::Code, 0, 2, 0xFF),
+                boxed(SetConstantBytes::new(AddressSpace::Code, 0, 2, 0xFF)),
                 None,
             )
             .unwrap();

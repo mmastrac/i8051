@@ -7,7 +7,9 @@ use crate::address::{
     AddressRange, AddressSpace, AddressValue, PhysicalAddr, Xref, branch_target,
     branch_target_operand_index, xrefs_from_instruction, xrefs_to_target,
 };
-use crate::commands::Command;
+use crate::commands::{
+    boxed, Command, MapBytes, SetComment, SetConstantBytes, SetEquivalent, SetFunction, SetLabel,
+};
 use crate::db::{
     Equivalent, EquivalentAt, EquivalentKind, EquivalentRange, Error, Function, OperandOverride,
     SpaceUsage,
@@ -524,39 +526,39 @@ impl Region {
         lines
     }
 
-    pub(crate) fn to_commands(&self, space: AddressSpace) -> Vec<Command> {
+    pub(crate) fn to_commands(&self, space: AddressSpace) -> Vec<Box<dyn Command>> {
         let mut commands = Vec::new();
         for (&offset, range) in &self.byte_ranges {
             match range {
                 ByteRange::Mapped(file, file_offset, data) => {
-                    commands.push(Command::map_bytes(
+                    commands.push(boxed(MapBytes::new(
                         space,
                         offset,
                         file.clone(),
                         *file_offset,
                         data.len() as AddressValue,
-                    ));
+                    )));
                 }
                 ByteRange::Constant(size, value) => {
-                    commands.push(Command::set_constant_bytes(space, offset, *size, *value));
+                    commands.push(boxed(SetConstantBytes::new(space, offset, *size, *value)));
                 }
             }
         }
         for (&offset, equivalent_range) in &self.equivalents {
-            commands.push(Command::set_equivalent(
+            commands.push(boxed(SetEquivalent::new(
                 space,
                 offset,
                 equivalent_range.equivalent.clone(),
-            ));
+            )));
         }
         for (&offset, label) in &self.labels {
-            commands.push(Command::set_label(space, offset, label.clone()));
+            commands.push(boxed(SetLabel::new(space, offset, label.clone())));
         }
         for (&offset, comment) in &self.comments {
-            commands.push(Command::set_comment(space, offset, comment.clone()));
+            commands.push(boxed(SetComment::new(space, offset, comment.clone())));
         }
         for (&offset, function) in &self.functions {
-            commands.push(Command::set_function(space, offset, function.clone()));
+            commands.push(boxed(SetFunction::new(space, offset, function.clone())));
         }
         commands
     }

@@ -1,8 +1,10 @@
-use crate::address::{AddressRange, AddressValue, SpaceAddressRange, SpaceAddressValue};
+use crate::address::{AddressRange, AddressSpace, AddressValue, SpaceAddressRange, SpaceAddressValue};
 use crate::db::{Db, Error};
 use crate::region::ByteRange;
 
-use super::Command;
+use super::{Apply, Command, Environment, boxed};
+
+register_commands!(MapBytes, ClearBytes, SetConstantBytes);
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MapBytes {
@@ -13,11 +15,28 @@ pub struct MapBytes {
 }
 
 impl MapBytes {
-    pub fn apply(
+    pub fn new(
+        space: AddressSpace,
+        offset: AddressValue,
+        file: impl Into<String>,
+        file_offset: usize,
+        size: AddressValue,
+    ) -> Self {
+        Self {
+            address: (space, offset).into(),
+            file: file.into(),
+            file_offset,
+            size,
+        }
+    }
+}
+
+impl Apply for MapBytes {
+    fn apply(
         self,
         db: &mut Db,
-        env: Option<&dyn super::Environment>,
-    ) -> Result<Vec<Command>, Error> {
+        env: Option<&dyn Environment>,
+    ) -> Result<Vec<Box<dyn Command>>, Error> {
         let Self {
             address,
             file,
@@ -45,11 +64,19 @@ pub struct ClearBytes {
 }
 
 impl ClearBytes {
-    pub fn apply(
+    pub fn new(space: AddressSpace, offset: AddressValue, size: AddressValue) -> Self {
+        Self {
+            range: (space, AddressRange::new(offset, offset + size)).into(),
+        }
+    }
+}
+
+impl Apply for ClearBytes {
+    fn apply(
         self,
         db: &mut Db,
-        _env: Option<&dyn super::Environment>,
-    ) -> Result<Vec<Command>, Error> {
+        _env: Option<&dyn Environment>,
+    ) -> Result<Vec<Box<dyn Command>>, Error> {
         let Self { range } = self;
         let SpaceAddressRange { space, range: address_range } = range;
         let offset = address_range.start;
@@ -68,11 +95,20 @@ pub struct SetConstantBytes {
 }
 
 impl SetConstantBytes {
-    pub fn apply(
+    pub fn new(space: AddressSpace, offset: AddressValue, size: AddressValue, value: u8) -> Self {
+        Self {
+            range: (space, AddressRange::new(offset, offset + size)).into(),
+            value,
+        }
+    }
+}
+
+impl Apply for SetConstantBytes {
+    fn apply(
         self,
         db: &mut Db,
-        _env: Option<&dyn super::Environment>,
-    ) -> Result<Vec<Command>, Error> {
+        _env: Option<&dyn Environment>,
+    ) -> Result<Vec<Box<dyn Command>>, Error> {
         let Self { range, value } = self;
         let SpaceAddressRange { space, range: address_range } = range;
         let offset = address_range.start;
@@ -88,15 +124,15 @@ fn undo_byte_ranges(
     address: SpaceAddressValue,
     size: AddressValue,
     ranges: Vec<(AddressValue, ByteRange)>,
-) -> Vec<Command> {
+) -> Vec<Box<dyn Command>> {
     let SpaceAddressValue { space, offset } = address;
-    let mut undo = vec![Command::ClearBytes(ClearBytes {
+    let mut undo = vec![boxed(ClearBytes {
         range: (space, AddressRange::new(offset, offset + size)).into(),
     })];
     for (start, range) in ranges {
         match range {
             ByteRange::Mapped(file, file_offset, data) => {
-                undo.push(Command::MapBytes(MapBytes {
+                undo.push(boxed(MapBytes {
                     address: (space, start).into(),
                     file,
                     file_offset,
@@ -104,7 +140,7 @@ fn undo_byte_ranges(
                 }));
             }
             ByteRange::Constant(count, value) => {
-                undo.push(Command::SetConstantBytes(SetConstantBytes {
+                undo.push(boxed(SetConstantBytes {
                     range: (space, AddressRange::new(start, start + count as AddressValue)).into(),
                     value,
                 }));
@@ -113,9 +149,6 @@ fn undo_byte_ranges(
     }
     undo
 }
-
-#[cfg(test)]
-use crate::address::AddressSpace;
 
 // Address range + a `u8` field, both rendered in hex.
 serialize_test!(
