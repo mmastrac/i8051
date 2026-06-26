@@ -1,4 +1,4 @@
-use crate::address::{AddressRange, AddressSpace, AddressValue, SpaceAddressValue};
+use crate::address::{AddressSpace, AddressValue, SpaceAddressSet, SpaceAddressValue};
 use crate::db::{Db, Error};
 
 use super::{Apply, ClearEquivalents, Command, Environment, boxed};
@@ -25,16 +25,21 @@ impl Apply for AutoDisassemble {
         _env: Option<&dyn Environment>,
     ) -> Result<Vec<Box<dyn Command>>, Error> {
         let Self { address } = self;
-        let SpaceAddressValue { space, offset: start } = address;
+        let SpaceAddressValue {
+            space,
+            offset: start,
+        } = address;
         let region = db.region_mut(space);
-        let addresses = region.auto_disassemble(start).success;
-        Ok(addresses
-            .into_iter()
-            .map(|addr| {
-                boxed(ClearEquivalents {
-                    range: (space, AddressRange::new(addr, addr + 1)).into(),
-                })
-            })
-            .collect())
+        let cleared = region.auto_disassemble(start).success;
+        if cleared.is_empty() {
+            return Ok(vec![]);
+        }
+        // The undo is a single `ClearEquivalents` over the coalesced set of all
+        // newly-disassembled addresses, rather than one command per address.
+        let mut addresses = SpaceAddressSet::new(space);
+        for addr in cleared {
+            addresses.insert_address(addr);
+        }
+        Ok(vec![boxed(ClearEquivalents::from_set(addresses))])
     }
 }

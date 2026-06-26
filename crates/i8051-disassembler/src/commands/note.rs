@@ -31,9 +31,10 @@ impl Apply for SetNote {
         let Self { address, note } = self;
         let SpaceAddressRange { space, range } = address;
         let id = note.id.clone();
-        let before = db.notes.note_range(space, &id).zip(db.notes
-                .get(&id)
-                .cloned());
+        let before = db
+            .notes
+            .note_range(space, &id)
+            .zip(db.notes.get(&id).cloned());
         db.notes.set_address(space, range, note);
         match before {
             Some((old_range, old_note)) => Ok(vec![boxed(SetNote {

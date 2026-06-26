@@ -23,6 +23,12 @@ pub enum Value {
         start: u64,
         end: u64,
     },
+    /// A set of addresses within one space: `CODE:{0x10..0x13, 0x20}`. Ranges
+    /// are half-open `(start, end)`; a singleton has `end == start + 1`.
+    AddressSet {
+        space: String,
+        ranges: Vec<(u64, u64)>,
+    },
     /// A top-level command: `name(field=value, ...)`.
     Call {
         name: String,
@@ -91,6 +97,20 @@ impl Value {
             Self::Map(map) => format!("{{{}}}", render_map(map)),
             Self::Address { space, offset } => format!("{space}:0x{offset:X}"),
             Self::AddressRange { space, start, end } => format!("{space}:0x{start:X}..0x{end:X}"),
+            Self::AddressSet { space, ranges } => {
+                let body = ranges
+                    .iter()
+                    .map(|&(start, end)| {
+                        if end == start + 1 {
+                            format!("0x{start:X}")
+                        } else {
+                            format!("0x{start:X}..0x{end:X}")
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{space}:{{{body}}}")
+            }
             Self::Call { name, kwargs } => format!("{name}({})", render_kwargs(kwargs)),
             Self::Struct { name, fields } => format!("{name}({})", render_kwargs(fields)),
             Self::Enum {

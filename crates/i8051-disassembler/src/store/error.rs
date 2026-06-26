@@ -17,7 +17,11 @@ impl DslError {
 
 impl fmt::Display for DslError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "dsl parse error at byte {}: {}", self.offset, self.message)
+        write!(
+            f,
+            "dsl parse error at byte {}: {}",
+            self.offset, self.message
+        )
     }
 }
 

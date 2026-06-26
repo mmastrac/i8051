@@ -214,22 +214,20 @@ impl DataHeuristics {
 
         // edge rule sets (relaxed thresholds) take precedence over interior;
         // a matching `Literal` rule short-circuits to "don't compress"
-        if at_start
-            && let Some(edge) = &self.leading {
-                match decide(&edge.rules) {
-                    RuleDecision::Compress => return true,
-                    RuleDecision::ForceLiteral => return false,
-                    RuleDecision::NoMatch => {}
-                }
+        if at_start && let Some(edge) = &self.leading {
+            match decide(&edge.rules) {
+                RuleDecision::Compress => return true,
+                RuleDecision::ForceLiteral => return false,
+                RuleDecision::NoMatch => {}
             }
-        if at_end
-            && let Some(edge) = &self.trailing {
-                match decide(&edge.rules) {
-                    RuleDecision::Compress => return true,
-                    RuleDecision::ForceLiteral => return false,
-                    RuleDecision::NoMatch => {}
-                }
+        }
+        if at_end && let Some(edge) = &self.trailing {
+            match decide(&edge.rules) {
+                RuleDecision::Compress => return true,
+                RuleDecision::ForceLiteral => return false,
+                RuleDecision::NoMatch => {}
             }
+        }
         matches!(decide(&self.interior), RuleDecision::Compress)
     }
 

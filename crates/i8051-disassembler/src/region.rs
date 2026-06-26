@@ -8,7 +8,7 @@ use crate::address::{
     branch_target_operand_index, xrefs_from_instruction, xrefs_to_target,
 };
 use crate::commands::{
-    boxed, Command, MapBytes, SetComment, SetConstantBytes, SetEquivalent, SetFunction, SetLabel,
+    Command, MapBytes, SetComment, SetConstantBytes, SetEquivalent, SetFunction, SetLabel, boxed,
 };
 use crate::db::{
     Equivalent, EquivalentAt, EquivalentKind, EquivalentRange, Error, Function, OperandOverride,
@@ -296,9 +296,10 @@ impl Region {
             return Some(range.equivalent.kind());
         }
         if let Some((&_, range)) = self.equivalents.range(..=offset).next_back()
-            && offset < range.end {
-                return Some(range.equivalent.kind());
-            }
+            && offset < range.end
+        {
+            return Some(range.equivalent.kind());
+        }
         None
     }
 
@@ -321,9 +322,10 @@ impl Region {
             };
         }
         if let Some((&start, range)) = self.equivalents.range(..=offset).next_back()
-            && offset < range.end {
-                return EquivalentAt::Defined { start, range };
-            }
+            && offset < range.end
+        {
+            return EquivalentAt::Defined { start, range };
+        }
         EquivalentAt::Undefined(self.undefined_range_at(offset))
     }
 
@@ -508,11 +510,12 @@ impl Region {
                     if span == 0 {
                         if let Some((&next_mapped, _)) =
                             self.byte_ranges.range(addr.saturating_add(1)..).next()
-                            && next_mapped < undefined.end {
-                                addr = next_mapped;
-                                need_org = true;
-                                continue;
-                            }
+                            && next_mapped < undefined.end
+                        {
+                            addr = next_mapped;
+                            need_org = true;
+                            continue;
+                        }
                         addr += 1;
                         continue;
                     }
@@ -714,9 +717,10 @@ impl Region {
     ) -> Result<(), Error> {
         let end = offset.saturating_add(span);
         if let Some((&other_start, other)) = self.equivalents.range(..end).next_back()
-            && other.end > offset {
-                return Err(Error::Overlap(other_start));
-            }
+            && other.end > offset
+        {
+            return Err(Error::Overlap(other_start));
+        }
         Ok(())
     }
 

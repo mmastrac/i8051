@@ -108,7 +108,11 @@ mod tests {
 
     #[test]
     fn round_trip_multiline_string() {
-        let command = commands::boxed(SetComment::new(AddressSpace::Code, 0x10, "line one\nline two"));
+        let command = commands::boxed(SetComment::new(
+            AddressSpace::Code,
+            0x10,
+            "line one\nline two",
+        ));
         let dsl = to_dsl(&*command);
         assert!(dsl.starts_with("set_comment(address=CODE:0x10, comment=r\""));
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);

@@ -88,11 +88,7 @@ echo "Done!"
         permissions.set_mode(0o755);
         fs::set_permissions(&script, permissions).unwrap();
     }
-    fs::write(
-        &input,
-        format!(".area CODE (CODE,ABS)\n.org 0x1000\n{s}\n"),
-    )
-    .unwrap();
+    fs::write(&input, format!(".area CODE (CODE,ABS)\n.org 0x1000\n{s}\n")).unwrap();
 
     let mut process = Command::new(script);
     process.arg(tempdir.path());
@@ -112,6 +108,5 @@ echo "Done!"
         String::from_utf8_lossy(&process_output.stderr)
     );
 
-    
     fs::read(&output).unwrap()
 }

@@ -1,4 +1,6 @@
-use crate::address::{AddressRange, AddressSpace, AddressValue, SpaceAddressRange, SpaceAddressValue};
+use crate::address::{
+    AddressRange, AddressSpace, AddressValue, SpaceAddressRange, SpaceAddressValue,
+};
 use crate::db::{Db, Error};
 use crate::region::ByteRange;
 
@@ -78,7 +80,10 @@ impl Apply for ClearBytes {
         _env: Option<&dyn Environment>,
     ) -> Result<Vec<Box<dyn Command>>, Error> {
         let Self { range } = self;
-        let SpaceAddressRange { space, range: address_range } = range;
+        let SpaceAddressRange {
+            space,
+            range: address_range,
+        } = range;
         let offset = address_range.start;
         let size = address_range.end - address_range.start;
         let region = db.region_mut(space);
@@ -110,7 +115,10 @@ impl Apply for SetConstantBytes {
         _env: Option<&dyn Environment>,
     ) -> Result<Vec<Box<dyn Command>>, Error> {
         let Self { range, value } = self;
-        let SpaceAddressRange { space, range: address_range } = range;
+        let SpaceAddressRange {
+            space,
+            range: address_range,
+        } = range;
         let offset = address_range.start;
         let size = address_range.end - address_range.start;
         let region = db.region_mut(space);
@@ -141,7 +149,11 @@ fn undo_byte_ranges(
             }
             ByteRange::Constant(count, value) => {
                 undo.push(boxed(SetConstantBytes {
-                    range: (space, AddressRange::new(start, start + count as AddressValue)).into(),
+                    range: (
+                        space,
+                        AddressRange::new(start, start + count as AddressValue),
+                    )
+                        .into(),
                     value,
                 }));
             }

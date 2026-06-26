@@ -108,7 +108,10 @@ impl<'a> Lexer<'a> {
             'r' if self.raw_string_start() => self.read_raw_string(offset),
             '0'..='9' => self.read_number(offset),
             'a'..='z' | 'A'..='Z' | '_' => self.read_ident(offset),
-            _ => Err(DslError::new(offset, format!("unexpected character {ch:?}"))),
+            _ => Err(DslError::new(
+                offset,
+                format!("unexpected character {ch:?}"),
+            )),
         }
     }
 
@@ -136,7 +139,10 @@ impl<'a> Lexer<'a> {
 
     fn read_ident(&mut self, _offset: usize) -> Result<Token, DslError> {
         let mut ident = String::new();
-        while matches!(self.peek_char(), Some('a'..='z' | 'A'..='Z' | '0'..='9' | '_')) {
+        while matches!(
+            self.peek_char(),
+            Some('a'..='z' | 'A'..='Z' | '0'..='9' | '_')
+        ) {
             ident.push(self.bump().unwrap());
         }
         match ident.as_str() {
@@ -210,9 +216,9 @@ impl<'a> Lexer<'a> {
                     }
                 }
                 '\\' if hashes == 0 => {
-                    let esc = self.bump().ok_or_else(|| {
-                        DslError::new(offset, "unterminated escape in string")
-                    })?;
+                    let esc = self
+                        .bump()
+                        .ok_or_else(|| DslError::new(offset, "unterminated escape in string"))?;
                     value.push(match esc {
                         'n' => '\n',
                         'r' => '\r',
@@ -248,7 +254,9 @@ impl<'a> Lexer<'a> {
     }
 
     fn read_hex_digit(&mut self, offset: usize) -> Result<u8, DslError> {
-        let ch = self.bump().ok_or_else(|| DslError::new(offset, "expected hex digit"))?;
+        let ch = self
+            .bump()
+            .ok_or_else(|| DslError::new(offset, "expected hex digit"))?;
         ch.to_digit(16)
             .map(|d| d as u8)
             .ok_or_else(|| DslError::new(offset, "expected hex digit"))

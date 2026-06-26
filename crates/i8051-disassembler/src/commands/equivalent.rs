@@ -1,4 +1,4 @@
-use crate::address::{AddressRange, AddressSpace, AddressValue, SpaceAddressRange, SpaceAddressValue};
+use crate::address::{AddressSpace, AddressValue, SpaceAddressSet, SpaceAddressValue};
 use crate::db::{Db, Equivalent, Error};
 
 use super::{Apply, Command, Environment, boxed};
@@ -26,15 +26,16 @@ impl Apply for SetEquivalent {
         db: &mut Db,
         _env: Option<&dyn Environment>,
     ) -> Result<Vec<Box<dyn Command>>, Error> {
-        let Self { address, equivalent } = self;
+        let Self {
+            address,
+            equivalent,
+        } = self;
         let SpaceAddressValue { space, offset } = address;
         let region = db.region_mut(space);
         let span = region.equivalent_span(offset, &equivalent)?;
         let before = region.snapshot_equivalents(offset, span);
         region.set_equivalent(offset, equivalent)?;
-        let mut undo = vec![boxed(ClearEquivalents {
-            range: (space, AddressRange::new(offset, offset + span)).into(),
-        })];
+        let mut undo = vec![boxed(ClearEquivalents::new(space, offset, span))];
         for (start, range) in before {
             undo.push(boxed(SetEquivalent {
                 address: (space, start).into(),
@@ -47,14 +48,21 @@ impl Apply for SetEquivalent {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ClearEquivalents {
-    pub range: SpaceAddressRange,
+    pub addresses: SpaceAddressSet,
 }
 
 impl ClearEquivalents {
+    /// Clear equivalents over a single contiguous range.
     pub fn new(space: AddressSpace, offset: AddressValue, size: AddressValue) -> Self {
-        Self {
-            range: (space, AddressRange::new(offset, offset + size)).into(),
-        }
+        let mut addresses = SpaceAddressSet::new(space);
+        addresses.insert(offset..offset + size);
+        Self { addresses }
+    }
+
+    /// Clear equivalents over an arbitrary set of addresses (e.g. an undo that
+    /// spans many disjoint spots).
+    pub fn from_set(addresses: SpaceAddressSet) -> Self {
+        Self { addresses }
     }
 }
 
@@ -64,19 +72,21 @@ impl Apply for ClearEquivalents {
         db: &mut Db,
         _env: Option<&dyn Environment>,
     ) -> Result<Vec<Box<dyn Command>>, Error> {
-        let Self { range } = self;
-        let SpaceAddressRange { space, range: address_range } = range;
-        let offset = address_range.start;
-        let size = address_range.end - address_range.start;
+        let Self { addresses } = self;
+        let space = addresses.space;
         let region = db.region_mut(space);
-        let before = region.snapshot_equivalents(offset, size);
-        region.clear_equivalents(offset, size);
         let mut undo = Vec::new();
-        for (start, range) in before {
-            undo.push(boxed(SetEquivalent {
-                address: (space, start).into(),
-                equivalent: range.equivalent,
-            }));
+        for range in addresses.ranges() {
+            let offset = range.start;
+            let size = range.end - range.start;
+            let before = region.snapshot_equivalents(offset, size);
+            region.clear_equivalents(offset, size);
+            for (start, equivalent_range) in before {
+                undo.push(boxed(SetEquivalent {
+                    address: (space, start).into(),
+                    equivalent: equivalent_range.equivalent,
+                }));
+            }
         }
         Ok(undo)
     }
@@ -92,10 +102,7 @@ serialize_test!(
     r#"set_equivalent(address=CODE:0x10, equivalent=Equivalent::Code([OperandOverride::Label("loop"), None]))"#,
     SetEquivalent {
         address: (AddressSpace::Code, 0x10).into(),
-        equivalent: Equivalent::Code(vec![
-            Some(OperandOverride::Label("loop".into())),
-            None,
-        ]),
+        equivalent: Equivalent::Code(vec![Some(OperandOverride::Label("loop".into())), None,]),
     }
 );
 
@@ -121,5 +128,20 @@ serialize_test!(
     SetEquivalent {
         address: (AddressSpace::Code, 0x20).into(),
         equivalent: Equivalent::Data(DataType::Array(Box::new(DataType::Byte), 0x10), 0x10),
+    }
+);
+
+// A `SpaceAddressSet` field renders as the optimal `CODE:{...}` form: the
+// adjacent addresses coalesce into a range, the lone one stays bare.
+serialize_test!(
+    clear_equivalents_address_set,
+    "clear_equivalents(addresses=CODE:{0x10..0x13, 0x20})",
+    ClearEquivalents {
+        addresses: {
+            let mut set = SpaceAddressSet::new(AddressSpace::Code);
+            set.insert(0x10..0x13);
+            set.insert_address(0x20);
+            set
+        },
     }
 );

@@ -39,7 +39,10 @@ impl<'a> Parser<'a> {
     fn expect_eof(&mut self) -> Result<(), DslError> {
         match self.bump()? {
             Token::Eof => Ok(()),
-            _ => Err(DslError::new(self.lexer.offset(), "unexpected trailing input")),
+            _ => Err(DslError::new(
+                self.lexer.offset(),
+                "unexpected trailing input",
+            )),
         }
     }
 
@@ -71,10 +74,7 @@ impl<'a> Parser<'a> {
             _ => {
                 let offset = self.lexer.offset();
                 let token = self.bump()?;
-                Err(DslError::new(
-                    offset,
-                    format!("unexpected token {token:?}"),
-                ))
+                Err(DslError::new(offset, format!("unexpected token {token:?}")))
             }
         }
     }
@@ -133,6 +133,9 @@ impl<'a> Parser<'a> {
 
     fn parse_address(&mut self, space: String) -> Result<Value, DslError> {
         self.expect(Token::Colon, "expected ':' in address")?;
+        if matches!(self.peek()?, Token::LBrace) {
+            return self.parse_address_set(space);
+        }
         let offset = self.parse_u64_value()?;
         if matches!(self.peek()?, Token::DotDot) {
             self.bump()?;
@@ -145,6 +148,40 @@ impl<'a> Parser<'a> {
         } else {
             Ok(Value::Address { space, offset })
         }
+    }
+
+    fn parse_address_set(&mut self, space: String) -> Result<Value, DslError> {
+        self.expect(Token::LBrace, "expected '{'")?;
+        let mut ranges = Vec::new();
+        if !matches!(self.peek()?, Token::RBrace) {
+            loop {
+                let start = self.parse_u64_value()?;
+                let end = if matches!(self.peek()?, Token::DotDot) {
+                    self.bump()?;
+                    self.parse_u64_value()?
+                } else {
+                    start + 1
+                };
+                ranges.push((start, end));
+                match self.peek()? {
+                    Token::Comma => {
+                        self.bump()?;
+                        if matches!(self.peek()?, Token::RBrace) {
+                            break;
+                        }
+                    }
+                    Token::RBrace => break,
+                    _ => {
+                        return Err(DslError::new(
+                            self.lexer.offset(),
+                            "expected ',' or '}' in address set",
+                        ));
+                    }
+                }
+            }
+        }
+        self.expect(Token::RBrace, "expected '}'")?;
+        Ok(Value::AddressSet { space, ranges })
     }
 
     fn parse_u64_value(&mut self) -> Result<u64, DslError> {
@@ -172,7 +209,7 @@ impl<'a> Parser<'a> {
                         return Err(DslError::new(
                             self.lexer.offset(),
                             "expected ',' or ']' in list",
-                        ))
+                        ));
                     }
                 }
             }
@@ -307,7 +344,7 @@ impl<'a> Parser<'a> {
                     return Err(DslError::new(
                         self.lexer.offset(),
                         "expected ',' or ')' in argument list",
-                    ))
+                    ));
                 }
             }
         }
@@ -350,7 +387,10 @@ pub fn parse_command(input: &str) -> Result<Value, DslError> {
             kwargs: fields,
         }),
         Value::Call { .. } => Ok(value),
-        other => Err(DslError::new(0, format!("expected command call, got {other:?}"))),
+        other => Err(DslError::new(
+            0,
+            format!("expected command call, got {other:?}"),
+        )),
     }
 }
 

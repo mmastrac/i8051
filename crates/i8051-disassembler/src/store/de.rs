@@ -10,7 +10,7 @@ use serde::de::{
 };
 use serde::forward_to_deserialize_any;
 
-use crate::address::{ADDRESS_RANGE_TOKEN, ADDRESS_TOKEN};
+use crate::address::{ADDRESS_RANGE_TOKEN, ADDRESS_SET_TOKEN, ADDRESS_TOKEN};
 use crate::store::error::DslError;
 use crate::store::value::{EnumArgs, Value};
 
@@ -42,6 +42,12 @@ impl<'de> de::Deserializer<'de> for ValueDeserializer {
             Value::AddressRange { space, start, end } => {
                 visitor.visit_string(format!("{space}:0x{start:X}..0x{end:X}"))
             }
+            Value::AddressSet { space, ranges } => {
+                let Value::List(tuple) = address_set_tuple(space, ranges) else {
+                    unreachable!()
+                };
+                visitor.visit_seq(SeqAccess::new(tuple))
+            }
             Value::Call { name, kwargs } => visitor.visit_map(MapAccess::new(
                 std::iter::once((name, Value::Map(kwargs))).collect(),
             )),
@@ -66,15 +72,18 @@ impl<'de> de::Deserializer<'de> for ValueDeserializer {
                     value: Value::List(vec![Value::String(space), Value::Int(offset)]),
                 })
             }
-            (ADDRESS_RANGE_TOKEN, Value::AddressRange { space, start, end }) => {
-                visitor.visit_newtype_struct(ValueDeserializer {
+            (ADDRESS_RANGE_TOKEN, Value::AddressRange { space, start, end }) => visitor
+                .visit_newtype_struct(ValueDeserializer {
                     value: Value::List(vec![
                         Value::String(space),
                         Value::Int(start),
                         Value::Int(end),
                     ]),
-                })
-            }
+                }),
+            (ADDRESS_SET_TOKEN, Value::AddressSet { space, ranges }) => visitor
+                .visit_newtype_struct(ValueDeserializer {
+                    value: address_set_tuple(space, ranges),
+                }),
             // Transparent for everything else.
             (_, value) => visitor.visit_newtype_struct(ValueDeserializer { value }),
         }
@@ -107,6 +116,16 @@ impl<'de> de::Deserializer<'de> for ValueDeserializer {
         bytes byte_buf unit unit_struct seq tuple tuple_struct struct
         identifier ignored_any
     }
+}
+
+/// Lower an [`Value::AddressSet`] to the `(space, [[start, end], ...])` tuple
+/// the address-set adapter deserializes from.
+fn address_set_tuple(space: String, ranges: Vec<(u64, u64)>) -> Value {
+    let items = ranges
+        .into_iter()
+        .map(|(start, end)| Value::List(vec![Value::Int(start), Value::Int(end)]))
+        .collect();
+    Value::List(vec![Value::String(space), Value::List(items)])
 }
 
 struct SeqAccess {
@@ -223,11 +242,7 @@ impl<'de> VariantAccess<'de> for VariantDeserializer {
         }
     }
 
-    fn tuple_variant<V: Visitor<'de>>(
-        self,
-        _len: usize,
-        visitor: V,
-    ) -> Result<V::Value, DslError> {
+    fn tuple_variant<V: Visitor<'de>>(self, _len: usize, visitor: V) -> Result<V::Value, DslError> {
         match self.args {
             EnumArgs::Positional(values) => visitor.visit_seq(SeqAccess::new(values)),
             EnumArgs::Unit => visitor.visit_seq(SeqAccess::new(Vec::new())),

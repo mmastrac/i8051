@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use serde::ser::{self, Serialize};
 
-use crate::address::{ADDRESS_RANGE_TOKEN, ADDRESS_TOKEN};
+use crate::address::{ADDRESS_RANGE_TOKEN, ADDRESS_SET_TOKEN, ADDRESS_TOKEN};
 use crate::store::error::DslError;
 use crate::store::value::{EnumArgs, Value};
 
@@ -71,7 +71,9 @@ impl ser::Serializer for ValueSerializer {
         Ok(Value::String(v.to_owned()))
     }
     fn serialize_bytes(self, v: &[u8]) -> Result<Value, DslError> {
-        Ok(Value::List(v.iter().map(|b| Value::Int(*b as u64)).collect()))
+        Ok(Value::List(
+            v.iter().map(|b| Value::Int(*b as u64)).collect(),
+        ))
     }
 
     fn serialize_none(self) -> Result<Value, DslError> {
@@ -121,6 +123,26 @@ impl ser::Serializer for ValueSerializer {
                     space: as_space(space)?,
                     start: as_int(start)?,
                     end: as_int(end)?,
+                })
+            }
+            ADDRESS_SET_TOKEN => {
+                let [space, ranges] = expect_parts(value.serialize(self)?)?;
+                let Value::List(items) = ranges else {
+                    return Err(DslError::new(
+                        0,
+                        "address set adapter expected a list of ranges",
+                    ));
+                };
+                let ranges = items
+                    .into_iter()
+                    .map(|item| {
+                        let [start, end] = expect_parts(item)?;
+                        Ok((as_int(start)?, as_int(end)?))
+                    })
+                    .collect::<Result<Vec<_>, DslError>>()?;
+                Ok(Value::AddressSet {
+                    space: as_space(space)?,
+                    ranges,
                 })
             }
             // Any other newtype struct is transparent (e.g. `#[serde(transparent)]`).
@@ -177,11 +199,7 @@ impl ser::Serializer for ValueSerializer {
         })
     }
 
-    fn serialize_struct(
-        self,
-        name: &'static str,
-        _len: usize,
-    ) -> Result<StructBuilder, DslError> {
+    fn serialize_struct(self, name: &'static str, _len: usize) -> Result<StructBuilder, DslError> {
         Ok(StructBuilder {
             name,
             fields: BTreeMap::new(),
@@ -355,7 +373,10 @@ fn expect_parts<const N: usize>(value: Value) -> Result<[Value; N], DslError> {
 fn as_space(value: Value) -> Result<String, DslError> {
     match value {
         Value::String(s) => Ok(s),
-        other => Err(DslError::new(0, format!("expected address space, got {other:?}"))),
+        other => Err(DslError::new(
+            0,
+            format!("expected address space, got {other:?}"),
+        )),
     }
 }
 

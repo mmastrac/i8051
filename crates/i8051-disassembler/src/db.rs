@@ -266,7 +266,9 @@ mod tests {
 
     use super::*;
     use crate::address::XrefType;
-    use crate::commands::{Command, boxed, ClearBytes, MapBytes, SetConstantBytes};
+    use crate::commands::{
+        AutoDisassemble, ClearBytes, Command, MapBytes, SetConstantBytes, boxed,
+    };
     use pretty_assertions::assert_eq;
 
     static TEST_BINARY: [u8; 12] = [
@@ -508,5 +510,35 @@ loc_0010:
             db.region(AddressSpace::Code).unwrap().bytes_at(0, 3),
             vec![1, 2, 3]
         );
+    }
+
+    #[test]
+    fn auto_disassemble_undo_is_one_clear_equivalents() {
+        let env = TestEnvironment::new().with_file("test.bin", TEST_BINARY.to_vec());
+        let mut db = Db::new();
+        db.apply(
+            boxed(MapBytes::new(
+                AddressSpace::Code,
+                0,
+                "test.bin",
+                0,
+                TEST_BINARY.len() as AddressValue,
+            )),
+            Some(&env),
+        )
+        .unwrap();
+
+        let undo = db
+            .apply(boxed(AutoDisassemble::new(AddressSpace::Code, 0)), None)
+            .unwrap();
+
+        // Disassembly created code equivalents, and the undo is a *single*
+        // ClearEquivalents over the whole coalesced set — not one per address.
+        assert!(db.space_usage(AddressSpace::Code).code > 0);
+        assert_eq!(undo.len(), 1);
+        assert_eq!(undo[0].name(), "clear_equivalents");
+
+        apply_all(&mut db, undo, &env);
+        assert_eq!(db.space_usage(AddressSpace::Code).code, 0);
     }
 }

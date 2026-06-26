@@ -1,7 +1,8 @@
 use std::marker::PhantomData;
-use std::ops::{Bound, Deref, RangeBounds};
+use std::ops::{Bound, Deref, Range, RangeBounds};
 
 use i8051::{ControlFlow, Instruction, Mnemonic};
+use rangemap::RangeSet;
 use serde::de::value::SeqAccessDeserializer;
 use serde::de::{Error as _, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -11,6 +12,7 @@ pub type AddressValue = u32;
 // Signals to the serializer/deserializer to use compact syntax.
 pub(crate) const ADDRESS_TOKEN: &str = "$dsl::address";
 pub(crate) const ADDRESS_RANGE_TOKEN: &str = "$dsl::address_range";
+pub(crate) const ADDRESS_SET_TOKEN: &str = "$dsl::address_set";
 
 /// A space-qualified address. Derefs to its [`AddressValue`] offset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -90,6 +92,72 @@ impl<'de> Deserialize<'de> for SpaceAddressRange {
             space: decode_space::<D>(&space)?,
             range: AddressRange::new(start as AddressValue, end as AddressValue),
         })
+    }
+}
+
+/// A set of addresses within one space, stored as coalesced half-open ranges.
+/// Serializes to the optimal DSL form `CODE:{0x10..0x13, 0x20}` — adjacent
+/// addresses merge into ranges, singletons stay bare.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpaceAddressSet {
+    pub space: AddressSpace,
+    pub set: RangeSet<AddressValue>,
+}
+
+impl SpaceAddressSet {
+    pub fn new(space: AddressSpace) -> Self {
+        Self {
+            space,
+            set: RangeSet::new(),
+        }
+    }
+
+    /// Insert a half-open range (no-op if empty).
+    pub fn insert(&mut self, range: Range<AddressValue>) {
+        if range.start < range.end {
+            self.set.insert(range);
+        }
+    }
+
+    /// Insert a single address.
+    pub fn insert_address(&mut self, address: AddressValue) {
+        self.set.insert(address..address + 1);
+    }
+
+    pub fn contains(&self, address: AddressValue) -> bool {
+        self.set.contains(&address)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.set.is_empty()
+    }
+
+    /// The coalesced ranges, in ascending order.
+    pub fn ranges(&self) -> impl Iterator<Item = Range<AddressValue>> + '_ {
+        self.set.iter().cloned()
+    }
+}
+
+impl Serialize for SpaceAddressSet {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let ranges: Vec<(u64, u64)> = self
+            .set
+            .iter()
+            .map(|range| (range.start as u64, range.end as u64))
+            .collect();
+        serializer.serialize_newtype_struct(ADDRESS_SET_TOKEN, &(self.space.dsl_name(), ranges))
+    }
+}
+
+impl<'de> Deserialize<'de> for SpaceAddressSet {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (space, ranges): (String, Vec<(u64, u64)>) =
+            deserialize_token(deserializer, ADDRESS_SET_TOKEN)?;
+        let mut set = Self::new(decode_space::<D>(&space)?);
+        for (start, end) in ranges {
+            set.insert(start as AddressValue..end as AddressValue);
+        }
+        Ok(set)
     }
 }
 
@@ -320,7 +388,10 @@ mod tests {
         };
         let json = serde_json::to_string(&addr).unwrap();
         assert_eq!(json, r#"["XDATA",4660]"#);
-        assert_eq!(serde_json::from_str::<SpaceAddressValue>(&json).unwrap(), addr);
+        assert_eq!(
+            serde_json::from_str::<SpaceAddressValue>(&json).unwrap(),
+            addr
+        );
     }
 
     #[test]
@@ -341,5 +412,28 @@ mod tests {
     fn unknown_space_is_rejected() {
         let err = serde_json::from_str::<SpaceAddressValue>(r#"["NOPE",0]"#).unwrap_err();
         assert!(err.to_string().contains("unknown address space"));
+    }
+
+    #[test]
+    fn space_address_set_optimal_and_round_trips() {
+        let mut set = SpaceAddressSet::new(AddressSpace::Code);
+        for addr in [0x10, 0x11, 0x12, 0x30] {
+            set.insert_address(addr);
+        }
+        set.insert(0x20..0x28);
+
+        // Adjacent addresses coalesce into a range; singletons stay bare.
+        let value = crate::store::ser::to_value(&set).unwrap();
+        assert_eq!(value.render(), "CODE:{0x10..0x13, 0x20..0x28, 0x30}");
+
+        // Round-trips through the DSL Value AST...
+        assert_eq!(
+            crate::store::de::from_value::<SpaceAddressSet>(value).unwrap(),
+            set
+        );
+        // ...and through stock serde (JSON: `[space, [[start, end], ...]]`).
+        let json = serde_json::to_string(&set).unwrap();
+        assert_eq!(json, r#"["CODE",[[16,19],[32,40],[48,49]]]"#);
+        assert_eq!(serde_json::from_str::<SpaceAddressSet>(&json).unwrap(), set);
     }
 }
