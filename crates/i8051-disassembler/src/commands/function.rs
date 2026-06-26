@@ -1,4 +1,4 @@
-use crate::address::{AddressSpace, AddressValue, SpaceAddressValue};
+use crate::address::{AddressSpace, AddressValue, SpaceAddressSet, SpaceAddressValue};
 use crate::db::{Db, Error, Function};
 
 use super::{Apply, Command, Environment, boxed};
@@ -33,21 +33,27 @@ impl Apply for SetFunction {
         region.set_function(function);
         Ok(match before {
             Some(function) => vec![boxed(SetFunction { address, function })],
-            None => vec![boxed(ClearFunction { address })],
+            None => vec![boxed(ClearFunction::new(space, offset))],
         })
     }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ClearFunction {
-    pub address: SpaceAddressValue,
+    pub addresses: SpaceAddressSet,
 }
 
 impl ClearFunction {
+    /// Clear the function at a single address.
     pub fn new(space: AddressSpace, offset: AddressValue) -> Self {
-        Self {
-            address: (space, offset).into(),
-        }
+        let mut addresses = SpaceAddressSet::new(space);
+        addresses.insert_address(offset);
+        Self { addresses }
+    }
+
+    /// Clear every function in a set of addresses.
+    pub fn from_set(addresses: SpaceAddressSet) -> Self {
+        Self { addresses }
     }
 }
 
@@ -57,14 +63,15 @@ impl Apply for ClearFunction {
         db: &mut Db,
         _env: Option<&dyn Environment>,
     ) -> Result<Vec<Box<dyn Command>>, Error> {
-        let Self { address } = self;
-        let SpaceAddressValue { space, offset } = address;
+        let Self { addresses } = self;
+        let space = addresses.space;
         let region = db.region_mut(space);
-        let before = region.get_function(offset).cloned();
-        region.clear_function(offset);
-        Ok(match before {
-            Some(function) => vec![boxed(SetFunction { address, function })],
-            None => vec![],
-        })
+        let mut undo = Vec::new();
+        for range in addresses.ranges() {
+            for (offset, function) in region.clear_functions_in(range) {
+                undo.push(boxed(SetFunction::new(space, offset, function)));
+            }
+        }
+        Ok(undo)
     }
 }

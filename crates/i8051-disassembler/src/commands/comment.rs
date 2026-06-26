@@ -1,4 +1,4 @@
-use crate::address::{AddressSpace, AddressValue, SpaceAddressValue};
+use crate::address::{AddressSpace, AddressValue, SpaceAddressSet, SpaceAddressValue};
 use crate::db::{Db, Error};
 
 use super::{Apply, Command, Environment, boxed};
@@ -33,21 +33,27 @@ impl Apply for SetComment {
         region.set_comment(offset, &comment);
         Ok(match before {
             Some(comment) => vec![boxed(SetComment { address, comment })],
-            None => vec![boxed(ClearComment { address })],
+            None => vec![boxed(ClearComment::new(space, offset))],
         })
     }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ClearComment {
-    pub address: SpaceAddressValue,
+    pub addresses: SpaceAddressSet,
 }
 
 impl ClearComment {
+    /// Clear the comment at a single address.
     pub fn new(space: AddressSpace, offset: AddressValue) -> Self {
-        Self {
-            address: (space, offset).into(),
-        }
+        let mut addresses = SpaceAddressSet::new(space);
+        addresses.insert_address(offset);
+        Self { addresses }
+    }
+
+    /// Clear every comment in a set of addresses.
+    pub fn from_set(addresses: SpaceAddressSet) -> Self {
+        Self { addresses }
     }
 }
 
@@ -57,14 +63,15 @@ impl Apply for ClearComment {
         db: &mut Db,
         _env: Option<&dyn Environment>,
     ) -> Result<Vec<Box<dyn Command>>, Error> {
-        let Self { address } = self;
-        let SpaceAddressValue { space, offset } = address;
+        let Self { addresses } = self;
+        let space = addresses.space;
         let region = db.region_mut(space);
-        let before = region.get_comment(offset).map(str::to_owned);
-        region.clear_comment(offset);
-        Ok(match before {
-            Some(comment) => vec![boxed(SetComment { address, comment })],
-            None => vec![],
-        })
+        let mut undo = Vec::new();
+        for range in addresses.ranges() {
+            for (offset, comment) in region.clear_comments_in(range) {
+                undo.push(boxed(SetComment::new(space, offset, comment)));
+            }
+        }
+        Ok(undo)
     }
 }

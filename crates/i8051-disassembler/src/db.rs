@@ -266,8 +266,9 @@ mod tests {
 
     use super::*;
     use crate::address::XrefType;
+    use crate::address::SpaceAddressSet;
     use crate::commands::{
-        AutoDisassemble, ClearBytes, Command, MapBytes, SetConstantBytes, boxed,
+        AutoDisassemble, ClearBytes, ClearLabel, Command, MapBytes, SetConstantBytes, boxed,
     };
     use pretty_assertions::assert_eq;
 
@@ -540,5 +541,30 @@ loc_0010:
 
         apply_all(&mut db, undo, &env);
         assert_eq!(db.space_usage(AddressSpace::Code).code, 0);
+    }
+
+    #[test]
+    fn clear_label_set_clears_range_and_undo_restores() {
+        let mut db = Db::new();
+        let code = db.region_mut(AddressSpace::Code);
+        code.set_label(0x10, "a");
+        code.set_label(0x14, "b");
+        code.set_label(0x20, "c");
+
+        // Clear a single range covering the first two labels in one command.
+        let mut set = SpaceAddressSet::new(AddressSpace::Code);
+        set.insert(0x10..0x18);
+        let undo = db.apply(boxed(ClearLabel::from_set(set)), None).unwrap();
+
+        let code = db.region(AddressSpace::Code).unwrap();
+        assert_eq!(code.get_label(0x10), None);
+        assert_eq!(code.get_label(0x14), None);
+        assert_eq!(code.get_label(0x20), Some("c")); // outside the set, untouched
+
+        // The undo restores both cleared labels.
+        apply_all(&mut db, undo, &TestEnvironment::new());
+        let code = db.region(AddressSpace::Code).unwrap();
+        assert_eq!(code.get_label(0x10), Some("a"));
+        assert_eq!(code.get_label(0x14), Some("b"));
     }
 }

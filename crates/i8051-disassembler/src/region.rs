@@ -385,6 +385,41 @@ impl Region {
         self.functions.remove(&(offset as AddressValue));
     }
 
+    /// Remove every label in `range`, returning the removed `(address, label)`
+    /// pairs (for undo).
+    pub fn clear_labels_in(
+        &mut self,
+        range: impl RangeBounds<AddressValue>,
+    ) -> Vec<(AddressValue, String)> {
+        let keys: Vec<AddressValue> = self.labels.range(range).map(|(&k, _)| k).collect();
+        keys.into_iter()
+            .filter_map(|k| self.labels.remove(&k).map(|v| (k, v)))
+            .collect()
+    }
+
+    /// Remove every comment in `range`, returning the removed pairs.
+    pub fn clear_comments_in(
+        &mut self,
+        range: impl RangeBounds<AddressValue>,
+    ) -> Vec<(AddressValue, String)> {
+        let keys: Vec<AddressValue> = self.comments.range(range).map(|(&k, _)| k).collect();
+        keys.into_iter()
+            .filter_map(|k| self.comments.remove(&k).map(|v| (k, v)))
+            .collect()
+    }
+
+    /// Remove every function in `range`, returning the removed `(address,
+    /// function)` pairs.
+    pub fn clear_functions_in(
+        &mut self,
+        range: impl RangeBounds<AddressValue>,
+    ) -> Vec<(AddressValue, Function)> {
+        let keys: Vec<AddressValue> = self.functions.range(range).map(|(&k, _)| k).collect();
+        keys.into_iter()
+            .filter_map(|k| self.functions.remove(&k).map(|v| (k, v)))
+            .collect()
+    }
+
     pub fn byte_at(&self, offset: AddressValue) -> Option<u8> {
         self.read_byte(offset)
     }

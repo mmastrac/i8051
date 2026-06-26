@@ -1,5 +1,5 @@
 use crate::address::{
-    AddressRange, AddressSpace, AddressValue, SpaceAddressRange, SpaceAddressValue,
+    AddressRange, AddressSpace, AddressValue, SpaceAddressRange, SpaceAddressSet, SpaceAddressValue,
 };
 use crate::db::{Db, Error};
 use crate::region::ByteRange;
@@ -56,20 +56,28 @@ impl Apply for MapBytes {
         let size = bytes.len() as AddressValue;
         let before = region.snapshot_byte_ranges(offset, size);
         region.map_bytes(&file, file_offset, offset, &bytes);
-        Ok(undo_byte_ranges(address, size, before))
+        let mut addresses = SpaceAddressSet::new(space);
+        addresses.insert(offset..offset + size);
+        Ok(undo_byte_ranges(addresses, before))
     }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ClearBytes {
-    pub range: SpaceAddressRange,
+    pub addresses: SpaceAddressSet,
 }
 
 impl ClearBytes {
+    /// Clear a single contiguous range.
     pub fn new(space: AddressSpace, offset: AddressValue, size: AddressValue) -> Self {
-        Self {
-            range: (space, AddressRange::new(offset, offset + size)).into(),
-        }
+        let mut addresses = SpaceAddressSet::new(space);
+        addresses.insert(offset..offset + size);
+        Self { addresses }
+    }
+
+    /// Clear an arbitrary set of byte ranges in one command.
+    pub fn from_set(addresses: SpaceAddressSet) -> Self {
+        Self { addresses }
     }
 }
 
@@ -79,17 +87,17 @@ impl Apply for ClearBytes {
         db: &mut Db,
         _env: Option<&dyn Environment>,
     ) -> Result<Vec<Box<dyn Command>>, Error> {
-        let Self { range } = self;
-        let SpaceAddressRange {
-            space,
-            range: address_range,
-        } = range;
-        let offset = address_range.start;
-        let size = address_range.end - address_range.start;
+        let Self { addresses } = self;
+        let space = addresses.space;
         let region = db.region_mut(space);
-        let before = region.snapshot_byte_ranges(offset, size);
-        region.clear_bytes(offset, size);
-        Ok(undo_byte_ranges((space, offset).into(), size, before))
+        let mut before = Vec::new();
+        for range in addresses.ranges() {
+            let offset = range.start;
+            let size = range.end - range.start;
+            before.extend(region.snapshot_byte_ranges(offset, size));
+            region.clear_bytes(offset, size);
+        }
+        Ok(undo_byte_ranges(addresses, before))
     }
 }
 
@@ -124,38 +132,38 @@ impl Apply for SetConstantBytes {
         let region = db.region_mut(space);
         let before = region.snapshot_byte_ranges(offset, size);
         region.set_constant(offset, size, value);
-        Ok(undo_byte_ranges((space, offset).into(), size, before))
+        let mut addresses = SpaceAddressSet::new(space);
+        addresses.insert(offset..offset + size);
+        Ok(undo_byte_ranges(addresses, before))
     }
 }
 
+/// Build the undo for an operation that overwrote the byte ranges in
+/// `addresses`: first re-clear that whole set, then restore each prior range.
 fn undo_byte_ranges(
-    address: SpaceAddressValue,
-    size: AddressValue,
+    addresses: SpaceAddressSet,
     ranges: Vec<(AddressValue, ByteRange)>,
 ) -> Vec<Box<dyn Command>> {
-    let SpaceAddressValue { space, offset } = address;
-    let mut undo = vec![boxed(ClearBytes {
-        range: (space, AddressRange::new(offset, offset + size)).into(),
-    })];
+    let space = addresses.space;
+    let mut undo = vec![boxed(ClearBytes::from_set(addresses))];
     for (start, range) in ranges {
         match range {
             ByteRange::Mapped(file, file_offset, data) => {
-                undo.push(boxed(MapBytes {
-                    address: (space, start).into(),
+                undo.push(boxed(MapBytes::new(
+                    space,
+                    start,
                     file,
                     file_offset,
-                    size: data.len() as AddressValue,
-                }));
+                    data.len() as AddressValue,
+                )));
             }
             ByteRange::Constant(count, value) => {
-                undo.push(boxed(SetConstantBytes {
-                    range: (
-                        space,
-                        AddressRange::new(start, start + count as AddressValue),
-                    )
-                        .into(),
+                undo.push(boxed(SetConstantBytes::new(
+                    space,
+                    start,
+                    count as AddressValue,
                     value,
-                }));
+                )));
             }
         }
     }

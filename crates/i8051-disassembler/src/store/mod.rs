@@ -94,7 +94,7 @@ mod tests {
     fn round_trip_clear_bytes_range() {
         let command = commands::boxed(ClearBytes::new(AddressSpace::Code, 0x10, 0x10));
         let dsl = to_dsl(&*command);
-        assert_eq!(dsl, "clear_bytes(range=CODE:0x10..0x20)");
+        assert_eq!(dsl, "clear_bytes(addresses=CODE:{0x10..0x20})");
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
     }
 
