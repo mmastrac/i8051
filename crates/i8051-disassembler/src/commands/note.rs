@@ -1,13 +1,14 @@
-use serde::{Deserialize, Serialize};
-
 use crate::address::SpaceAddressRange;
 use crate::db::{Db, Error, Note, NoteId};
+use crate::store::fields;
 
 use super::Command;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SetNote {
+    #[serde(with = "fields::space_address_range")]
     pub address: SpaceAddressRange,
+    #[serde(with = "fields::note")]
     pub note: Note,
 }
 
@@ -37,7 +38,7 @@ impl SetNote {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ClearNote {
     pub id: NoteId,
 }

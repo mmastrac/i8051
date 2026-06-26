@@ -160,7 +160,7 @@ impl Default for Db {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Function {
     pub addr: PhysicalAddr,
     pub name: String,

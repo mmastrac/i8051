@@ -1,12 +1,12 @@
-use serde::{Deserialize, Serialize};
-
 use crate::address::SpaceAddressValue;
 use crate::db::{Db, Error, Function};
+use crate::store::fields;
 
 use super::Command;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SetFunction {
+    #[serde(with = "fields::space_address")]
     pub address: SpaceAddressValue,
     pub function: Function,
 }
@@ -29,8 +29,9 @@ impl SetFunction {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ClearFunction {
+    #[serde(with = "fields::space_address")]
     pub address: SpaceAddressValue,
 }
 

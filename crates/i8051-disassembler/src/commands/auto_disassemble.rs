@@ -1,12 +1,12 @@
-use serde::{Deserialize, Serialize};
-
 use crate::address::{AddressRange, SpaceAddressValue};
 use crate::db::{Db, Error};
+use crate::store::fields;
 
 use super::{ClearEquivalents, Command};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AutoDisassemble {
+    #[serde(with = "fields::space_address")]
     pub address: SpaceAddressValue,
 }
 

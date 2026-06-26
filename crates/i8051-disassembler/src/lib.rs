@@ -8,6 +8,7 @@ pub mod note;
 pub mod pattern;
 pub mod region;
 pub mod render;
+pub mod store;
 
 #[cfg(test)]
 mod tests {

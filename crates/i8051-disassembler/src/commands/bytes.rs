@@ -1,13 +1,13 @@
-use serde::{Deserialize, Serialize};
-
 use crate::address::{AddressRange, AddressValue, SpaceAddressRange, SpaceAddressValue};
 use crate::db::{Db, Error};
 use crate::region::ByteRange;
+use crate::store::fields;
 
 use super::Command;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MapBytes {
+    #[serde(with = "fields::space_address")]
     pub address: SpaceAddressValue,
     pub file: String,
     pub file_offset: usize,
@@ -41,8 +41,9 @@ impl MapBytes {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ClearBytes {
+    #[serde(with = "fields::space_address_range")]
     pub range: SpaceAddressRange,
 }
 
@@ -63,8 +64,9 @@ impl ClearBytes {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SetConstantBytes {
+    #[serde(with = "fields::space_address_range")]
     pub range: SpaceAddressRange,
     pub value: u8,
 }
@@ -115,3 +117,16 @@ fn undo_byte_ranges(
     }
     undo
 }
+
+#[cfg(test)]
+use crate::address::AddressSpace;
+
+// Address range + a `u8` field, both rendered in hex.
+serialize_test!(
+    constant_bytes_range_and_byte,
+    "set_constant_bytes(range=CODE:0x10..0x20, value=0xFF)",
+    SetConstantBytes {
+        range: (AddressSpace::Code, AddressRange::new(0x10, 0x20)),
+        value: 0xFF,
+    }
+);

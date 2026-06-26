@@ -1,3 +1,31 @@
+/// Assert a command payload round-trips through the DSL in both directions:
+/// that it renders to exactly `$dsl`, and that `$dsl` parses back to it. The
+/// payload's struct name doubles as the [`Command`] variant. Emits a `#[test]`
+/// named `$name`.
+///
+/// ```ignore
+/// serialize_test!(
+///     auto_disassemble,
+///     "auto_disassemble(address=CODE:0x1234)",
+///     AutoDisassemble { address: (AddressSpace::Code, 0x1234) }
+/// );
+/// ```
+macro_rules! serialize_test {
+    ($name:ident, $dsl:expr, $variant:ident $body:tt $(,)?) => {
+        #[cfg(test)]
+        #[test]
+        fn $name() {
+            let command = $crate::commands::Command::$variant($crate::commands::$variant $body);
+            assert_eq!($crate::store::to_dsl(&command), $dsl, "Rust -> DSL");
+            assert_eq!(
+                $crate::store::from_dsl($dsl).expect("DSL -> Rust"),
+                command,
+                "DSL -> Rust",
+            );
+        }
+    };
+}
+
 mod auto_disassemble;
 mod bytes;
 mod comment;
@@ -18,7 +46,6 @@ pub use note::{ClearNote, SetNote};
 
 use crate::address::{AddressRange, AddressSpace, AddressValue};
 use crate::db::{Db, Equivalent, Error, Function, Note};
-use serde::{Deserialize, Serialize};
 
 pub trait Environment {
     fn load_file_bytes(
@@ -29,7 +56,8 @@ pub trait Environment {
     ) -> Result<Vec<u8>, io::Error>;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Command {
     SetLabel(SetLabel),
     ClearLabel(ClearLabel),
@@ -181,3 +209,4 @@ impl Command {
         }
     }
 }
+
