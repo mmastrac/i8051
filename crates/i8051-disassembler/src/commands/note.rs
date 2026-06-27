@@ -4,8 +4,6 @@ use crate::store::fields;
 
 use super::{Apply, Command, Environment, boxed};
 
-register_commands!(SetNote, ClearNote);
-
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SetNote {
     pub address: SpaceAddressRange,
@@ -13,14 +11,17 @@ pub struct SetNote {
     pub note: Note,
 }
 
-impl SetNote {
-    pub fn new(space: AddressSpace, range: AddressRange, note: Note) -> Self {
-        Self {
-            address: (space, range).into(),
-            note,
-        }
+register!(SetNote(
+    /// Attach `note` to the code address range `range`.
+    space: AddressSpace,
+    range: AddressRange,
+    note: Note,
+) {
+    Self {
+        address: (space, range).into(),
+        note,
     }
-}
+});
 
 impl Apply for SetNote {
     fn apply(
@@ -50,6 +51,13 @@ impl Apply for SetNote {
 pub struct ClearNote {
     pub id: NoteId,
 }
+
+register!(ClearNote(
+    /// Remove the note with the given `id`.
+    id: NoteId,
+) {
+    Self { id }
+});
 
 impl Apply for ClearNote {
     fn apply(

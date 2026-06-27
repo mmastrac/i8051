@@ -3,22 +3,24 @@ use crate::db::{Db, Equivalent, Error};
 
 use super::{Apply, Command, Environment, boxed};
 
-register_commands!(SetEquivalent, ClearEquivalents);
-
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SetEquivalent {
     pub address: SpaceAddressValue,
     pub equivalent: Equivalent,
 }
 
-impl SetEquivalent {
-    pub fn new(space: AddressSpace, offset: AddressValue, equivalent: Equivalent) -> Self {
-        Self {
-            address: (space, offset).into(),
-            equivalent,
-        }
+register!(SetEquivalent(
+    /// Set the disassembly equivalent (how the bytes are interpreted) at the
+    /// code address `offset`.
+    space: AddressSpace,
+    offset: AddressValue,
+    equivalent: Equivalent,
+) {
+    Self {
+        address: (space, offset).into(),
+        equivalent,
     }
-}
+});
 
 impl Apply for SetEquivalent {
     fn apply(
@@ -51,14 +53,19 @@ pub struct ClearEquivalents {
     pub addresses: SpaceAddressSet,
 }
 
-impl ClearEquivalents {
-    /// Clear equivalents over a single contiguous range.
-    pub fn new(space: AddressSpace, offset: AddressValue, size: AddressValue) -> Self {
-        let mut addresses = SpaceAddressSet::new(space);
-        addresses.insert(offset..offset + size);
-        Self { addresses }
-    }
+register!(ClearEquivalents(
+    /// Clear disassembly equivalents over the `size` bytes starting at the code
+    /// address `offset`.
+    space: AddressSpace,
+    offset: AddressValue,
+    size: AddressValue,
+) {
+    let mut addresses = SpaceAddressSet::new(space);
+    addresses.insert(offset..offset + size);
+    Self { addresses }
+});
 
+impl ClearEquivalents {
     /// Clear equivalents over an arbitrary set of addresses (e.g. an undo that
     /// spans many disjoint spots).
     pub fn from_set(addresses: SpaceAddressSet) -> Self {

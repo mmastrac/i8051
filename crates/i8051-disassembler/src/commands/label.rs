@@ -3,22 +3,23 @@ use crate::db::{Db, Error};
 
 use super::{Apply, Command, Environment, boxed};
 
-register_commands!(SetLabel, ClearLabel);
-
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SetLabel {
     pub address: SpaceAddressValue,
     pub label: String,
 }
 
-impl SetLabel {
-    pub fn new(space: AddressSpace, offset: AddressValue, label: impl Into<String>) -> Self {
-        Self {
-            address: (space, offset).into(),
-            label: label.into(),
-        }
+register!(SetLabel(
+    /// Name the code address `offset` with `label`.
+    space: AddressSpace,
+    offset: AddressValue,
+    label: impl Into<String>,
+) {
+    Self {
+        address: (space, offset).into(),
+        label: label.into(),
     }
-}
+});
 
 impl Apply for SetLabel {
     fn apply(
@@ -43,14 +44,17 @@ pub struct ClearLabel {
     pub addresses: SpaceAddressSet,
 }
 
-impl ClearLabel {
-    /// Clear the label at a single address.
-    pub fn new(space: AddressSpace, offset: AddressValue) -> Self {
-        let mut addresses = SpaceAddressSet::new(space);
-        addresses.insert_address(offset);
-        Self { addresses }
-    }
+register!(ClearLabel(
+    /// Remove the label at the code address `offset`.
+    space: AddressSpace,
+    offset: AddressValue,
+) {
+    let mut addresses = SpaceAddressSet::new(space);
+    addresses.insert_address(offset);
+    Self { addresses }
+});
 
+impl ClearLabel {
     /// Clear every label in a set of addresses.
     pub fn from_set(addresses: SpaceAddressSet) -> Self {
         Self { addresses }

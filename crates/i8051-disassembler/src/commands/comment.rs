@@ -3,22 +3,23 @@ use crate::db::{Db, Error};
 
 use super::{Apply, Command, Environment, boxed};
 
-register_commands!(SetComment, ClearComment);
-
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SetComment {
     pub address: SpaceAddressValue,
     pub comment: String,
 }
 
-impl SetComment {
-    pub fn new(space: AddressSpace, offset: AddressValue, comment: impl Into<String>) -> Self {
-        Self {
-            address: (space, offset).into(),
-            comment: comment.into(),
-        }
+register!(SetComment(
+    /// Attach `comment` to the code address `offset`.
+    space: AddressSpace,
+    offset: AddressValue,
+    comment: impl Into<String>,
+) {
+    Self {
+        address: (space, offset).into(),
+        comment: comment.into(),
     }
-}
+});
 
 impl Apply for SetComment {
     fn apply(
@@ -43,14 +44,17 @@ pub struct ClearComment {
     pub addresses: SpaceAddressSet,
 }
 
-impl ClearComment {
-    /// Clear the comment at a single address.
-    pub fn new(space: AddressSpace, offset: AddressValue) -> Self {
-        let mut addresses = SpaceAddressSet::new(space);
-        addresses.insert_address(offset);
-        Self { addresses }
-    }
+register!(ClearComment(
+    /// Remove the comment at the code address `offset`.
+    space: AddressSpace,
+    offset: AddressValue,
+) {
+    let mut addresses = SpaceAddressSet::new(space);
+    addresses.insert_address(offset);
+    Self { addresses }
+});
 
+impl ClearComment {
     /// Clear every comment in a set of addresses.
     pub fn from_set(addresses: SpaceAddressSet) -> Self {
         Self { addresses }

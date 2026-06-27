@@ -45,10 +45,10 @@ pub fn from_dsl(input: &str) -> Result<Box<dyn Command>, DslError> {
     let Value::Call { name, kwargs } = parser::parse_command(input)? else {
         return Err(DslError::new(0, "expected a command call"));
     };
-    let parse = COMMANDS
+    let entry = COMMANDS
         .get(name.as_str())
         .ok_or_else(|| DslError::new(0, format!("unknown command {name}")))?;
-    parse(kwargs)
+    (entry.parse)(kwargs)
 }
 
 /// Render many commands, one per line.

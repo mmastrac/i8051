@@ -3,20 +3,21 @@ use crate::db::{Db, Error};
 
 use super::{Apply, ClearEquivalents, Command, Environment, boxed};
 
-register_commands!(AutoDisassemble);
-
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AutoDisassemble {
     pub address: SpaceAddressValue,
 }
 
-impl AutoDisassemble {
-    pub fn new(space: AddressSpace, start: AddressValue) -> Self {
-        Self {
-            address: (space, start).into(),
-        }
+register!(AutoDisassemble(
+    /// Recursively disassemble code starting at `offset`, following control
+    /// flow and marking reachable bytes as code.
+    space: AddressSpace,
+    offset: AddressValue,
+) {
+    Self {
+        address: (space, offset).into(),
     }
-}
+});
 
 impl Apply for AutoDisassemble {
     fn apply(

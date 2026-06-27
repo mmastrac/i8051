@@ -3,22 +3,23 @@ use crate::db::{Db, Error, Function};
 
 use super::{Apply, Command, Environment, boxed};
 
-register_commands!(SetFunction, ClearFunction);
-
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SetFunction {
     pub address: SpaceAddressValue,
     pub function: Function,
 }
 
-impl SetFunction {
-    pub fn new(space: AddressSpace, offset: AddressValue, function: Function) -> Self {
-        Self {
-            address: (space, offset).into(),
-            function,
-        }
+register!(SetFunction(
+    /// Define a function at the code address `offset`.
+    space: AddressSpace,
+    offset: AddressValue,
+    function: Function,
+) {
+    Self {
+        address: (space, offset).into(),
+        function,
     }
-}
+});
 
 impl Apply for SetFunction {
     fn apply(
@@ -43,14 +44,17 @@ pub struct ClearFunction {
     pub addresses: SpaceAddressSet,
 }
 
-impl ClearFunction {
-    /// Clear the function at a single address.
-    pub fn new(space: AddressSpace, offset: AddressValue) -> Self {
-        let mut addresses = SpaceAddressSet::new(space);
-        addresses.insert_address(offset);
-        Self { addresses }
-    }
+register!(ClearFunction(
+    /// Remove the function defined at the code address `offset`.
+    space: AddressSpace,
+    offset: AddressValue,
+) {
+    let mut addresses = SpaceAddressSet::new(space);
+    addresses.insert_address(offset);
+    Self { addresses }
+});
 
+impl ClearFunction {
     /// Clear every function in a set of addresses.
     pub fn from_set(addresses: SpaceAddressSet) -> Self {
         Self { addresses }

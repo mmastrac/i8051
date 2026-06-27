@@ -6,8 +6,6 @@ use crate::region::ByteRange;
 
 use super::{Apply, Command, Environment, boxed};
 
-register_commands!(MapBytes, ClearBytes, SetConstantBytes);
-
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MapBytes {
     pub address: SpaceAddressValue,
@@ -16,22 +14,22 @@ pub struct MapBytes {
     pub size: AddressValue,
 }
 
-impl MapBytes {
-    pub fn new(
-        space: AddressSpace,
-        offset: AddressValue,
-        file: impl Into<String>,
-        file_offset: usize,
-        size: AddressValue,
-    ) -> Self {
-        Self {
-            address: (space, offset).into(),
-            file: file.into(),
-            file_offset,
-            size,
-        }
+register!(MapBytes(
+    /// Map `size` bytes from `file` (at `file_offset`) into the address space
+    /// starting at `offset`.
+    space: AddressSpace,
+    offset: AddressValue,
+    file: impl Into<String>,
+    file_offset: usize,
+    size: AddressValue,
+) {
+    Self {
+        address: (space, offset).into(),
+        file: file.into(),
+        file_offset,
+        size,
     }
-}
+});
 
 impl Apply for MapBytes {
     fn apply(
@@ -67,14 +65,18 @@ pub struct ClearBytes {
     pub addresses: SpaceAddressSet,
 }
 
-impl ClearBytes {
-    /// Clear a single contiguous range.
-    pub fn new(space: AddressSpace, offset: AddressValue, size: AddressValue) -> Self {
-        let mut addresses = SpaceAddressSet::new(space);
-        addresses.insert(offset..offset + size);
-        Self { addresses }
-    }
+register!(ClearBytes(
+    /// Unmap the `size` bytes starting at `offset`.
+    space: AddressSpace,
+    offset: AddressValue,
+    size: AddressValue,
+) {
+    let mut addresses = SpaceAddressSet::new(space);
+    addresses.insert(offset..offset + size);
+    Self { addresses }
+});
 
+impl ClearBytes {
     /// Clear an arbitrary set of byte ranges in one command.
     pub fn from_set(addresses: SpaceAddressSet) -> Self {
         Self { addresses }
@@ -107,14 +109,18 @@ pub struct SetConstantBytes {
     pub value: u8,
 }
 
-impl SetConstantBytes {
-    pub fn new(space: AddressSpace, offset: AddressValue, size: AddressValue, value: u8) -> Self {
-        Self {
-            range: (space, AddressRange::new(offset, offset + size)).into(),
-            value,
-        }
+register!(SetConstantBytes(
+    /// Fill the `size` bytes starting at `offset` with the constant `value`.
+    space: AddressSpace,
+    offset: AddressValue,
+    size: AddressValue,
+    value: u8,
+) {
+    Self {
+        range: (space, AddressRange::new(offset, offset + size)).into(),
+        value,
     }
-}
+});
 
 impl Apply for SetConstantBytes {
     fn apply(

@@ -265,8 +265,8 @@ mod tests {
     use std::io;
 
     use super::*;
-    use crate::address::XrefType;
     use crate::address::SpaceAddressSet;
+    use crate::address::XrefType;
     use crate::commands::{
         AutoDisassemble, ClearBytes, ClearLabel, Command, MapBytes, SetConstantBytes, boxed,
     };
