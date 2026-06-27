@@ -272,17 +272,12 @@ mod tests {
     #[test]
     fn registry_captures_constructor_signature() {
         let entry = COMMANDS.get("set_label").expect("set_label is registered");
-        assert!(
-            entry.doc.contains("Name the code address"),
-            "doc: {:?}",
-            entry.doc
-        );
+        assert!(entry.doc.contains("Name the code"), "doc: {:?}", entry.doc);
         let args: Vec<(&str, &str)> = entry.args.iter().map(|a| (a.name, a.ty)).collect();
         assert_eq!(
             args,
             [
-                ("space", "AddressSpace"),
-                ("offset", "AddressValue"),
+                ("address", "impl Into<SpaceAddressValue>"),
                 ("label", "impl Into<String>"),
             ]
         );

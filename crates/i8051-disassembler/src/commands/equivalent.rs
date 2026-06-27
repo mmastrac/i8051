@@ -1,7 +1,10 @@
-use crate::address::{AddressSpace, AddressValue, SpaceAddressSet, SpaceAddressValue};
+use crate::address::{SpaceAddressSet, SpaceAddressValue};
 use crate::db::{Db, Equivalent, Error};
 
 use super::{Apply, Command, Environment, boxed};
+
+#[cfg(test)]
+use crate::address::AddressSpace;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SetEquivalent {
@@ -11,13 +14,12 @@ pub struct SetEquivalent {
 
 register!(SetEquivalent(
     /// Set the disassembly equivalent (how the bytes are interpreted) at the
-    /// code address `offset`.
-    space: AddressSpace,
-    offset: AddressValue,
+    /// code `address`.
+    address: impl Into<SpaceAddressValue>,
     equivalent: Equivalent,
 ) {
     Self {
-        address: (space, offset).into(),
+        address: address.into(),
         equivalent,
     }
 });
@@ -37,7 +39,7 @@ impl Apply for SetEquivalent {
         let span = region.equivalent_span(offset, &equivalent)?;
         let before = region.snapshot_equivalents(offset, span);
         region.set_equivalent(offset, equivalent)?;
-        let mut undo = vec![boxed(ClearEquivalents::new(space, offset, span))];
+        let mut undo = vec![boxed(ClearEquivalents::new((space, offset..offset + span)))];
         for (start, range) in before {
             undo.push(boxed(SetEquivalent {
                 address: (space, start).into(),
@@ -54,24 +56,13 @@ pub struct ClearEquivalents {
 }
 
 register!(ClearEquivalents(
-    /// Clear disassembly equivalents over the `size` bytes starting at the code
-    /// address `offset`.
-    space: AddressSpace,
-    offset: AddressValue,
-    size: AddressValue,
+    /// Clear disassembly equivalents over the given `addresses`.
+    addresses: impl Into<SpaceAddressSet>,
 ) {
-    let mut addresses = SpaceAddressSet::new(space);
-    addresses.insert(offset..offset + size);
-    Self { addresses }
-});
-
-impl ClearEquivalents {
-    /// Clear equivalents over an arbitrary set of addresses (e.g. an undo that
-    /// spans many disjoint spots).
-    pub fn from_set(addresses: SpaceAddressSet) -> Self {
-        Self { addresses }
+    Self {
+        addresses: addresses.into(),
     }
-}
+});
 
 impl Apply for ClearEquivalents {
     fn apply(

@@ -1,4 +1,4 @@
-use crate::address::{AddressRange, AddressSpace, SpaceAddressRange};
+use crate::address::SpaceAddressRange;
 use crate::db::{Db, Error, Note, NoteId};
 use crate::store::fields;
 
@@ -12,13 +12,12 @@ pub struct SetNote {
 }
 
 register!(SetNote(
-    /// Attach `note` to the code address range `range`.
-    space: AddressSpace,
-    range: AddressRange,
+    /// Attach `note` to the code address range `address`.
+    address: impl Into<SpaceAddressRange>,
     note: Note,
 ) {
     Self {
-        address: (space, range).into(),
+        address: address.into(),
         note,
     }
 });

@@ -1,4 +1,4 @@
-use crate::address::{AddressSpace, AddressValue, SpaceAddressSet, SpaceAddressValue};
+use crate::address::{SpaceAddressSet, SpaceAddressValue};
 use crate::db::{Db, Error};
 
 use super::{Apply, Command, Environment, boxed};
@@ -10,13 +10,12 @@ pub struct SetComment {
 }
 
 register!(SetComment(
-    /// Attach `comment` to the code address `offset`.
-    space: AddressSpace,
-    offset: AddressValue,
+    /// Attach `comment` to the code `address`.
+    address: impl Into<SpaceAddressValue>,
     comment: impl Into<String>,
 ) {
     Self {
-        address: (space, offset).into(),
+        address: address.into(),
         comment: comment.into(),
     }
 });
@@ -34,7 +33,7 @@ impl Apply for SetComment {
         region.set_comment(offset, &comment);
         Ok(match before {
             Some(comment) => vec![boxed(SetComment { address, comment })],
-            None => vec![boxed(ClearComment::new(space, offset))],
+            None => vec![boxed(ClearComment::new((space, offset)))],
         })
     }
 }
@@ -45,21 +44,13 @@ pub struct ClearComment {
 }
 
 register!(ClearComment(
-    /// Remove the comment at the code address `offset`.
-    space: AddressSpace,
-    offset: AddressValue,
+    /// Remove comments at the given `addresses`.
+    addresses: impl Into<SpaceAddressSet>,
 ) {
-    let mut addresses = SpaceAddressSet::new(space);
-    addresses.insert_address(offset);
-    Self { addresses }
-});
-
-impl ClearComment {
-    /// Clear every comment in a set of addresses.
-    pub fn from_set(addresses: SpaceAddressSet) -> Self {
-        Self { addresses }
+    Self {
+        addresses: addresses.into(),
     }
-}
+});
 
 impl Apply for ClearComment {
     fn apply(
@@ -73,7 +64,7 @@ impl Apply for ClearComment {
         let mut undo = Vec::new();
         for range in addresses.ranges() {
             for (offset, comment) in region.clear_comments_in(range) {
-                undo.push(boxed(SetComment::new(space, offset, comment)));
+                undo.push(boxed(SetComment::new((space, offset), comment)));
             }
         }
         Ok(undo)

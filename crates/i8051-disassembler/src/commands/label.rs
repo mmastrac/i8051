@@ -1,7 +1,10 @@
-use crate::address::{AddressSpace, AddressValue, SpaceAddressSet, SpaceAddressValue};
+use crate::address::{SpaceAddressSet, SpaceAddressValue};
 use crate::db::{Db, Error};
 
 use super::{Apply, Command, Environment, boxed};
+
+#[cfg(test)]
+use crate::address::AddressSpace;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SetLabel {
@@ -10,13 +13,12 @@ pub struct SetLabel {
 }
 
 register!(SetLabel(
-    /// Name the code address `offset` with `label`.
-    space: AddressSpace,
-    offset: AddressValue,
+    /// Name the code `address` with `label`.
+    address: impl Into<SpaceAddressValue>,
     label: impl Into<String>,
 ) {
     Self {
-        address: (space, offset).into(),
+        address: address.into(),
         label: label.into(),
     }
 });
@@ -34,7 +36,7 @@ impl Apply for SetLabel {
         region.set_label(offset, &label);
         Ok(match before {
             Some(label) => vec![boxed(SetLabel { address, label })],
-            None => vec![boxed(ClearLabel::new(space, offset))],
+            None => vec![boxed(ClearLabel::new((space, offset)))],
         })
     }
 }
@@ -45,21 +47,13 @@ pub struct ClearLabel {
 }
 
 register!(ClearLabel(
-    /// Remove the label at the code address `offset`.
-    space: AddressSpace,
-    offset: AddressValue,
+    /// Remove labels at the given `addresses`.
+    addresses: impl Into<SpaceAddressSet>,
 ) {
-    let mut addresses = SpaceAddressSet::new(space);
-    addresses.insert_address(offset);
-    Self { addresses }
-});
-
-impl ClearLabel {
-    /// Clear every label in a set of addresses.
-    pub fn from_set(addresses: SpaceAddressSet) -> Self {
-        Self { addresses }
+    Self {
+        addresses: addresses.into(),
     }
-}
+});
 
 impl Apply for ClearLabel {
     fn apply(
@@ -73,7 +67,7 @@ impl Apply for ClearLabel {
         let mut undo = Vec::new();
         for range in addresses.ranges() {
             for (offset, label) in region.clear_labels_in(range) {
-                undo.push(boxed(SetLabel::new(space, offset, label)));
+                undo.push(boxed(SetLabel::new((space, offset), label)));
             }
         }
         Ok(undo)

@@ -84,7 +84,7 @@ mod tests {
 
     #[test]
     fn round_trip_auto_disassemble() {
-        let command = commands::boxed(AutoDisassemble::new(AddressSpace::Code, 0x1234));
+        let command = commands::boxed(AutoDisassemble::new((AddressSpace::Code, 0x1234)));
         let dsl = to_dsl(&*command);
         assert_eq!(dsl, "auto_disassemble(address=CODE:0x1234)");
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
@@ -92,7 +92,7 @@ mod tests {
 
     #[test]
     fn round_trip_clear_bytes_range() {
-        let command = commands::boxed(ClearBytes::new(AddressSpace::Code, 0x10, 0x10));
+        let command = commands::boxed(ClearBytes::new((AddressSpace::Code, 0x10..0x20)));
         let dsl = to_dsl(&*command);
         assert_eq!(dsl, "clear_bytes(addresses=CODE:{0x10..0x20})");
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn round_trip_set_label() {
-        let command = commands::boxed(SetLabel::new(AddressSpace::Code, 0x100, "reset_vector"));
+        let command = commands::boxed(SetLabel::new((AddressSpace::Code, 0x100), "reset_vector"));
         let dsl = to_dsl(&*command);
         assert_eq!(dsl, "set_label(address=CODE:0x100, label=\"reset_vector\")");
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
@@ -109,8 +109,7 @@ mod tests {
     #[test]
     fn round_trip_multiline_string() {
         let command = commands::boxed(SetComment::new(
-            AddressSpace::Code,
-            0x10,
+            (AddressSpace::Code, 0x10),
             "line one\nline two",
         ));
         let dsl = to_dsl(&*command);
@@ -120,7 +119,7 @@ mod tests {
 
     #[test]
     fn round_trip_raw_string_with_quotes() {
-        let command = commands::boxed(SetComment::new(AddressSpace::Code, 0x10, "say \"hello\""));
+        let command = commands::boxed(SetComment::new((AddressSpace::Code, 0x10), "say \"hello\""));
         let dsl = to_dsl(&*command);
         assert!(dsl.contains("r#\""));
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
@@ -129,8 +128,7 @@ mod tests {
     #[test]
     fn round_trip_set_equivalent_code() {
         let command = commands::boxed(SetEquivalent::new(
-            AddressSpace::Code,
-            0,
+            (AddressSpace::Code, 0),
             Equivalent::Code(vec![None]),
         ));
         let dsl = to_dsl(&*command);
@@ -144,8 +142,7 @@ mod tests {
     #[test]
     fn round_trip_set_equivalent_data() {
         let command = commands::boxed(SetEquivalent::new(
-            AddressSpace::Code,
-            0x20,
+            (AddressSpace::Code, 0x20),
             Equivalent::Data(DataType::Byte, 4),
         ));
         let dsl = to_dsl(&*command);
@@ -159,8 +156,7 @@ mod tests {
     #[test]
     fn round_trip_set_function() {
         let command = commands::boxed(SetFunction::new(
-            AddressSpace::Code,
-            0,
+            (AddressSpace::Code, 0),
             Function {
                 addr: crate::address::PhysicalAddr {
                     space: AddressSpace::Code,
@@ -181,8 +177,7 @@ mod tests {
     fn round_trip_set_note_minimal() {
         let note = Note::new(None, "interesting spot");
         let command = commands::boxed(SetNote::new(
-            AddressSpace::Code,
-            AddressRange::new(0x100, 0x120),
+            (AddressSpace::Code, AddressRange::new(0x100, 0x120)),
             note.clone(),
         ));
         let dsl = to_dsl(&*command);
@@ -213,7 +208,12 @@ mod tests {
 
     #[test]
     fn round_trip_map_bytes() {
-        let command = commands::boxed(MapBytes::new(AddressSpace::Code, 0, "test.bin", 0, 16));
+        let command = commands::boxed(MapBytes::new(
+            (AddressSpace::Code, 0),
+            "test.bin",
+            0usize,
+            16u32,
+        ));
         let dsl = to_dsl(&*command);
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
     }

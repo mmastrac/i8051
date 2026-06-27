@@ -1,4 +1,4 @@
-use crate::address::{AddressSpace, AddressValue, SpaceAddressSet, SpaceAddressValue};
+use crate::address::{SpaceAddressSet, SpaceAddressValue};
 use crate::db::{Db, Error, Function};
 
 use super::{Apply, Command, Environment, boxed};
@@ -10,13 +10,12 @@ pub struct SetFunction {
 }
 
 register!(SetFunction(
-    /// Define a function at the code address `offset`.
-    space: AddressSpace,
-    offset: AddressValue,
+    /// Define a function at the code `address`.
+    address: impl Into<SpaceAddressValue>,
     function: Function,
 ) {
     Self {
-        address: (space, offset).into(),
+        address: address.into(),
         function,
     }
 });
@@ -34,7 +33,7 @@ impl Apply for SetFunction {
         region.set_function(function);
         Ok(match before {
             Some(function) => vec![boxed(SetFunction { address, function })],
-            None => vec![boxed(ClearFunction::new(space, offset))],
+            None => vec![boxed(ClearFunction::new((space, offset)))],
         })
     }
 }
@@ -45,21 +44,13 @@ pub struct ClearFunction {
 }
 
 register!(ClearFunction(
-    /// Remove the function defined at the code address `offset`.
-    space: AddressSpace,
-    offset: AddressValue,
+    /// Remove functions defined at the given `addresses`.
+    addresses: impl Into<SpaceAddressSet>,
 ) {
-    let mut addresses = SpaceAddressSet::new(space);
-    addresses.insert_address(offset);
-    Self { addresses }
-});
-
-impl ClearFunction {
-    /// Clear every function in a set of addresses.
-    pub fn from_set(addresses: SpaceAddressSet) -> Self {
-        Self { addresses }
+    Self {
+        addresses: addresses.into(),
     }
-}
+});
 
 impl Apply for ClearFunction {
     fn apply(
@@ -73,7 +64,7 @@ impl Apply for ClearFunction {
         let mut undo = Vec::new();
         for range in addresses.ranges() {
             for (offset, function) in region.clear_functions_in(range) {
-                undo.push(boxed(SetFunction::new(space, offset, function)));
+                undo.push(boxed(SetFunction::new((space, offset), function)));
             }
         }
         Ok(undo)

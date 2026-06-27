@@ -1,4 +1,4 @@
-use crate::address::{AddressSpace, AddressValue, SpaceAddressSet, SpaceAddressValue};
+use crate::address::{SpaceAddressSet, SpaceAddressValue};
 use crate::db::{Db, Error};
 
 use super::{Apply, ClearEquivalents, Command, Environment, boxed};
@@ -9,13 +9,12 @@ pub struct AutoDisassemble {
 }
 
 register!(AutoDisassemble(
-    /// Recursively disassemble code starting at `offset`, following control
+    /// Recursively disassemble code starting at `address`, following control
     /// flow and marking reachable bytes as code.
-    space: AddressSpace,
-    offset: AddressValue,
+    address: impl Into<SpaceAddressValue>,
 ) {
     Self {
-        address: (space, offset).into(),
+        address: address.into(),
     }
 });
 
@@ -41,6 +40,6 @@ impl Apply for AutoDisassemble {
         for addr in cleared {
             addresses.insert_address(addr);
         }
-        Ok(vec![boxed(ClearEquivalents::from_set(addresses))])
+        Ok(vec![boxed(ClearEquivalents::new(addresses))])
     }
 }

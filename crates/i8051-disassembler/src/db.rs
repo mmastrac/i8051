@@ -434,7 +434,12 @@ loc_0010:
             .with_file("other.bin", vec![4, 5]);
         let mut db = Db::new();
         db.apply(
-            boxed(MapBytes::new(AddressSpace::Code, 0, "test.bin", 0, 3)),
+            boxed(MapBytes::new(
+                (AddressSpace::Code, 0),
+                "test.bin",
+                0usize,
+                3u32,
+            )),
             Some(&env),
         )
         .unwrap();
@@ -444,7 +449,12 @@ loc_0010:
 
         let undo = db
             .apply(
-                boxed(MapBytes::new(AddressSpace::Code, 0, "other.bin", 0, 2)),
+                boxed(MapBytes::new(
+                    (AddressSpace::Code, 0),
+                    "other.bin",
+                    0usize,
+                    2u32,
+                )),
                 Some(&env),
             )
             .unwrap();
@@ -465,13 +475,18 @@ loc_0010:
         let env = TestEnvironment::new().with_file("test.bin", vec![1, 2, 3, 4, 5]);
         let mut db = Db::new();
         db.apply(
-            boxed(MapBytes::new(AddressSpace::Code, 0, "test.bin", 0, 5)),
+            boxed(MapBytes::new(
+                (AddressSpace::Code, 0),
+                "test.bin",
+                0usize,
+                5u32,
+            )),
             Some(&env),
         )
         .unwrap();
 
         let undo = db
-            .apply(boxed(ClearBytes::new(AddressSpace::Code, 1, 2)), None)
+            .apply(boxed(ClearBytes::new((AddressSpace::Code, 1..3))), None)
             .unwrap();
         assert_eq!(
             db.region(AddressSpace::Code).unwrap().bytes_at(0, 5),
@@ -490,14 +505,19 @@ loc_0010:
         let env = TestEnvironment::new().with_file("test.bin", vec![1, 2, 3]);
         let mut db = Db::new();
         db.apply(
-            boxed(MapBytes::new(AddressSpace::Code, 0, "test.bin", 0, 3)),
+            boxed(MapBytes::new(
+                (AddressSpace::Code, 0),
+                "test.bin",
+                0usize,
+                3u32,
+            )),
             Some(&env),
         )
         .unwrap();
 
         let undo = db
             .apply(
-                boxed(SetConstantBytes::new(AddressSpace::Code, 0, 2, 0xFF)),
+                boxed(SetConstantBytes::new((AddressSpace::Code, 0..2), 0xFF)),
                 None,
             )
             .unwrap();
@@ -519,10 +539,9 @@ loc_0010:
         let mut db = Db::new();
         db.apply(
             boxed(MapBytes::new(
-                AddressSpace::Code,
-                0,
+                (AddressSpace::Code, 0),
                 "test.bin",
-                0,
+                0usize,
                 TEST_BINARY.len() as AddressValue,
             )),
             Some(&env),
@@ -530,7 +549,7 @@ loc_0010:
         .unwrap();
 
         let undo = db
-            .apply(boxed(AutoDisassemble::new(AddressSpace::Code, 0)), None)
+            .apply(boxed(AutoDisassemble::new((AddressSpace::Code, 0))), None)
             .unwrap();
 
         // Disassembly created code equivalents, and the undo is a *single*
@@ -554,7 +573,7 @@ loc_0010:
         // Clear a single range covering the first two labels in one command.
         let mut set = SpaceAddressSet::new(AddressSpace::Code);
         set.insert(0x10..0x18);
-        let undo = db.apply(boxed(ClearLabel::from_set(set)), None).unwrap();
+        let undo = db.apply(boxed(ClearLabel::new(set)), None).unwrap();
 
         let code = db.region(AddressSpace::Code).unwrap();
         assert_eq!(code.get_label(0x10), None);

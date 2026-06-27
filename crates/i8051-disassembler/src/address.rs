@@ -71,6 +71,15 @@ impl From<(AddressSpace, AddressRange)> for SpaceAddressRange {
     }
 }
 
+impl From<(AddressSpace, Range<AddressValue>)> for SpaceAddressRange {
+    fn from((space, range): (AddressSpace, Range<AddressValue>)) -> Self {
+        Self {
+            space,
+            range: AddressRange::new(range.start, range.end),
+        }
+    }
+}
+
 impl Serialize for SpaceAddressRange {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_newtype_struct(
@@ -135,6 +144,30 @@ impl SpaceAddressSet {
     /// The coalesced ranges, in ascending order.
     pub fn ranges(&self) -> impl Iterator<Item = Range<AddressValue>> + '_ {
         self.set.iter().cloned()
+    }
+}
+
+impl From<(AddressSpace, AddressValue)> for SpaceAddressSet {
+    fn from((space, offset): (AddressSpace, AddressValue)) -> Self {
+        let mut set = Self::new(space);
+        set.insert_address(offset);
+        set
+    }
+}
+
+impl From<(AddressSpace, Range<AddressValue>)> for SpaceAddressSet {
+    fn from((space, range): (AddressSpace, Range<AddressValue>)) -> Self {
+        let mut set = Self::new(space);
+        set.insert(range);
+        set
+    }
+}
+
+impl From<(AddressSpace, AddressRange)> for SpaceAddressSet {
+    fn from((space, range): (AddressSpace, AddressRange)) -> Self {
+        let mut set = Self::new(space);
+        set.insert(range.start..range.end);
+        set
     }
 }
 
@@ -412,6 +445,25 @@ mod tests {
     fn unknown_space_is_rejected() {
         let err = serde_json::from_str::<SpaceAddressValue>(r#"["NOPE",0]"#).unwrap_err();
         assert!(err.to_string().contains("unknown address space"));
+    }
+
+    #[test]
+    fn ergonomic_from_conversions() {
+        // `SpaceAddressRange` from a half-open std range (end is exclusive).
+        let r: SpaceAddressRange = (AddressSpace::Code, 0x10..0x20).into();
+        assert_eq!(r.space, AddressSpace::Code);
+        assert_eq!(r.range, AddressRange::new(0x10, 0x20));
+
+        // `SpaceAddressSet` from a singleton, a std range, and an `AddressRange`.
+        let single: SpaceAddressSet = (AddressSpace::Code, 0x10).into();
+        assert!(single.contains(0x10) && !single.contains(0x11));
+
+        let range: SpaceAddressSet = (AddressSpace::Code, 0x10..0x13).into();
+        assert!(range.contains(0x10) && range.contains(0x12) && !range.contains(0x13));
+
+        let from_addr_range: SpaceAddressSet =
+            (AddressSpace::Code, AddressRange::new(0x20, 0x22)).into();
+        assert!(from_addr_range.contains(0x21) && !from_addr_range.contains(0x22));
     }
 
     #[test]

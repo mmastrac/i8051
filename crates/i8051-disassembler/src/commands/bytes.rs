@@ -1,10 +1,11 @@
-use crate::address::{
-    AddressRange, AddressSpace, AddressValue, SpaceAddressRange, SpaceAddressSet, SpaceAddressValue,
-};
+use crate::address::{AddressValue, SpaceAddressRange, SpaceAddressSet, SpaceAddressValue};
 use crate::db::{Db, Error};
 use crate::region::ByteRange;
 
 use super::{Apply, Command, Environment, boxed};
+
+#[cfg(test)]
+use crate::address::{AddressRange, AddressSpace};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MapBytes {
@@ -16,18 +17,17 @@ pub struct MapBytes {
 
 register!(MapBytes(
     /// Map `size` bytes from `file` (at `file_offset`) into the address space
-    /// starting at `offset`.
-    space: AddressSpace,
-    offset: AddressValue,
+    /// starting at `address`.
+    address: impl Into<SpaceAddressValue>,
     file: impl Into<String>,
-    file_offset: usize,
-    size: AddressValue,
+    file_offset: impl Into<usize>,
+    size: impl Into<AddressValue>,
 ) {
     Self {
-        address: (space, offset).into(),
+        address: address.into(),
         file: file.into(),
-        file_offset,
-        size,
+        file_offset: file_offset.into(),
+        size: size.into(),
     }
 });
 
@@ -66,22 +66,13 @@ pub struct ClearBytes {
 }
 
 register!(ClearBytes(
-    /// Unmap the `size` bytes starting at `offset`.
-    space: AddressSpace,
-    offset: AddressValue,
-    size: AddressValue,
+    /// Unmap the bytes covered by `addresses`.
+    addresses: impl Into<SpaceAddressSet>,
 ) {
-    let mut addresses = SpaceAddressSet::new(space);
-    addresses.insert(offset..offset + size);
-    Self { addresses }
-});
-
-impl ClearBytes {
-    /// Clear an arbitrary set of byte ranges in one command.
-    pub fn from_set(addresses: SpaceAddressSet) -> Self {
-        Self { addresses }
+    Self {
+        addresses: addresses.into(),
     }
-}
+});
 
 impl Apply for ClearBytes {
     fn apply(
@@ -110,14 +101,12 @@ pub struct SetConstantBytes {
 }
 
 register!(SetConstantBytes(
-    /// Fill the `size` bytes starting at `offset` with the constant `value`.
-    space: AddressSpace,
-    offset: AddressValue,
-    size: AddressValue,
+    /// Fill the bytes covered by `range` with the constant `value`.
+    range: impl Into<SpaceAddressRange>,
     value: u8,
 ) {
     Self {
-        range: (space, AddressRange::new(offset, offset + size)).into(),
+        range: range.into(),
         value,
     }
 });
@@ -151,13 +140,12 @@ fn undo_byte_ranges(
     ranges: Vec<(AddressValue, ByteRange)>,
 ) -> Vec<Box<dyn Command>> {
     let space = addresses.space;
-    let mut undo = vec![boxed(ClearBytes::from_set(addresses))];
+    let mut undo = vec![boxed(ClearBytes::new(addresses))];
     for (start, range) in ranges {
         match range {
             ByteRange::Mapped(file, file_offset, data) => {
                 undo.push(boxed(MapBytes::new(
-                    space,
-                    start,
+                    (space, start),
                     file,
                     file_offset,
                     data.len() as AddressValue,
@@ -165,9 +153,7 @@ fn undo_byte_ranges(
             }
             ByteRange::Constant(count, value) => {
                 undo.push(boxed(SetConstantBytes::new(
-                    space,
-                    start,
-                    count as AddressValue,
+                    (space, start..start + count as AddressValue),
                     value,
                 )));
             }

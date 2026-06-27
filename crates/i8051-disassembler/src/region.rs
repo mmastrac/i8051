@@ -570,33 +570,34 @@ impl Region {
             match range {
                 ByteRange::Mapped(file, file_offset, data) => {
                     commands.push(boxed(MapBytes::new(
-                        space,
-                        offset,
+                        (space, offset),
                         file.clone(),
                         *file_offset,
                         data.len() as AddressValue,
                     )));
                 }
                 ByteRange::Constant(size, value) => {
-                    commands.push(boxed(SetConstantBytes::new(space, offset, *size, *value)));
+                    commands.push(boxed(SetConstantBytes::new(
+                        (space, offset..offset + *size),
+                        *value,
+                    )));
                 }
             }
         }
         for (&offset, equivalent_range) in &self.equivalents {
             commands.push(boxed(SetEquivalent::new(
-                space,
-                offset,
+                (space, offset),
                 equivalent_range.equivalent.clone(),
             )));
         }
         for (&offset, label) in &self.labels {
-            commands.push(boxed(SetLabel::new(space, offset, label.clone())));
+            commands.push(boxed(SetLabel::new((space, offset), label.clone())));
         }
         for (&offset, comment) in &self.comments {
-            commands.push(boxed(SetComment::new(space, offset, comment.clone())));
+            commands.push(boxed(SetComment::new((space, offset), comment.clone())));
         }
         for (&offset, function) in &self.functions {
-            commands.push(boxed(SetFunction::new(space, offset, function.clone())));
+            commands.push(boxed(SetFunction::new((space, offset), function.clone())));
         }
         commands
     }
