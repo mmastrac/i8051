@@ -18,18 +18,11 @@ pub struct MapBytes {
 register!(MapBytes(
     /// Map `size` bytes from `file` (at `file_offset`) into the address space
     /// starting at `address`.
-    address: impl Into<SpaceAddressValue>,
-    file: impl Into<String>,
-    file_offset: impl Into<usize>,
-    size: impl Into<AddressValue>,
-) {
-    Self {
-        address: address.into(),
-        file: file.into(),
-        file_offset: file_offset.into(),
-        size: size.into(),
-    }
-});
+    address: SpaceAddressValue,
+    file: String,
+    file_offset: usize,
+    size: AddressValue,
+));
 
 impl Apply for MapBytes {
     fn apply(
@@ -67,12 +60,8 @@ pub struct ClearBytes {
 
 register!(ClearBytes(
     /// Unmap the bytes covered by `addresses`.
-    addresses: impl Into<SpaceAddressSet>,
-) {
-    Self {
-        addresses: addresses.into(),
-    }
-});
+    addresses: SpaceAddressSet,
+));
 
 impl Apply for ClearBytes {
     fn apply(
@@ -102,14 +91,9 @@ pub struct SetConstantBytes {
 
 register!(SetConstantBytes(
     /// Fill the bytes covered by `range` with the constant `value`.
-    range: impl Into<SpaceAddressRange>,
+    range: SpaceAddressRange,
     value: u8,
-) {
-    Self {
-        range: range.into(),
-        value,
-    }
-});
+));
 
 impl Apply for SetConstantBytes {
     fn apply(

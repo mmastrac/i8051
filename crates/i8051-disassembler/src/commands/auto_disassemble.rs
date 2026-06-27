@@ -11,12 +11,8 @@ pub struct AutoDisassemble {
 register!(AutoDisassemble(
     /// Recursively disassemble code starting at `address`, following control
     /// flow and marking reachable bytes as code.
-    address: impl Into<SpaceAddressValue>,
-) {
-    Self {
-        address: address.into(),
-    }
-});
+    address: SpaceAddressValue,
+));
 
 impl Apply for AutoDisassemble {
     fn apply(

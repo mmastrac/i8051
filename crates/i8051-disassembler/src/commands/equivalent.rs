@@ -15,14 +15,9 @@ pub struct SetEquivalent {
 register!(SetEquivalent(
     /// Set the disassembly equivalent (how the bytes are interpreted) at the
     /// code `address`.
-    address: impl Into<SpaceAddressValue>,
+    address: SpaceAddressValue,
     equivalent: Equivalent,
-) {
-    Self {
-        address: address.into(),
-        equivalent,
-    }
-});
+));
 
 impl Apply for SetEquivalent {
     fn apply(
@@ -57,12 +52,8 @@ pub struct ClearEquivalents {
 
 register!(ClearEquivalents(
     /// Clear disassembly equivalents over the given `addresses`.
-    addresses: impl Into<SpaceAddressSet>,
-) {
-    Self {
-        addresses: addresses.into(),
-    }
-});
+    addresses: SpaceAddressSet,
+));
 
 impl Apply for ClearEquivalents {
     fn apply(

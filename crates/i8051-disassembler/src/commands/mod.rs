@@ -26,34 +26,33 @@ macro_rules! serialize_test {
     };
 }
 
-/// Register a command from a `new(..)`-style constructor.
+/// Register a command from its constructor's argument list.
 ///
-/// Given a doc-commented, typed argument list and a body, this:
-/// - generates the `pub fn new(args) -> Self` constructor,
+/// Each `name: Type` becomes an `impl Into<Type>` parameter of a generated
+/// `pub fn new(..) -> Self` (the struct is built field-by-field via `.into()`,
+/// so argument names must match the payload's field names). This also:
 /// - implements [`Command`] (forwarding `apply` to the [`Apply`] impl), and
 /// - adds a [`CommandEntry`] — the constructor's doc, argument signature, and
 ///   DSL parser — to the link-time [`COMMANDS`] registry under the snake_case
 ///   form of the type name.
 ///
-/// The captured doc + signature let an MCP server enumerate the available
-/// commands and their arguments without any hand-written schema.
+/// Each argument's `Type` is mapped to a semantic [`ArgKind`] via
+/// [`CommandArgType`], so an MCP layer can enumerate commands and their
+/// argument shapes without parsing raw Rust type strings.
 ///
 /// ```ignore
 /// register!(SetLabel(
-///     /// Name the code address `offset`.
-///     space: AddressSpace,
-///     offset: AddressValue,
-///     label: impl Into<String>,
-/// ) {
-///     Self { address: (space, offset).into(), label: label.into() }
-/// });
+///     /// Name the code `address` with `label`.
+///     address: SpaceAddressValue,
+///     label: String,
+/// ));
 /// ```
 macro_rules! register {
     (
         $type:ident (
             $(#[doc = $doc:literal])*
             $($arg:ident : $argty:ty),* $(,)?
-        ) $body:block
+        )
     ) => {
         impl $type {
             const COMMAND_NAME: &'static str = {
@@ -67,7 +66,9 @@ macro_rules! register {
             };
 
             $(#[doc = $doc])*
-            pub fn new($($arg: $argty),*) -> Self $body
+            pub fn new($($arg: impl ::core::convert::Into<$argty>),*) -> Self {
+                Self { $($arg: $arg.into()),* }
+            }
         }
 
         impl $crate::commands::Command for $type {
@@ -105,6 +106,7 @@ macro_rules! register {
                     $crate::commands::CommandArg {
                         name: ::core::stringify!($arg),
                         ty: ::core::stringify!($argty),
+                        kind: <$argty as $crate::commands::CommandArgType>::KIND,
                     }
                 ),*],
                 parse: $crate::commands::parse::<$type>,
@@ -136,8 +138,8 @@ pub use note::{ClearNote, SetNote};
 use scattered_collect::{ScatteredMap, gather};
 use serde::de::DeserializeOwned;
 
-use crate::address::AddressValue;
-use crate::db::{Db, Error};
+use crate::address::{AddressValue, SpaceAddressRange, SpaceAddressSet, SpaceAddressValue};
+use crate::db::{Db, Equivalent, Error, Function, Note, NoteId};
 use crate::store::error::DslError;
 use crate::store::value::Value;
 
@@ -193,12 +195,83 @@ pub fn boxed(command: impl Command + 'static) -> Box<dyn Command> {
 /// stores one monomorphization of this per command.
 pub type CommandParser = fn(BTreeMap<String, Value>) -> Result<Box<dyn Command>, DslError>;
 
+/// The semantic kind of a command-constructor argument, derived from its type
+/// via [`CommandArgType`]. Lets an MCP layer map each argument to a JSON shape
+/// without parsing raw Rust type strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArgKind {
+    /// A single address, e.g. `CODE:0x10`.
+    Address,
+    /// An address range, e.g. `CODE:0x10..0x20`.
+    AddressRange,
+    /// A set of addresses, e.g. `CODE:{0x10, 0x20..0x30}`.
+    AddressSet,
+    /// Free text.
+    Text,
+    /// A byte offset or length.
+    Offset,
+    /// A single byte value.
+    Byte,
+    /// A disassembly equivalent.
+    Equivalent,
+    /// A function definition.
+    Function,
+    /// A note.
+    Note,
+    /// A note id.
+    NoteId,
+}
+
+/// Maps a constructor argument's target type to its [`ArgKind`]. Implemented
+/// for every type accepted by a [`register!`] constructor; a missing impl is a
+/// compile error, so new argument types must be classified here.
+pub trait CommandArgType {
+    const KIND: ArgKind;
+}
+
+impl CommandArgType for SpaceAddressValue {
+    const KIND: ArgKind = ArgKind::Address;
+}
+impl CommandArgType for SpaceAddressRange {
+    const KIND: ArgKind = ArgKind::AddressRange;
+}
+impl CommandArgType for SpaceAddressSet {
+    const KIND: ArgKind = ArgKind::AddressSet;
+}
+impl CommandArgType for String {
+    const KIND: ArgKind = ArgKind::Text;
+}
+impl CommandArgType for usize {
+    const KIND: ArgKind = ArgKind::Offset;
+}
+impl CommandArgType for AddressValue {
+    const KIND: ArgKind = ArgKind::Offset;
+}
+impl CommandArgType for u8 {
+    const KIND: ArgKind = ArgKind::Byte;
+}
+impl CommandArgType for Equivalent {
+    const KIND: ArgKind = ArgKind::Equivalent;
+}
+impl CommandArgType for Function {
+    const KIND: ArgKind = ArgKind::Function;
+}
+impl CommandArgType for Note {
+    const KIND: ArgKind = ArgKind::Note;
+}
+impl CommandArgType for NoteId {
+    const KIND: ArgKind = ArgKind::NoteId;
+}
+
 /// One argument of a command's `new` constructor, captured for introspection
 /// (e.g. an MCP server presenting commands to an LLM).
 #[derive(Debug, Clone, Copy)]
 pub struct CommandArg {
     pub name: &'static str,
+    /// The raw constructor target type, e.g. `"SpaceAddressValue"`.
     pub ty: &'static str,
+    /// The semantic kind, for schema generation.
+    pub kind: ArgKind,
 }
 
 /// A command's registry entry: the constructor's doc comment and argument
@@ -273,12 +346,13 @@ mod tests {
     fn registry_captures_constructor_signature() {
         let entry = COMMANDS.get("set_label").expect("set_label is registered");
         assert!(entry.doc.contains("Name the code"), "doc: {:?}", entry.doc);
-        let args: Vec<(&str, &str)> = entry.args.iter().map(|a| (a.name, a.ty)).collect();
+        let args: Vec<(&str, &str, super::ArgKind)> =
+            entry.args.iter().map(|a| (a.name, a.ty, a.kind)).collect();
         assert_eq!(
             args,
             [
-                ("address", "impl Into<SpaceAddressValue>"),
-                ("label", "impl Into<String>"),
+                ("address", "SpaceAddressValue", super::ArgKind::Address),
+                ("label", "String", super::ArgKind::Text),
             ]
         );
     }
@@ -303,5 +377,25 @@ mod tests {
         ] {
             assert!(COMMANDS.get(name).is_some(), "{name} is not registered");
         }
+    }
+
+    #[test]
+    fn arg_kinds_are_derived_from_types() {
+        use super::ArgKind::*;
+        let kinds = |name: &str| -> Vec<super::ArgKind> {
+            COMMANDS
+                .get(name)
+                .unwrap()
+                .args
+                .iter()
+                .map(|a| a.kind)
+                .collect()
+        };
+        assert_eq!(kinds("map_bytes"), [Address, Text, Offset, Offset]);
+        assert_eq!(kinds("set_constant_bytes"), [AddressRange, Byte]);
+        assert_eq!(kinds("clear_bytes"), [AddressSet]);
+        assert_eq!(kinds("set_equivalent"), [Address, Equivalent]);
+        assert_eq!(kinds("set_note"), [AddressRange, Note]);
+        assert_eq!(kinds("clear_note"), [NoteId]);
     }
 }

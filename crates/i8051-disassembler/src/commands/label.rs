@@ -14,14 +14,9 @@ pub struct SetLabel {
 
 register!(SetLabel(
     /// Name the code `address` with `label`.
-    address: impl Into<SpaceAddressValue>,
-    label: impl Into<String>,
-) {
-    Self {
-        address: address.into(),
-        label: label.into(),
-    }
-});
+    address: SpaceAddressValue,
+    label: String,
+));
 
 impl Apply for SetLabel {
     fn apply(
@@ -48,12 +43,8 @@ pub struct ClearLabel {
 
 register!(ClearLabel(
     /// Remove labels at the given `addresses`.
-    addresses: impl Into<SpaceAddressSet>,
-) {
-    Self {
-        addresses: addresses.into(),
-    }
-});
+    addresses: SpaceAddressSet,
+));
 
 impl Apply for ClearLabel {
     fn apply(

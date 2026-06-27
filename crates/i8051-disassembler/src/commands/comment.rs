@@ -11,14 +11,9 @@ pub struct SetComment {
 
 register!(SetComment(
     /// Attach `comment` to the code `address`.
-    address: impl Into<SpaceAddressValue>,
-    comment: impl Into<String>,
-) {
-    Self {
-        address: address.into(),
-        comment: comment.into(),
-    }
-});
+    address: SpaceAddressValue,
+    comment: String,
+));
 
 impl Apply for SetComment {
     fn apply(
@@ -45,12 +40,8 @@ pub struct ClearComment {
 
 register!(ClearComment(
     /// Remove comments at the given `addresses`.
-    addresses: impl Into<SpaceAddressSet>,
-) {
-    Self {
-        addresses: addresses.into(),
-    }
-});
+    addresses: SpaceAddressSet,
+));
 
 impl Apply for ClearComment {
     fn apply(

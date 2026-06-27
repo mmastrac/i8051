@@ -11,14 +11,9 @@ pub struct SetFunction {
 
 register!(SetFunction(
     /// Define a function at the code `address`.
-    address: impl Into<SpaceAddressValue>,
+    address: SpaceAddressValue,
     function: Function,
-) {
-    Self {
-        address: address.into(),
-        function,
-    }
-});
+));
 
 impl Apply for SetFunction {
     fn apply(
@@ -45,12 +40,8 @@ pub struct ClearFunction {
 
 register!(ClearFunction(
     /// Remove functions defined at the given `addresses`.
-    addresses: impl Into<SpaceAddressSet>,
-) {
-    Self {
-        addresses: addresses.into(),
-    }
-});
+    addresses: SpaceAddressSet,
+));
 
 impl Apply for ClearFunction {
     fn apply(

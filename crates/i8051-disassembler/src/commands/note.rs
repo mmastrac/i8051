@@ -13,14 +13,9 @@ pub struct SetNote {
 
 register!(SetNote(
     /// Attach `note` to the code address range `address`.
-    address: impl Into<SpaceAddressRange>,
+    address: SpaceAddressRange,
     note: Note,
-) {
-    Self {
-        address: address.into(),
-        note,
-    }
-});
+));
 
 impl Apply for SetNote {
     fn apply(
@@ -54,9 +49,7 @@ pub struct ClearNote {
 register!(ClearNote(
     /// Remove the note with the given `id`.
     id: NoteId,
-) {
-    Self { id }
-});
+));
 
 impl Apply for ClearNote {
     fn apply(
