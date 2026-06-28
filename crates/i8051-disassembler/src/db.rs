@@ -4,7 +4,7 @@ use std::range::Range;
 use serde::{Deserialize, Serialize};
 
 use crate::address::{AREA_ORDER, AddressSpace, AddressValue, PhysicalAddr, Xref};
-use crate::commands::{Command, Environment};
+use crate::commands::{Command, Environment, SetNote, boxed};
 use crate::labels::{ImplicitLabels, LabelCollector};
 pub use crate::note::{
     Note, NoteAddressIndex, NoteDb, NoteField, NoteGlobalIndex, NoteId, NotePath, Notes,
@@ -103,6 +103,17 @@ impl Db {
         let mut commands = Vec::new();
         for (&space, region) in &self.regions {
             commands.extend(region.to_commands(space));
+        }
+        // Notes live outside the regions, so emit them separately or a DB would
+        // not round-trip. Iterating by NoteId (Lamport order) is deterministic,
+        // and SetNote carries the note's id, so a reload restores it unchanged.
+        for (id, note) in self.notes.notes.iter() {
+            if let Some((space, range)) = self.notes.location(id) {
+                commands.push(boxed(SetNote {
+                    address: (space, range).into(),
+                    note: note.clone(),
+                }));
+            }
         }
         commands
     }
@@ -436,6 +447,55 @@ loc_0010:
             new_db.apply(command, env).expect("command should apply");
         }
         assert_eq!(new_db.to_sdas(), db.to_sdas());
+    }
+
+    #[test]
+    fn to_commands_round_trips_notes_through_dsl() {
+        use crate::commands::SetNote;
+        use crate::store::{from_dsl_many, to_dsl_many};
+
+        let env = TestEnvironment::new().with_file("test.bin", TEST_BINARY.to_vec());
+        let mut db = make_test_db();
+
+        // Attach two notes (one tagged) to address ranges.
+        let mut first = Note::new(None, "reset handler");
+        first.tags.insert("entry".into());
+        let second = Note::new(Some(&first.id), "jump table");
+        db.apply(
+            boxed(SetNote::new((AddressSpace::Code, 0x0..0x3), first.clone())),
+            None,
+        )
+        .unwrap();
+        db.apply(
+            boxed(SetNote::new((AddressSpace::Code, 0x3..0x5), second.clone())),
+            None,
+        )
+        .unwrap();
+
+        // Export the whole DB to canonical DSL, then reload from scratch.
+        let dsl = to_dsl_many(&db.to_commands());
+        assert!(dsl.contains("set_note("), "notes must be exported");
+        let mut reloaded = Db::new();
+        for command in from_dsl_many(&dsl).unwrap() {
+            let env = (command.name() == "map_bytes").then_some(&env as &dyn Environment);
+            reloaded.apply(command, env).expect("command should apply");
+        }
+
+        // Both notes survived with their ids, content, tags, and locations.
+        assert_eq!(reloaded.notes.notes.len(), 2);
+        assert_eq!(reloaded.notes.get(&first.id), Some(&first));
+        assert_eq!(reloaded.notes.get(&second.id), Some(&second));
+        assert_eq!(
+            reloaded.note_location(&first.id),
+            Some((AddressSpace::Code, crate::address::AddressRange::new(0x0, 0x3)))
+        );
+        assert_eq!(
+            reloaded.note_location(&second.id),
+            Some((AddressSpace::Code, crate::address::AddressRange::new(0x3, 0x5)))
+        );
+
+        // The listing (which excludes notes) is unchanged.
+        assert_eq!(reloaded.to_sdas(), db.to_sdas());
     }
 
     #[test]
