@@ -107,7 +107,7 @@ impl<'de> de::Deserializer<'de> for ValueDeserializer {
             Value::Set(items) | Value::List(items) if items.is_empty() => {
                 visitor.visit_map(MapAccess::new(BTreeMap::new()))
             }
-            other => Err(DslError::new(0, format!("expected a map, got {other:?}"))),
+            other => Err(DslError::new(format!("expected a map, got {other:?}"))),
         }
     }
 
@@ -192,7 +192,7 @@ impl<'de> de::MapAccess<'de> for MapAccess {
         let value = self
             .value
             .take()
-            .ok_or_else(|| DslError::new(0, "map value without key"))?;
+            .ok_or_else(|| DslError::new("map value without key"))?;
         seed.deserialize(ValueDeserializer { value })
     }
 }
@@ -210,7 +210,7 @@ impl<'de> EnumAccess<'de> for EnumDeserializer {
         seed: V,
     ) -> Result<(V::Value, VariantDeserializer), DslError> {
         let Value::Enum { variant, args, .. } = self.value else {
-            return Err(DslError::new(0, "expected an enum variant"));
+            return Err(DslError::new("expected an enum variant"));
         };
         let variant = seed.deserialize(variant.into_deserializer())?;
         Ok((variant, VariantDeserializer { args }))
@@ -227,7 +227,7 @@ impl<'de> VariantAccess<'de> for VariantDeserializer {
     fn unit_variant(self) -> Result<(), DslError> {
         match self.args {
             EnumArgs::Unit => Ok(()),
-            _ => Err(DslError::new(0, "expected a unit variant")),
+            _ => Err(DslError::new("expected a unit variant")),
         }
     }
 
@@ -238,7 +238,7 @@ impl<'de> VariantAccess<'de> for VariantDeserializer {
                     value: values.remove(0),
                 })
             }
-            _ => Err(DslError::new(0, "expected a single-value variant")),
+            _ => Err(DslError::new("expected a single-value variant")),
         }
     }
 
@@ -246,7 +246,7 @@ impl<'de> VariantAccess<'de> for VariantDeserializer {
         match self.args {
             EnumArgs::Positional(values) => visitor.visit_seq(SeqAccess::new(values)),
             EnumArgs::Unit => visitor.visit_seq(SeqAccess::new(Vec::new())),
-            EnumArgs::Named(_) => Err(DslError::new(0, "expected a tuple variant")),
+            EnumArgs::Named(_) => Err(DslError::new("expected a tuple variant")),
         }
     }
 
@@ -258,7 +258,7 @@ impl<'de> VariantAccess<'de> for VariantDeserializer {
         match self.args {
             EnumArgs::Named(fields) => visitor.visit_map(MapAccess::new(fields)),
             EnumArgs::Unit => visitor.visit_map(MapAccess::new(BTreeMap::new())),
-            EnumArgs::Positional(_) => Err(DslError::new(0, "expected a struct variant")),
+            EnumArgs::Positional(_) => Err(DslError::new("expected a struct variant")),
         }
     }
 }

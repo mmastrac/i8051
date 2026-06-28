@@ -8,6 +8,7 @@ use crate::commands::{Command, Environment};
 use crate::labels::{ImplicitLabels, LabelCollector};
 pub use crate::note::{
     Note, NoteAddressIndex, NoteDb, NoteField, NoteGlobalIndex, NoteId, NotePath, Notes,
+    ProximateNote,
 };
 pub use crate::region::{ByteRange, Region};
 use crate::render::Line;
@@ -151,6 +152,29 @@ impl Db {
         range: impl std::ops::RangeBounds<AddressValue>,
     ) -> Vec<&Note> {
         self.notes.get_notes_inside(space, range)
+    }
+
+    /// Notes within `window` bytes of `addr`, nearest first.
+    pub fn notes_near(
+        &self,
+        space: AddressSpace,
+        addr: AddressValue,
+        window: AddressValue,
+    ) -> Vec<crate::note::ProximateNote<'_>> {
+        self.notes.notes_near(space, addr, window)
+    }
+
+    /// Notes matching `query` (case-insensitive over content, tags, fields).
+    pub fn search_notes(&self, query: &str) -> Vec<&Note> {
+        self.notes.search(query)
+    }
+
+    /// Where a note is attached, if anywhere.
+    pub fn note_location(
+        &self,
+        id: &NoteId,
+    ) -> Option<(AddressSpace, crate::address::AddressRange)> {
+        self.notes.location(id)
     }
 }
 

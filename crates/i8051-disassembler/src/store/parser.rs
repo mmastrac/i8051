@@ -39,7 +39,7 @@ impl<'a> Parser<'a> {
     fn expect_eof(&mut self) -> Result<(), DslError> {
         match self.bump()? {
             Token::Eof => Ok(()),
-            _ => Err(DslError::new(
+            _ => Err(DslError::at(
                 self.lexer.offset(),
                 "unexpected trailing input",
             )),
@@ -74,7 +74,7 @@ impl<'a> Parser<'a> {
             _ => {
                 let offset = self.lexer.offset();
                 let token = self.bump()?;
-                Err(DslError::new(offset, format!("unexpected token {token:?}")))
+                Err(DslError::at(offset, format!("unexpected token {token:?}")))
             }
         }
     }
@@ -98,7 +98,7 @@ impl<'a> Parser<'a> {
             Token::ColonColon => {
                 self.bump()?;
                 let Token::Ident(variant) = self.bump()? else {
-                    return Err(DslError::new(
+                    return Err(DslError::at(
                         self.lexer.offset(),
                         "expected enum variant name",
                     ));
@@ -124,7 +124,7 @@ impl<'a> Parser<'a> {
                     fields,
                 })
             }
-            _ => Err(DslError::new(
+            _ => Err(DslError::at(
                 self.lexer.offset(),
                 format!("unexpected token after identifier {first}"),
             )),
@@ -172,7 +172,7 @@ impl<'a> Parser<'a> {
                     }
                     Token::RBrace => break,
                     _ => {
-                        return Err(DslError::new(
+                        return Err(DslError::at(
                             self.lexer.offset(),
                             "expected ',' or '}' in address set",
                         ));
@@ -187,7 +187,7 @@ impl<'a> Parser<'a> {
     fn parse_u64_value(&mut self) -> Result<u64, DslError> {
         match self.parse_value()? {
             Value::Int(value) => Ok(value),
-            other => Err(DslError::new(
+            other => Err(DslError::at(
                 self.lexer.offset(),
                 format!("expected integer, got {other:?}"),
             )),
@@ -206,7 +206,7 @@ impl<'a> Parser<'a> {
                     }
                     Token::RBracket => break,
                     _ => {
-                        return Err(DslError::new(
+                        return Err(DslError::at(
                             self.lexer.offset(),
                             "expected ',' or ']' in list",
                         ));
@@ -254,7 +254,7 @@ impl<'a> Parser<'a> {
                 self.expect(Token::RBrace, "expected '}}'")?;
                 Ok(Value::Set(set))
             }
-            _ => Err(DslError::new(
+            _ => Err(DslError::at(
                 self.lexer.offset(),
                 "expected ':' or ',' in brace expression",
             )),
@@ -270,7 +270,7 @@ impl<'a> Parser<'a> {
         match value {
             Value::String(s) => Ok(s),
             Value::Int(v) => Ok(v.to_string()),
-            other => Err(DslError::new(0, format!("invalid map key {other:?}"))),
+            other => Err(DslError::new(format!("invalid map key {other:?}"))),
         }
     }
 
@@ -341,7 +341,7 @@ impl<'a> Parser<'a> {
                 }
                 Token::RParen => break,
                 _ => {
-                    return Err(DslError::new(
+                    return Err(DslError::at(
                         self.lexer.offset(),
                         "expected ',' or ')' in argument list",
                     ));
@@ -354,7 +354,7 @@ impl<'a> Parser<'a> {
     fn parse_kwarg_key(&mut self) -> Result<String, DslError> {
         match self.bump()? {
             Token::Ident(name) => Ok(name),
-            other => Err(DslError::new(
+            other => Err(DslError::at(
                 self.lexer.offset(),
                 format!("expected keyword argument name, got {other:?}"),
             )),
@@ -372,7 +372,7 @@ impl<'a> Parser<'a> {
         if std::mem::discriminant(&token) == std::mem::discriminant(&expected) {
             Ok(())
         } else {
-            Err(DslError::new(offset, message))
+            Err(DslError::at(offset, message))
         }
     }
 }
@@ -387,11 +387,18 @@ pub fn parse_command(input: &str) -> Result<Value, DslError> {
             kwargs: fields,
         }),
         Value::Call { .. } => Ok(value),
-        other => Err(DslError::new(
-            0,
-            format!("expected command call, got {other:?}"),
-        )),
+        other => Err(DslError::new(format!("expected command call, got {other:?}"))),
     }
+}
+
+/// Parse a single bare DSL value (e.g. an address `CODE:0x84`, a range, or a
+/// string), used for the standalone value entry points like
+/// [`from_dsl_value`](super::from_dsl_value).
+pub fn parse_value(input: &str) -> Result<Value, DslError> {
+    let mut parser = Parser::new(input);
+    let value = parser.parse_value()?;
+    parser.expect_eof()?;
+    Ok(value)
 }
 
 fn snake_case(name: &str) -> String {

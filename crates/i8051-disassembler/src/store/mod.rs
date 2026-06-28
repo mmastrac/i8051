@@ -43,12 +43,20 @@ pub fn to_dsl(command: &dyn Command) -> String {
 /// registry.
 pub fn from_dsl(input: &str) -> Result<Box<dyn Command>, DslError> {
     let Value::Call { name, kwargs } = parser::parse_command(input)? else {
-        return Err(DslError::new(0, "expected a command call"));
+        return Err(DslError::new("expected a command call"));
     };
     let entry = COMMANDS
         .get(name.as_str())
-        .ok_or_else(|| DslError::new(0, format!("unknown command {name}")))?;
+        .ok_or_else(|| DslError::new(format!("unknown command {name}")))?;
     (entry.parse)(kwargs)
+}
+
+/// Parse a single bare DSL value into any `Deserialize` type — the "layer on
+/// top" that lets callers accept DSL spellings like `CODE:0x84` or
+/// `CODE:0x10..0x20` as input (e.g. an MCP query argument), reusing the exact
+/// same grammar the commands use.
+pub fn from_dsl_value<T: serde::de::DeserializeOwned>(input: &str) -> Result<T, DslError> {
+    de::from_value(parser::parse_value(input)?)
 }
 
 /// Render many commands, one per line.
@@ -222,5 +230,38 @@ mod tests {
     fn unknown_command_is_rejected() {
         let err = from_dsl("frobnicate(address=CODE:0x0)").unwrap_err();
         assert!(err.message.contains("unknown command frobnicate"));
+    }
+
+    #[test]
+    fn from_dsl_value_parses_bare_address() {
+        use crate::address::{SpaceAddressRange, SpaceAddressValue};
+        use super::from_dsl_value;
+
+        let addr: SpaceAddressValue = from_dsl_value("CODE:0x84").unwrap();
+        assert_eq!(addr.space, AddressSpace::Code);
+        assert_eq!(addr.offset, 0x84);
+
+        let range: SpaceAddressRange = from_dsl_value("CODE:0x10..0x20").unwrap();
+        assert_eq!(range.space, AddressSpace::Code);
+        assert_eq!(range.range, AddressRange::new(0x10, 0x20));
+    }
+
+    #[test]
+    fn missing_field_error_is_not_positional() {
+        // A structural (missing-field) error has no byte offset, so it must not
+        // claim "at byte 0".
+        let err = from_dsl("set_label(address=CODE:0x0)").unwrap_err();
+        assert_eq!(err.offset, None);
+        let shown = err.to_string();
+        assert!(!shown.contains("byte"), "got: {shown}");
+        assert!(shown.contains("missing field"), "got: {shown}");
+    }
+
+    #[test]
+    fn positional_error_keeps_its_offset() {
+        // A lexer/parser failure is positional and keeps a byte offset.
+        let err = from_dsl("set_label(address=CODE:0xZZ)").unwrap_err();
+        assert!(err.offset.is_some());
+        assert!(err.to_string().contains("byte"));
     }
 }

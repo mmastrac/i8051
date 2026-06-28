@@ -269,6 +269,28 @@ impl Notes {
     }
 }
 
+/// A note located by a proximity query, tagged with how far the probe address
+/// sits from the note's range.
+#[derive(Debug, Clone, Copy)]
+pub struct ProximateNote<'a> {
+    /// Bytes between the probe address and the note's range (`0` if inside).
+    pub distance: AddressValue,
+    /// The address range the note is attached to.
+    pub range: AddressRange,
+    pub note: &'a Note,
+}
+
+/// Distance from a point to a half-open range: `0` when the point is inside.
+fn point_distance(range: AddressRange, addr: AddressValue) -> AddressValue {
+    if addr < range.start {
+        range.start - addr
+    } else if addr >= range.end {
+        addr - range.end + 1
+    } else {
+        0
+    }
+}
+
 /// Maps address ranges to note IDs within one address space.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct NoteAddressIndex {
@@ -315,6 +337,44 @@ impl NoteAddressIndex {
             })
             .filter_map(|id| notes.get(id))
             .collect()
+    }
+
+    /// Notes within `window` bytes of `addr`, paired with their distance
+    /// (`0` = the address falls inside the note's range), nearest first.
+    pub fn near<'a>(
+        &'a self,
+        addr: AddressValue,
+        window: AddressValue,
+        notes: &'a Notes,
+    ) -> Vec<ProximateNote<'a>> {
+        let lo = addr.saturating_sub(window);
+        let hi = addr.saturating_add(window).saturating_add(1);
+        let mut seen = BTreeSet::new();
+        let mut out = Vec::new();
+        for (_, ids) in self.positions.overlapping(lo..hi) {
+            for id in ids {
+                if !seen.insert(id.clone()) {
+                    continue;
+                }
+                let (Some(&range), Some(note)) = (self.ranges.get(id), notes.get(id)) else {
+                    continue;
+                };
+                let distance = point_distance(range, addr);
+                if distance <= window {
+                    out.push(ProximateNote {
+                        distance,
+                        range,
+                        note,
+                    });
+                }
+            }
+        }
+        out.sort_by(|a, b| {
+            a.distance
+                .cmp(&b.distance)
+                .then_with(|| a.note.id.cmp(&b.note.id))
+        });
+        out
     }
 
     fn add_id_to_positions(&mut self, range: AddressRange, id: NoteId) {
@@ -473,6 +533,61 @@ impl NoteDb {
             .map(|index| index.inside(range, &self.notes))
             .unwrap_or_default()
     }
+
+    /// Notes within `window` bytes of `addr` in `space`, nearest first, each
+    /// tagged with its distance (`0` = the address is inside the note).
+    pub fn notes_near(
+        &self,
+        space: AddressSpace,
+        addr: AddressValue,
+        window: AddressValue,
+    ) -> Vec<ProximateNote<'_>> {
+        self.address
+            .get(&space)
+            .map(|index| index.near(addr, window, &self.notes))
+            .unwrap_or_default()
+    }
+
+    /// Find where a note is attached, if it has an address location.
+    pub fn location(&self, id: &NoteId) -> Option<(AddressSpace, AddressRange)> {
+        self.address
+            .iter()
+            .find_map(|(&space, index)| index.range(id).map(|range| (space, range)))
+    }
+
+    /// Notes whose content, tags, or field values contain `query`
+    /// (case-insensitive). An empty query matches every note. Results are in
+    /// note-id (Lamport) order.
+    pub fn search(&self, query: &str) -> Vec<&Note> {
+        let needle = query.to_lowercase();
+        self.notes
+            .iter()
+            .map(|(_, note)| note)
+            .filter(|note| note_matches(note, &needle))
+            .collect()
+    }
+}
+
+/// Whether a note matches an already-lowercased search needle.
+fn note_matches(note: &Note, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if note.content.to_lowercase().contains(needle) {
+        return true;
+    }
+    if note.tags.iter().any(|tag| tag.to_lowercase().contains(needle)) {
+        return true;
+    }
+    note.fields.iter().any(|(key, value)| {
+        key.to_lowercase().contains(needle)
+            || match value {
+                NoteField::String(s) => s.to_lowercase().contains(needle),
+                NoteField::List(items) => {
+                    items.iter().any(|item| item.to_lowercase().contains(needle))
+                }
+            }
+    })
 }
 
 fn hash_payload(previous_tip: Option<&NoteId>, content: &str) -> u64 {
@@ -693,6 +808,43 @@ mod tests {
         let ids: BTreeSet<_> = found.iter().map(|note| &note.id).collect();
         assert!(ids.contains(&human.id));
         assert!(ids.contains(&llm.id));
+    }
+
+    #[test]
+    fn notes_near_orders_by_distance_and_reports_zero_inside() {
+        let mut db = NoteDb::default();
+        let a = db.create("note at 0x10");
+        let b = db.create("note at 0x40");
+        let c = db.create("far note at 0x200");
+        db.set_address(AddressSpace::Code, AddressRange::from(0x10..0x14), a.clone());
+        db.set_address(AddressSpace::Code, AddressRange::from(0x40..0x44), b.clone());
+        db.set_address(AddressSpace::Code, AddressRange::from(0x200..0x204), c.clone());
+
+        // Probe inside `a`'s range, with a window that reaches `b` but not `c`.
+        let near = db.notes_near(AddressSpace::Code, 0x12, 0x40);
+        assert_eq!(near.len(), 2, "c is outside the window");
+        assert_eq!(near[0].note.id, a.id);
+        assert_eq!(near[0].distance, 0, "probe is inside a");
+        assert_eq!(near[1].note.id, b.id);
+        assert_eq!(near[1].distance, 0x40 - 0x12);
+
+        // A different space has no notes.
+        assert!(db.notes_near(AddressSpace::Xdata, 0x12, 0x1000).is_empty());
+    }
+
+    #[test]
+    fn search_matches_content_tags_and_is_case_insensitive() {
+        let mut db = NoteDb::default();
+        let mut isr = db.create("Reset Vector handler");
+        isr.tags.insert("isr".into());
+        db.notes.insert(isr.clone());
+        db.create("loop body");
+
+        assert_eq!(db.search("reset").len(), 1);
+        assert_eq!(db.search("ISR").len(), 1, "tag match, case-insensitive");
+        assert_eq!(db.search("body").len(), 1);
+        assert_eq!(db.search("").len(), 2, "empty query matches all");
+        assert!(db.search("nonexistent").is_empty());
     }
 
     #[test]

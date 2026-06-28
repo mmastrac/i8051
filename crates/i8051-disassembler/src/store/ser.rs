@@ -129,7 +129,6 @@ impl ser::Serializer for ValueSerializer {
                 let [space, ranges] = expect_parts(value.serialize(self)?)?;
                 let Value::List(items) = ranges else {
                     return Err(DslError::new(
-                        0,
                         "address set adapter expected a list of ranges",
                     ));
                 };
@@ -300,7 +299,7 @@ impl ser::SerializeMap for MapBuilder {
         let key = self
             .key
             .take()
-            .ok_or_else(|| DslError::new(0, "map value without key"))?;
+            .ok_or_else(|| DslError::new("map value without key"))?;
         self.map.insert(key, value.serialize(ValueSerializer)?);
         Ok(())
     }
@@ -363,18 +362,17 @@ impl ser::SerializeStructVariant for VariantStructBuilder {
 
 fn expect_parts<const N: usize>(value: Value) -> Result<[Value; N], DslError> {
     let Value::List(items) = value else {
-        return Err(DslError::new(0, "address adapter expected a tuple"));
+        return Err(DslError::new("address adapter expected a tuple"));
     };
     items
         .try_into()
-        .map_err(|_| DslError::new(0, "address adapter tuple has the wrong arity"))
+        .map_err(|_| DslError::new("address adapter tuple has the wrong arity"))
 }
 
 fn as_space(value: Value) -> Result<String, DslError> {
     match value {
         Value::String(s) => Ok(s),
         other => Err(DslError::new(
-            0,
             format!("expected address space, got {other:?}"),
         )),
     }
@@ -383,7 +381,7 @@ fn as_space(value: Value) -> Result<String, DslError> {
 fn as_int(value: Value) -> Result<u64, DslError> {
     value
         .as_u64()
-        .ok_or_else(|| DslError::new(0, format!("expected integer, got {value:?}")))
+        .ok_or_else(|| DslError::new(format!("expected integer, got {value:?}")))
 }
 
 fn as_key(value: Value) -> Result<String, DslError> {
@@ -391,6 +389,6 @@ fn as_key(value: Value) -> Result<String, DslError> {
         Value::String(s) => Ok(s),
         Value::Int(v) => Ok(v.to_string()),
         Value::Bool(v) => Ok(v.to_string()),
-        other => Err(DslError::new(0, format!("invalid map key {other:?}"))),
+        other => Err(DslError::new(format!("invalid map key {other:?}"))),
     }
 }

@@ -98,7 +98,7 @@ impl<'a> Lexer<'a> {
                     self.bump();
                     Ok(Token::DotDot)
                 } else {
-                    Err(DslError::new(offset, "unexpected '.'"))
+                    Err(DslError::at(offset, "unexpected '.'"))
                 }
             }
             '"' => {
@@ -108,7 +108,7 @@ impl<'a> Lexer<'a> {
             'r' if self.raw_string_start() => self.read_raw_string(offset),
             '0'..='9' => self.read_number(offset),
             'a'..='z' | 'A'..='Z' | '_' => self.read_ident(offset),
-            _ => Err(DslError::new(
+            _ => Err(DslError::at(
                 offset,
                 format!("unexpected character {ch:?}"),
             )),
@@ -168,10 +168,10 @@ impl<'a> Lexer<'a> {
                     }
                 }
                 if text.len() <= 2 {
-                    return Err(DslError::new(offset, "expected hex digits"));
+                    return Err(DslError::at(offset, "expected hex digits"));
                 }
                 let value = u64::from_str_radix(&text[2..], 16)
-                    .map_err(|_| DslError::new(offset, format!("invalid integer {text}")))?;
+                    .map_err(|_| DslError::at(offset, format!("invalid integer {text}")))?;
                 return Ok(Token::Int(value));
             }
         }
@@ -184,12 +184,12 @@ impl<'a> Lexer<'a> {
         }
 
         if text.is_empty() {
-            return Err(DslError::new(offset, "expected digits"));
+            return Err(DslError::at(offset, "expected digits"));
         }
 
         let value = text
             .parse::<u64>()
-            .map_err(|_| DslError::new(offset, format!("invalid integer {text}")))?;
+            .map_err(|_| DslError::at(offset, format!("invalid integer {text}")))?;
         Ok(Token::Int(value))
     }
 
@@ -197,7 +197,7 @@ impl<'a> Lexer<'a> {
         let mut value = String::new();
         loop {
             let Some(ch) = self.bump() else {
-                return Err(DslError::new(offset, "unterminated string"));
+                return Err(DslError::at(offset, "unterminated string"));
             };
             match ch {
                 '"' if hashes == 0 => return Ok(Token::String(value)),
@@ -218,7 +218,7 @@ impl<'a> Lexer<'a> {
                 '\\' if hashes == 0 => {
                     let esc = self
                         .bump()
-                        .ok_or_else(|| DslError::new(offset, "unterminated escape in string"))?;
+                        .ok_or_else(|| DslError::at(offset, "unterminated escape in string"))?;
                     value.push(match esc {
                         'n' => '\n',
                         'r' => '\r',
@@ -230,7 +230,7 @@ impl<'a> Lexer<'a> {
                             let hi = self.read_hex_digit(offset)?;
                             let lo = self.read_hex_digit(offset)?;
                             char::from_u32((hi << 4 | lo) as u32)
-                                .ok_or_else(|| DslError::new(offset, "invalid hex escape"))?
+                                .ok_or_else(|| DslError::at(offset, "invalid hex escape"))?
                         }
                         other => other,
                     });
@@ -248,7 +248,7 @@ impl<'a> Lexer<'a> {
             self.bump();
         }
         if self.bump() != Some('"') {
-            return Err(DslError::new(offset, "expected opening quote after r"));
+            return Err(DslError::at(offset, "expected opening quote after r"));
         }
         self.read_quoted_string(offset, hashes)
     }
@@ -256,9 +256,9 @@ impl<'a> Lexer<'a> {
     fn read_hex_digit(&mut self, offset: usize) -> Result<u8, DslError> {
         let ch = self
             .bump()
-            .ok_or_else(|| DslError::new(offset, "expected hex digit"))?;
+            .ok_or_else(|| DslError::at(offset, "expected hex digit"))?;
         ch.to_digit(16)
             .map(|d| d as u8)
-            .ok_or_else(|| DslError::new(offset, "expected hex digit"))
+            .ok_or_else(|| DslError::at(offset, "expected hex digit"))
     }
 }
