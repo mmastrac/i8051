@@ -1,7 +1,7 @@
-use crate::address::{SpaceAddressSet, SpaceAddressValue};
+use crate::address::SpaceAddressValue;
 use crate::db::{Db, Error};
 
-use super::{Apply, ClearEquivalents, Command, Environment, boxed};
+use super::{Apply, Command, Environment, boxed};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AutoDisassemble {
@@ -9,8 +9,8 @@ pub struct AutoDisassemble {
 }
 
 register!(AutoDisassemble(
-    /// Recursively disassemble code starting at `address`, following control
-    /// flow and marking reachable bytes as code.
+    /// Recursively disassemble from `address`, following control flow. Recorded
+    /// as a root, so the saved DB regenerates the code from this one command.
     address: SpaceAddressValue,
 ));
 
@@ -26,16 +26,43 @@ impl Apply for AutoDisassemble {
             offset: start,
         } = address;
         let region = db.region_mut(space);
-        let cleared = region.auto_disassemble(start).success;
-        if cleared.is_empty() {
-            return Ok(vec![]);
+        let was_root = region.is_auto_root(start);
+        region.add_auto_root(start);
+
+        // Only undo the root if this call introduced it (idempotent re-runs).
+        let mut undo: Vec<Box<dyn Command>> = Vec::new();
+        if !was_root {
+            undo.push(boxed(ClearAutoDisassembleRoot { address }));
         }
-        // The undo is a single `ClearEquivalents` over the coalesced set of all
-        // newly-disassembled addresses, rather than one command per address.
-        let mut addresses = SpaceAddressSet::new(space);
-        for addr in cleared {
-            addresses.insert_address(addr);
+        Ok(undo)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ClearAutoDisassembleRoot {
+    pub address: SpaceAddressValue,
+}
+
+register!(ClearAutoDisassembleRoot(
+    /// Remove an auto-disassemble root. Code reachable only through it
+    /// re-derives away (code still reached by another root stays). The inverse
+    /// of `auto_disassemble`.
+    address: SpaceAddressValue,
+));
+
+impl Apply for ClearAutoDisassembleRoot {
+    fn apply(
+        self,
+        db: &mut Db,
+        _env: Option<&dyn Environment>,
+    ) -> Result<Vec<Box<dyn Command>>, Error> {
+        let Self { address } = self;
+        let SpaceAddressValue { space, offset } = address;
+        let region = db.region_mut(space);
+        if region.remove_auto_root(offset) {
+            Ok(vec![boxed(AutoDisassemble { address })])
+        } else {
+            Ok(vec![])
         }
-        Ok(vec![boxed(ClearEquivalents::new(addresses))])
     }
 }

@@ -1,47 +1,21 @@
-use crate::address::{SpaceAddressSet, SpaceAddressValue};
-use crate::db::{Db, Equivalent, Error};
+use crate::address::{AddressSpace, AddressValue, SpaceAddressSet};
+use crate::db::{Db, Equivalent, EquivalentRange, Error};
 
-use super::{Apply, Command, Environment, boxed};
+use super::{Apply, Command, DisassembleRange, Environment, MarkData, MarkUnknown, boxed};
 
-#[cfg(test)]
-use crate::address::AddressSpace;
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SetEquivalent {
-    pub address: SpaceAddressValue,
-    pub equivalent: Equivalent,
-}
-
-register!(SetEquivalent(
-    /// Set the disassembly equivalent (how the bytes are interpreted) at the
-    /// code `address`.
-    address: SpaceAddressValue,
-    equivalent: Equivalent,
-));
-
-impl Apply for SetEquivalent {
-    fn apply(
-        self,
-        db: &mut Db,
-        _env: Option<&dyn Environment>,
-    ) -> Result<Vec<Box<dyn Command>>, Error> {
-        let Self {
-            address,
-            equivalent,
-        } = self;
-        let SpaceAddressValue { space, offset } = address;
-        let region = db.region_mut(space);
-        let span = region.equivalent_span(offset, &equivalent)?;
-        let before = region.snapshot_equivalents(offset, span);
-        region.set_equivalent(offset, equivalent)?;
-        let mut undo = vec![boxed(ClearEquivalents::new((space, offset..offset + span)))];
-        for (start, range) in before {
-            undo.push(boxed(SetEquivalent {
-                address: (space, start).into(),
-                equivalent: range.equivalent,
-            }));
+/// Rebuild a cleared strong equivalent as its verb command, so an undo
+/// round-trips through the DSL.
+fn restore_equivalent(
+    space: AddressSpace,
+    start: AddressValue,
+    range: EquivalentRange,
+) -> Box<dyn Command> {
+    match range.equivalent {
+        Equivalent::Code => boxed(DisassembleRange::new((space, start..range.end))),
+        Equivalent::Data(data_type, size) => {
+            boxed(MarkData::new((space, start..start + size), data_type))
         }
-        Ok(undo)
+        Equivalent::Unknown(size) => boxed(MarkUnknown::new((space, start..start + size))),
     }
 }
 
@@ -51,7 +25,8 @@ pub struct ClearEquivalents {
 }
 
 register!(ClearEquivalents(
-    /// Clear disassembly equivalents over the given `addresses`.
+    /// Clear disassembly equivalents (code islands, data, unknown) over the
+    /// given `addresses`, returning them to undefined.
     addresses: SpaceAddressSet,
 ));
 
@@ -71,54 +46,12 @@ impl Apply for ClearEquivalents {
             let before = region.snapshot_equivalents(offset, size);
             region.clear_equivalents(offset, size);
             for (start, equivalent_range) in before {
-                undo.push(boxed(SetEquivalent {
-                    address: (space, start).into(),
-                    equivalent: equivalent_range.equivalent,
-                }));
+                undo.push(restore_equivalent(space, start, equivalent_range));
             }
         }
         Ok(undo)
     }
 }
-
-#[cfg(test)]
-use crate::db::{DataType, OperandOverride};
-
-// `Option` is flattened (`Some(x)` -> `x`, `None` -> `None`) and the
-// newtype-variant `OperandOverride::Label` nests inside the list element.
-serialize_test!(
-    equivalent_code_with_options,
-    r#"set_equivalent(address=CODE:0x10, equivalent=Equivalent::Code([OperandOverride::Label("loop"), None]))"#,
-    SetEquivalent {
-        address: (AddressSpace::Code, 0x10).into(),
-        equivalent: Equivalent::Code(vec![Some(OperandOverride::Label("loop".into())), None,]),
-    }
-);
-
-// Struct-variant (`LabelOffset { label, offset }`) renders as named kwargs,
-// sorted by field name.
-serialize_test!(
-    operand_override_struct_variant,
-    r#"set_equivalent(address=CODE:0x0, equivalent=Equivalent::Code([OperandOverride::LabelOffset(label="tbl", offset=0x4)]))"#,
-    SetEquivalent {
-        address: (AddressSpace::Code, 0x0).into(),
-        equivalent: Equivalent::Code(vec![Some(OperandOverride::LabelOffset {
-            label: "tbl".into(),
-            offset: 4,
-        })]),
-    }
-);
-
-// Recursive boxed enum: `Box<DataType>` is transparent, so the recursion
-// nests cleanly through tuple variants.
-serialize_test!(
-    equivalent_data_recursive_datatype,
-    "set_equivalent(address=CODE:0x20, equivalent=Equivalent::Data(DataType::Array(DataType::Byte, 0x10), 0x10))",
-    SetEquivalent {
-        address: (AddressSpace::Code, 0x20).into(),
-        equivalent: Equivalent::Data(DataType::Array(Box::new(DataType::Byte), 0x10), 0x10),
-    }
-);
 
 // A `SpaceAddressSet` field renders as the optimal `CODE:{...}` form: the
 // adjacent addresses coalesce into a range, the lone one stays bare.

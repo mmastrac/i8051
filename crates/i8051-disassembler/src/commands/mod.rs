@@ -119,27 +119,31 @@ mod auto_disassemble;
 mod bytes;
 mod comment;
 mod equivalent;
+mod extent;
 mod function;
 mod label;
 mod note;
+mod operand;
 
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::io;
 
-pub use auto_disassemble::AutoDisassemble;
+pub use auto_disassemble::{AutoDisassemble, ClearAutoDisassembleRoot};
 pub use bytes::{ClearBytes, MapBytes, SetConstantBytes};
 pub use comment::{ClearComment, SetComment};
-pub use equivalent::{ClearEquivalents, SetEquivalent};
+pub use equivalent::ClearEquivalents;
+pub use extent::{DisassembleRange, MarkData, MarkUnknown};
 pub use function::{ClearFunction, SetFunction};
 pub use label::{ClearLabel, SetLabel};
 pub use note::{ClearNote, SetNote};
+pub use operand::OverrideOperand;
 
 use scattered_collect::{ScatteredMap, gather};
 use serde::de::DeserializeOwned;
 
 use crate::address::{AddressValue, SpaceAddressRange, SpaceAddressSet, SpaceAddressValue};
-use crate::db::{Db, Equivalent, Error, Function, Note, NoteId};
+use crate::db::{DataType, Db, Error, Function, Note, NoteId, OperandOverride};
 use crate::store::error::DslError;
 use crate::store::value::Value;
 
@@ -152,8 +156,7 @@ pub trait Environment {
     ) -> Result<Vec<u8>, io::Error>;
 }
 
-/// A disassembly mutation. Implemented by each payload type via [`register!`];
-/// the per-command logic lives in its [`Apply`] impl.
+/// A disassembly mutation.
 pub trait Command: std::fmt::Debug {
     /// Apply the command, returning the inverse commands that undo it.
     fn apply(
@@ -212,8 +215,10 @@ pub enum ArgKind {
     Offset,
     /// A single byte value.
     Byte,
-    /// A disassembly equivalent.
-    Equivalent,
+    /// A data type for `mark_data`.
+    DataType,
+    /// An optional operand override (text/label for one operand).
+    Operand,
     /// A function definition.
     Function,
     /// A note.
@@ -250,8 +255,11 @@ impl CommandArgType for AddressValue {
 impl CommandArgType for u8 {
     const KIND: ArgKind = ArgKind::Byte;
 }
-impl CommandArgType for Equivalent {
-    const KIND: ArgKind = ArgKind::Equivalent;
+impl CommandArgType for DataType {
+    const KIND: ArgKind = ArgKind::DataType;
+}
+impl CommandArgType for Option<OperandOverride> {
+    const KIND: ArgKind = ArgKind::Operand;
 }
 impl CommandArgType for Function {
     const KIND: ArgKind = ArgKind::Function;
@@ -358,28 +366,6 @@ mod tests {
     }
 
     #[test]
-    fn every_command_is_registered() {
-        for name in [
-            "set_label",
-            "clear_label",
-            "set_equivalent",
-            "clear_equivalents",
-            "auto_disassemble",
-            "set_comment",
-            "clear_comment",
-            "map_bytes",
-            "clear_bytes",
-            "set_constant_bytes",
-            "set_function",
-            "clear_function",
-            "set_note",
-            "clear_note",
-        ] {
-            assert!(COMMANDS.get(name).is_some(), "{name} is not registered");
-        }
-    }
-
-    #[test]
     fn arg_kinds_are_derived_from_types() {
         use super::ArgKind::*;
         let kinds = |name: &str| -> Vec<super::ArgKind> {
@@ -394,7 +380,10 @@ mod tests {
         assert_eq!(kinds("map_bytes"), [Address, Text, Offset, Offset]);
         assert_eq!(kinds("set_constant_bytes"), [AddressRange, Byte]);
         assert_eq!(kinds("clear_bytes"), [AddressSet]);
-        assert_eq!(kinds("set_equivalent"), [Address, Equivalent]);
+        assert_eq!(kinds("disassemble_range"), [AddressRange]);
+        assert_eq!(kinds("mark_data"), [AddressRange, DataType]);
+        assert_eq!(kinds("mark_unknown"), [AddressRange]);
+        assert_eq!(kinds("override_operand"), [Address, Byte, Operand]);
         assert_eq!(kinds("set_note"), [AddressRange, Note]);
         assert_eq!(kinds("clear_note"), [NoteId]);
     }

@@ -1,14 +1,20 @@
-use i8051::{ControlFlow, Instruction};
+use i8051::Instruction;
 use std::collections::BTreeMap;
 use std::ops::RangeBounds;
 use std::range::Range;
+
+mod weak;
+
+pub use weak::{AutoDisassembleError, AutoDisassembleResult};
+use weak::{CodeSource, Weak};
 
 use crate::address::{
     AddressRange, AddressSpace, AddressValue, PhysicalAddr, Xref, branch_target,
     branch_target_operand_index, xrefs_from_instruction, xrefs_to_target,
 };
 use crate::commands::{
-    Command, MapBytes, SetComment, SetConstantBytes, SetEquivalent, SetFunction, SetLabel, boxed,
+    AutoDisassemble, Command, DisassembleRange, MapBytes, MarkData, MarkUnknown, OverrideOperand,
+    SetComment, SetConstantBytes, SetFunction, SetLabel, boxed,
 };
 use crate::db::{
     Equivalent, EquivalentAt, EquivalentKind, EquivalentRange, Error, Function, OperandOverride,
@@ -43,6 +49,11 @@ pub struct Region {
     labels: BTreeMap<AddressValue, String>,
     comments: BTreeMap<AddressValue, String>,
     functions: BTreeMap<AddressValue, Function>,
+    /// Operand overrides, keyed by `(instruction address, operand index)`.
+    overrides: BTreeMap<(AddressValue, u8), OperandOverride>,
+    /// The derived auto-disassembly layer (roots + their code). Reads overlay
+    /// `equivalents` over `weak.code()`. Never serialized.
+    weak: Weak,
 }
 
 impl Default for Region {
@@ -59,7 +70,102 @@ impl Region {
             labels: BTreeMap::new(),
             comments: BTreeMap::new(),
             functions: BTreeMap::new(),
+            overrides: BTreeMap::new(),
+            weak: Weak::default(),
         }
+    }
+
+    /// Set or clear the override at `(addr, index)`, returning the prior value.
+    pub fn set_operand_override(
+        &mut self,
+        addr: AddressValue,
+        index: u8,
+        value: Option<OperandOverride>,
+    ) -> Option<OperandOverride> {
+        match value {
+            Some(value) => self.overrides.insert((addr, index), value),
+            None => self.overrides.remove(&(addr, index)),
+        }
+    }
+
+    /// Operand overrides for the instruction at `addr`, as a positional vec.
+    fn operand_overrides_at(&self, addr: AddressValue) -> Vec<Option<OperandOverride>> {
+        let mut out = Vec::new();
+        for (&(_, index), value) in self.overrides.range((addr, 0)..=(addr, u8::MAX)) {
+            let index = index as usize;
+            if out.len() <= index {
+                out.resize(index + 1, None);
+            }
+            out[index] = Some(value.clone());
+        }
+        out
+    }
+
+    /// Lift the weak layer out to derive against `self` (which supplies the
+    /// bytes and barriers via [`CodeSource`]), then put it back. The take avoids
+    /// borrowing `self` mutably and immutably at once.
+    fn with_weak<R>(&mut self, f: impl FnOnce(&mut Weak, &Self) -> R) -> R {
+        let mut weak = std::mem::take(&mut self.weak);
+        let result = f(&mut weak, self);
+        self.weak = weak;
+        result
+    }
+
+    fn refresh_weak(&mut self) {
+        self.with_weak(|weak, src| weak.refresh(src));
+    }
+
+    /// Auto-disassemble from `start`, recording it as a root (so the export is
+    /// one `auto_disassemble` command). Returns the traversal diagnostics.
+    pub fn auto_disassemble(&mut self, start: AddressValue) -> AutoDisassembleResult {
+        self.with_weak(|weak, src| weak.extend(src, start))
+    }
+
+    pub fn add_auto_root(&mut self, start: AddressValue) {
+        let _ = self.auto_disassemble(start);
+    }
+
+    /// Removing a root re-derives weak, so code reachable only through it drops.
+    pub fn remove_auto_root(&mut self, start: AddressValue) -> bool {
+        let removed = self.weak.remove_root(start);
+        if removed {
+            self.refresh_weak();
+        }
+        removed
+    }
+
+    pub fn is_auto_root(&self, start: AddressValue) -> bool {
+        self.weak.contains_root(start)
+    }
+
+    fn is_code_start(&self, offset: AddressValue) -> bool {
+        matches!(
+            self.equivalents.get(&offset).map(|r| r.equivalent.kind()),
+            Some(EquivalentKind::Code)
+        ) || self.weak.code().contains_key(&offset)
+    }
+
+    /// Every code instruction start across both layers, deduplicated.
+    fn code_offsets(&self) -> Vec<AddressValue> {
+        let mut offsets: Vec<AddressValue> = self
+            .equivalents
+            .iter()
+            .filter(|(_, range)| matches!(range.equivalent, Equivalent::Code))
+            .map(|(&offset, _)| offset)
+            .collect();
+        for &offset in self.weak.code().keys() {
+            if !self.equivalents.contains_key(&offset) {
+                offsets.push(offset);
+            }
+        }
+        offsets
+    }
+
+    /// Nearest strong or weak start at/after `after`. Bounds undefined runs.
+    fn next_equivalent_boundary(&self, after: AddressValue) -> Option<AddressValue> {
+        let next_strong = self.equivalents.range(after..).next().map(|(&k, _)| k);
+        let next_weak = self.weak.code().range(after..).next().map(|(&k, _)| k);
+        [next_strong, next_weak].into_iter().flatten().min()
     }
 
     pub fn set_bytes(
@@ -86,6 +192,7 @@ impl Region {
             offset,
             ByteRange::Mapped(file.to_string(), file_offset, bytes.to_vec()),
         );
+        self.refresh_weak();
     }
 
     pub fn set_constant(&mut self, offset: AddressValue, size: AddressValue, value: u8) {
@@ -95,6 +202,7 @@ impl Region {
         self.clear_bytes(offset, size);
         self.byte_ranges
             .insert(offset, ByteRange::Constant(size, value));
+        self.refresh_weak();
     }
 
     pub fn find_bytes(&self, pattern: &BytePattern) -> impl Iterator<Item = Range<AddressValue>> {
@@ -224,6 +332,7 @@ impl Region {
         }
 
         self.byte_ranges = kept;
+        self.refresh_weak();
     }
 
     pub fn set_equivalent(
@@ -239,6 +348,10 @@ impl Region {
         self.validate_equivalent_bounds(offset, span)?;
         self.validate_no_equivalent_overlap(offset, span)?;
 
+        // Only a barrier landing on already-derived code forces a re-derive (a
+        // chop). A code island, or a barrier over undefined bytes, leaves weak as-is.
+        let chops_weak =
+            equivalent.kind() != EquivalentKind::Code && self.weak.overlaps(offset, span);
         self.equivalents.insert(
             offset,
             EquivalentRange {
@@ -246,6 +359,9 @@ impl Region {
                 equivalent,
             },
         );
+        if chops_weak {
+            self.refresh_weak();
+        }
         Ok(&self.equivalents[&offset])
     }
 
@@ -256,6 +372,40 @@ impl Region {
         let end = offset.saturating_add(size);
         self.equivalents
             .retain(|&start, range| range.end <= offset || start >= end);
+        self.refresh_weak();
+    }
+
+    /// Linear-sweep `[start, end)` as strong code. Errors (mutating nothing) on
+    /// a byte that doesn't decode or a strong overlap. The final instruction may
+    /// run past `end`. Returns the actual end.
+    pub(crate) fn disassemble_linear(
+        &mut self,
+        start: AddressValue,
+        end: AddressValue,
+    ) -> Result<AddressValue, Error> {
+        // Validate up front so the inserts below can't fail, then re-derive weak once.
+        let mut addr = start;
+        let mut spans = Vec::new();
+        while addr < end {
+            let insn = self.decode_at(addr).ok_or(Error::InvalidEquivalent)?;
+            let insn_end = addr.saturating_add(insn.len() as AddressValue);
+            if !self.snapshot_equivalents(addr, insn_end - addr).is_empty() {
+                return Err(Error::Overlap(addr));
+            }
+            spans.push((addr, insn_end));
+            addr = insn_end;
+        }
+        for (offset, insn_end) in spans {
+            self.equivalents.insert(
+                offset,
+                EquivalentRange {
+                    end: insn_end,
+                    equivalent: Equivalent::Code,
+                },
+            );
+        }
+        self.refresh_weak();
+        Ok(addr)
     }
 
     pub fn snapshot_equivalents(
@@ -274,40 +424,17 @@ impl Region {
             .collect()
     }
 
+    /// Whether a *strong* equivalent covers `offset`. Strong-only: a barrier may
+    /// overwrite weak code, which then re-derives.
     pub fn has_equivalent(&self, offset: AddressValue) -> bool {
-        if self.equivalents.contains_key(&offset) {
-            return true;
-        }
-        if let Some((&_, range)) = self.equivalents.range(..=offset).next_back() {
-            return offset < range.end;
-        }
-        false
-    }
-
-    pub fn has_equivalent_exact(&self, offset: AddressValue) -> bool {
-        if self.equivalents.contains_key(&offset) {
-            return true;
-        }
-        false
+        lookup_in(&self.equivalents, offset).is_some()
     }
 
     pub fn get_equivalent_kind(&self, offset: AddressValue) -> Option<EquivalentKind> {
-        if let Some(range) = self.equivalents.get(&offset) {
-            return Some(range.equivalent.kind());
+        match self.equivalent_at(offset) {
+            EquivalentAt::Defined { range, .. } => Some(range.equivalent.kind()),
+            EquivalentAt::Undefined(_) => None,
         }
-        if let Some((&_, range)) = self.equivalents.range(..=offset).next_back()
-            && offset < range.end
-        {
-            return Some(range.equivalent.kind());
-        }
-        None
-    }
-
-    pub fn get_equivalent_kind_exact(&self, offset: AddressValue) -> Option<EquivalentKind> {
-        if let Some(range) = self.equivalents.get(&offset) {
-            return Some(range.equivalent.kind());
-        }
-        None
     }
 
     pub fn get_equivalent(&self, offset: AddressValue) -> EquivalentAt<'_> {
@@ -315,23 +442,16 @@ impl Region {
     }
 
     fn equivalent_at(&self, offset: AddressValue) -> EquivalentAt<'_> {
-        if let Some(range) = self.equivalents.get(&offset) {
-            return EquivalentAt::Defined {
-                start: offset,
-                range,
-            };
+        // Strong (data / unknown / code islands) overlays weak (derived code).
+        match lookup_in(&self.equivalents, offset).or_else(|| lookup_in(self.weak.code(), offset)) {
+            Some((start, range)) => EquivalentAt::Defined { start, range },
+            None => EquivalentAt::Undefined(self.undefined_range_at(offset)),
         }
-        if let Some((&start, range)) = self.equivalents.range(..=offset).next_back()
-            && offset < range.end
-        {
-            return EquivalentAt::Defined { start, range };
-        }
-        EquivalentAt::Undefined(self.undefined_range_at(offset))
     }
 
     fn undefined_range_at(&self, offset: AddressValue) -> Range<AddressValue> {
         let after = offset.saturating_add(1);
-        let next_eq = self.equivalents.range(after..).next().map(|(&k, _)| k);
+        let next_eq = self.next_equivalent_boundary(after);
         let next_lbl = self.labels.range(after..).next().map(|(&k, _)| k);
         let next_cmt = self.comments.range(after..).next().map(|(&k, _)| k);
         let end = [Some(self.end()), next_eq, next_lbl, next_cmt]
@@ -448,8 +568,15 @@ impl Region {
         for (&start, range) in &self.equivalents {
             let span = range.end.saturating_sub(start);
             match &range.equivalent {
-                Equivalent::Code(_) => usage.code += span,
+                Equivalent::Code => usage.code += span,
                 Equivalent::Data(_, _) => usage.data += span,
+                Equivalent::Unknown(_) => {} // counts as undefined, via subtraction below
+            }
+        }
+        // Weak code, minus strong islands already counted.
+        for (&start, range) in self.weak.code() {
+            if !self.equivalents.contains_key(&start) {
+                usage.code += range.end.saturating_sub(start);
             }
         }
 
@@ -517,11 +644,12 @@ impl Region {
 
             match self.get_equivalent(addr) {
                 EquivalentAt::Defined { start: _, range } => match &range.equivalent {
-                    Equivalent::Code(overrides) => {
+                    Equivalent::Code => {
                         let insn = self
                             .decode_at(addr)
                             .expect("validated code equivalent must decode");
-                        let text = self.format_instruction(addr, &insn, overrides, labels);
+                        let overrides = self.operand_overrides_at(addr);
+                        let text = self.format_instruction(addr, &insn, &overrides, labels);
                         lines.push(Line::Instruction {
                             addr,
                             direct: insn.direct_addr(),
@@ -537,6 +665,11 @@ impl Region {
                             data_type: data_type.clone(),
                             bytes,
                         });
+                        addr = range.end;
+                    }
+                    Equivalent::Unknown(size) => {
+                        let bytes = self.bytes_at(addr, *size);
+                        lines.push(Line::Raw { addr, bytes });
                         addr = range.end;
                     }
                 },
@@ -584,12 +717,57 @@ impl Region {
                 }
             }
         }
+
+        // Barriers must precede the roots so they're in place when reload re-derives.
         for (&offset, equivalent_range) in &self.equivalents {
-            commands.push(boxed(SetEquivalent::new(
+            match &equivalent_range.equivalent {
+                Equivalent::Data(data_type, _) => {
+                    commands.push(boxed(MarkData::new(
+                        (space, offset..equivalent_range.end),
+                        data_type.clone(),
+                    )));
+                }
+                Equivalent::Unknown(_) => {
+                    commands.push(boxed(MarkUnknown::new((space, offset..equivalent_range.end))));
+                }
+                Equivalent::Code => {}
+            }
+        }
+
+        for root in self.weak.roots() {
+            commands.push(boxed(AutoDisassemble::new((space, root))));
+        }
+
+        // Manual code islands (strong code no root covers), coalesced into one
+        // `disassemble_range` per contiguous run.
+        let mut run: Option<(AddressValue, AddressValue)> = None;
+        for (&offset, equivalent_range) in &self.equivalents {
+            let island = matches!(equivalent_range.equivalent, Equivalent::Code)
+                && !self.weak.code().contains_key(&offset);
+            match (run, island) {
+                (Some((start, end)), true) if end == offset => {
+                    run = Some((start, equivalent_range.end));
+                }
+                (Some((start, end)), _) => {
+                    commands.push(boxed(DisassembleRange::new((space, start..end))));
+                    run = island.then_some((offset, equivalent_range.end));
+                }
+                (None, true) => run = Some((offset, equivalent_range.end)),
+                (None, false) => {}
+            }
+        }
+        if let Some((start, end)) = run {
+            commands.push(boxed(DisassembleRange::new((space, start..end))));
+        }
+
+        for (&(offset, index), value) in &self.overrides {
+            commands.push(boxed(OverrideOperand::new(
                 (space, offset),
-                equivalent_range.equivalent.clone(),
+                index,
+                Some(value.clone()),
             )));
         }
+
         for (&offset, label) in &self.labels {
             commands.push(boxed(SetLabel::new((space, offset), label.clone())));
         }
@@ -604,17 +782,11 @@ impl Region {
 
     pub(crate) fn xrefs_to(&self, space: AddressSpace, target: &PhysicalAddr) -> Vec<Xref> {
         let mut xrefs = Vec::new();
-        for (&offset, equivalent_range) in &self.equivalents {
-            if !matches!(equivalent_range.equivalent, Equivalent::Code(_)) {
-                continue;
-            }
+        for offset in self.code_offsets() {
             let Some(instruction) = self.decode_at(offset) else {
                 continue;
             };
-            let source = PhysicalAddr {
-                space,
-                offset: offset as AddressValue,
-            };
+            let source = PhysicalAddr { space, offset };
             xrefs.extend(xrefs_to_target(&instruction, source, target));
         }
         xrefs
@@ -622,10 +794,7 @@ impl Region {
 
     pub(crate) fn xrefs_from(&self, source: &PhysicalAddr) -> Vec<Xref> {
         let offset = source.offset;
-        let Some(equivalent_range) = self.equivalents.get(&offset) else {
-            return Vec::new();
-        };
-        if !matches!(equivalent_range.equivalent, Equivalent::Code(_)) {
+        if !self.is_code_start(offset) {
             return Vec::new();
         }
         let Some(instruction) = self.decode_at(offset) else {
@@ -636,10 +805,7 @@ impl Region {
 
     /// Collect all the necessary references for this region.
     pub(crate) fn collect_refs(&self, space: AddressSpace, refs: &mut LabelCollector) {
-        for (&offset, equivalent_range) in &self.equivalents {
-            if !matches!(equivalent_range.equivalent, Equivalent::Code(_)) {
-                continue;
-            }
+        for offset in self.code_offsets() {
             let Some(instruction) = self.decode_at(offset) else {
                 continue;
             };
@@ -725,11 +891,12 @@ impl Region {
         equivalent: &Equivalent,
     ) -> Result<AddressValue, Error> {
         match equivalent {
-            Equivalent::Code(_) => self
+            Equivalent::Code => self
                 .decode_at(offset)
                 .map(|insn| insn.len() as AddressValue)
                 .ok_or(Error::InvalidEquivalent),
             Equivalent::Data(_, size) => Ok(*size),
+            Equivalent::Unknown(size) => Ok(*size),
         }
     }
 
@@ -768,7 +935,7 @@ impl Region {
     ) -> AddressValue {
         let after = addr.saturating_add(1);
         let mut boundary = limit;
-        if let Some((&start, _)) = self.equivalents.range(after..).next() {
+        if let Some(start) = self.next_equivalent_boundary(after) {
             boundary = boundary.min(start);
         }
         if let Some((&start, _)) = self.labels.range(after..).next() {
@@ -824,62 +991,27 @@ impl Region {
         sdas_indent_instruction(&text)
     }
 
-    /// Auto-disassembles code addresses recursively. Will not modify any address that already
-    /// has an equivalent.
-    pub fn auto_disassemble(&mut self, start: u32) -> AutoDisassembleResult {
-        let mut queue = Vec::new();
-        let mut result = AutoDisassembleResult::default();
-        queue.push(start);
-        while let Some(addr) = queue.pop() {
-            match self.get_equivalent_kind(addr) {
-                Some(EquivalentKind::Code) => {
-                    // Exact address means we ran into an existing code block
-                    // successfully
-                    if self.equivalents.contains_key(&addr) {
-                        continue;
-                    }
-                    result
-                        .errors
-                        .push((addr, AutoDisassembleError::Overlapped(EquivalentKind::Code)));
-                }
-                Some(EquivalentKind::Data) => {
-                    result
-                        .errors
-                        .push((addr, AutoDisassembleError::Overlapped(EquivalentKind::Data)));
-                    continue;
-                }
-                None => {}
+}
+
+impl CodeSource for Region {
+    fn decode(&self, addr: AddressValue) -> Option<Instruction> {
+        self.decode_at(addr)
+    }
+
+    fn barrier_in(&self, addr: AddressValue, len: AddressValue) -> Option<EquivalentKind> {
+        let end = addr.saturating_add(len);
+        // Strong equivalents don't overlap, so scanning back from `end` until one
+        // ends at/before `addr` covers every entry touching the range.
+        for (_, range) in self.equivalents.range(..end).rev() {
+            if range.end <= addr {
+                break;
             }
-            let Ok(_) = self.set_equivalent(addr, Equivalent::Code(vec![])) else {
-                result
-                    .errors
-                    .push((addr, AutoDisassembleError::Overlapped(EquivalentKind::Code)));
-                continue;
-            };
-            result.success.push(addr);
-            if let Some(ins) = self.decode_at(addr) {
-                let flow = ins.control_flow();
-                match flow {
-                    ControlFlow::Continue { next } => queue.push(next),
-                    ControlFlow::Jump { target } => queue.push(target),
-                    ControlFlow::Call { target, return_pc } => {
-                        queue.push(return_pc);
-                        queue.push(target);
-                    }
-                    ControlFlow::Choice {
-                        fall_through,
-                        branch_target,
-                    } => {
-                        queue.push(fall_through);
-                        queue.push(branch_target);
-                    }
-                    ControlFlow::Diverge => {
-                        continue;
-                    }
-                }
+            let kind = range.equivalent.kind();
+            if kind != EquivalentKind::Code {
+                return Some(kind);
             }
         }
-        result
+        None
     }
 }
 
@@ -934,6 +1066,21 @@ fn apply_operand_overrides(decoded: &str, overrides: &[Option<OperandOverride>])
     out
 }
 
+/// Find the entry covering `offset` in one equivalent layer: an exact start, or
+/// a preceding range that still contains it.
+fn lookup_in(
+    map: &BTreeMap<AddressValue, EquivalentRange>,
+    offset: AddressValue,
+) -> Option<(AddressValue, &EquivalentRange)> {
+    if let Some(range) = map.get(&offset) {
+        return Some((offset, range));
+    }
+    match map.range(..=offset).next_back() {
+        Some((&start, range)) if offset < range.end => Some((start, range)),
+        _ => None,
+    }
+}
+
 /// A and B are inclusive start, exclusive end.
 fn ranges_overlap(
     a_start: AddressValue,
@@ -954,38 +1101,6 @@ fn ranges_overlap_inclusive(
     a_start <= b_end && b_start <= a_end
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AutoDisassembleError {
-    /// Adding an instruction would have overlapped non-code bytes, or partially
-    /// overlapped other code.
-    Overlapped(EquivalentKind),
-}
-
-/// Result of auto-disassembling a region.
-#[must_use]
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct AutoDisassembleResult {
-    pub success: Vec<AddressValue>,
-    pub errors: Vec<(AddressValue, AutoDisassembleError)>,
-}
-
-impl AutoDisassembleResult {
-    pub fn is_success(&self) -> bool {
-        self.errors.is_empty()
-    }
-
-    pub fn unwrap_success(self) -> Vec<AddressValue> {
-        if self.errors.is_empty() {
-            self.success
-        } else {
-            if let Some(error) = self.errors.first() {
-                panic!("Auto-disassembly failed (first error at {:04X}))", error.0);
-            }
-            panic!("Auto-disassembly partially failed");
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1001,12 +1116,12 @@ mod tests {
             0,
             &[0x02, 0x00, 0x10, 0x74, 0x01, 0x00, 0x00, 0x00],
         );
-        region.set_equivalent(0, Equivalent::Code(vec![])).unwrap();
+        region.set_equivalent(0, Equivalent::Code).unwrap();
         assert!(matches!(
-            region.set_equivalent(1, Equivalent::Code(vec![])),
+            region.set_equivalent(1, Equivalent::Code),
             Err(Error::NotUndefined(1))
         ));
-        region.set_equivalent(6, Equivalent::Code(vec![])).unwrap();
+        region.set_equivalent(6, Equivalent::Code).unwrap();
         assert!(matches!(
             region.set_equivalent(4, Equivalent::Data(DataType::Byte, 3)),
             Err(Error::Overlap(6))
@@ -1045,8 +1160,8 @@ mod tests {
     fn branch_target_uses_implicit_label() {
         let mut region = Region::new();
         region.set_bytes("test.bin", 0, 0, &[0x12, 0x01, 0x6D, 0x02, 0x03, 0x04]);
-        region.set_equivalent(0, Equivalent::Code(vec![])).unwrap();
-        region.set_equivalent(3, Equivalent::Code(vec![])).unwrap();
+        region.set_equivalent(0, Equivalent::Code).unwrap();
+        region.set_equivalent(3, Equivalent::Code).unwrap();
 
         let mut collector = LabelCollector::default();
         region.collect_refs(AddressSpace::Code, &mut collector);
@@ -1070,16 +1185,8 @@ mod tests {
         let mut region = Region::new();
         region.set_bytes("test.bin", 0, 0, &[0xB5, 0x20, 0x10]);
         region.set_label(0x13, "target");
-        region
-            .set_equivalent(
-                0,
-                Equivalent::Code(vec![
-                    None,
-                    None,
-                    Some(OperandOverride::Label("target".into())),
-                ]),
-            )
-            .unwrap();
+        region.set_equivalent(0, Equivalent::Code).unwrap();
+        region.set_operand_override(0, 2, Some(OperandOverride::Label("target".into())));
         let implicit_labels = ImplicitLabels::default();
         let lines = region.render(AddressSpace::Code, &implicit_labels);
         let insn = lines
@@ -1118,8 +1225,8 @@ mod tests {
             0,
             &[0x02, 0x00, 0x10, 0x74, 0x01, 0xFF, 0xFF],
         );
-        region.set_equivalent(0, Equivalent::Code(vec![])).unwrap();
-        region.set_equivalent(3, Equivalent::Code(vec![])).unwrap();
+        region.set_equivalent(0, Equivalent::Code).unwrap();
+        region.set_equivalent(3, Equivalent::Code).unwrap();
         region
             .set_equivalent(5, Equivalent::Data(DataType::Word, 2))
             .unwrap();

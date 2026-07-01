@@ -226,15 +226,19 @@ pub enum OperandOverride {
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Equivalent {
-    Code(Vec<Option<OperandOverride>>),
+    Code,
     Data(DataType, AddressValue),
+    /// A barrier of the given byte length: renders raw, but blocks
+    /// auto-disassembly (unlike undefined bytes, which it flows into).
+    Unknown(AddressValue),
 }
 
 impl Equivalent {
     pub fn kind(&self) -> EquivalentKind {
         match self {
-            Self::Code(_) => EquivalentKind::Code,
+            Self::Code => EquivalentKind::Code,
             Self::Data(_, _) => EquivalentKind::Data,
+            Self::Unknown(_) => EquivalentKind::Unknown,
         }
     }
 }
@@ -243,6 +247,7 @@ impl Equivalent {
 pub enum EquivalentKind {
     Code,
     Data,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -367,15 +372,15 @@ mod tests {
         code.set_bytes("test.bin", 0, 0, &TEST_BINARY);
 
         code.set_label(0, "start");
-        code.set_equivalent(0, Equivalent::Code(vec![])).unwrap();
+        code.set_equivalent(0, Equivalent::Code).unwrap();
 
         code.set_comment(3, "Start of loop");
         code.set_label(3, "loop");
-        code.set_equivalent(3, Equivalent::Code(vec![])).unwrap();
-        code.set_equivalent(5, Equivalent::Code(vec![])).unwrap();
-        code.set_equivalent(6, Equivalent::Code(vec![])).unwrap();
-        code.set_equivalent(9, Equivalent::Code(vec![])).unwrap();
-        code.set_equivalent(10, Equivalent::Code(vec![])).unwrap();
+        code.set_equivalent(3, Equivalent::Code).unwrap();
+        code.set_equivalent(5, Equivalent::Code).unwrap();
+        code.set_equivalent(6, Equivalent::Code).unwrap();
+        code.set_equivalent(9, Equivalent::Code).unwrap();
+        code.set_equivalent(10, Equivalent::Code).unwrap();
         db
     }
 
@@ -618,7 +623,7 @@ loc_0010:
     }
 
     #[test]
-    fn auto_disassemble_undo_is_one_clear_equivalents() {
+    fn auto_disassemble_undo_removes_root_and_derived_code() {
         let env = TestEnvironment::new().with_file("test.bin", TEST_BINARY.to_vec());
         let mut db = Db::new();
         db.apply(
@@ -636,14 +641,224 @@ loc_0010:
             .apply(boxed(AutoDisassemble::new((AddressSpace::Code, 0))), None)
             .unwrap();
 
-        // Disassembly created code equivalents, and the undo is a *single*
-        // ClearEquivalents over the whole coalesced set — not one per address.
+        // Derived code, so the undo is just the root-clear. Nothing to un-set.
         assert!(db.space_usage(AddressSpace::Code).code > 0);
+        assert!(db.region(AddressSpace::Code).unwrap().is_auto_root(0));
         assert_eq!(undo.len(), 1);
-        assert_eq!(undo[0].name(), "clear_equivalents");
+        assert_eq!(undo[0].name(), "clear_auto_disassemble_root");
 
         apply_all(&mut db, undo, &env);
         assert_eq!(db.space_usage(AddressSpace::Code).code, 0);
+        assert!(!db.region(AddressSpace::Code).unwrap().is_auto_root(0));
+    }
+
+    #[test]
+    fn auto_disassemble_exports_as_root_and_round_trips() {
+        use crate::store::{from_dsl_many, to_dsl_many};
+
+        // MOV A,#1 / INC A / SJMP back: a self-contained loop.
+        const BYTES: [u8; 5] = [0x74, 0x01, 0x04, 0x80, 0xFB];
+        let env = TestEnvironment::new().with_file("loop.bin", BYTES.to_vec());
+        let mut db = Db::new();
+        db.apply(
+            boxed(MapBytes::new((AddressSpace::Code, 0), "loop.bin", 0usize, 5u32)),
+            Some(&env),
+        )
+        .unwrap();
+        // The region method (which library callers use) must record a root.
+        assert!(db.region_mut(AddressSpace::Code).auto_disassemble(0).is_success());
+        assert!(db.region(AddressSpace::Code).unwrap().is_auto_root(0));
+
+        let dsl = to_dsl_many(&db.to_commands());
+        assert!(dsl.contains("auto_disassemble(address=CODE:0x0)"), "{dsl}");
+        assert!(!dsl.contains("disassemble_range"), "{dsl}");
+
+        let mut reloaded = Db::new();
+        for command in from_dsl_many(&dsl).unwrap() {
+            let env = (command.name() == "map_bytes").then_some(&env as &dyn Environment);
+            reloaded.apply(command, env).unwrap();
+        }
+        assert_eq!(reloaded.to_sdas(), db.to_sdas());
+    }
+
+    #[test]
+    fn unknown_equivalent_chops_auto_disassembly_and_round_trips() {
+        use crate::commands::MarkUnknown;
+        use crate::store::{from_dsl_many, to_dsl_many};
+
+        // MOV A,#1 / INC A / NOP / RET: a straight-line run.
+        const BYTES: [u8; 5] = [0x74, 0x01, 0x04, 0x00, 0x22];
+        let env = TestEnvironment::new().with_file("b.bin", BYTES.to_vec());
+        let mut db = Db::new();
+        db.apply(
+            boxed(MapBytes::new(
+                (AddressSpace::Code, 0),
+                "b.bin",
+                0usize,
+                BYTES.len() as AddressValue,
+            )),
+            Some(&env),
+        )
+        .unwrap();
+        // Barrier at 0x3, set before disassembling.
+        db.apply(
+            boxed(MarkUnknown::new((AddressSpace::Code, 0x3u32..0x4u32))),
+            None,
+        )
+        .unwrap();
+        db.apply(boxed(AutoDisassemble::new((AddressSpace::Code, 0u32))), None)
+            .unwrap();
+
+        // Flow stops at the barrier: 0x3 stays unknown, 0x4 is never reached.
+        let region = db.region(AddressSpace::Code).unwrap();
+        assert_eq!(region.get_equivalent_kind(0x0), Some(EquivalentKind::Code));
+        assert_eq!(region.get_equivalent_kind(0x2), Some(EquivalentKind::Code));
+        assert_eq!(
+            region.get_equivalent_kind(0x3),
+            Some(EquivalentKind::Unknown)
+        );
+        assert_eq!(region.get_equivalent_kind(0x4), None);
+
+        let dsl = to_dsl_many(&db.to_commands());
+        assert!(
+            dsl.contains("mark_unknown(range=CODE:0x3..0x4)"),
+            "barrier is exported as a verb: {dsl}"
+        );
+        let mut reloaded = Db::new();
+        for command in from_dsl_many(&dsl).unwrap() {
+            let env = (command.name() == "map_bytes").then_some(&env as &dyn Environment);
+            reloaded.apply(command, env).expect("command should apply");
+        }
+        assert_eq!(reloaded.to_sdas(), db.to_sdas());
+    }
+
+    #[test]
+    fn unknown_barrier_retroactively_chops_weak_code() {
+        use crate::commands::MarkUnknown;
+
+        // MOV A,#1 / INC A / NOP / RET: a straight-line run.
+        const BYTES: [u8; 5] = [0x74, 0x01, 0x04, 0x00, 0x22];
+        let env = TestEnvironment::new().with_file("b.bin", BYTES.to_vec());
+        let mut db = Db::new();
+        db.apply(
+            boxed(MapBytes::new(
+                (AddressSpace::Code, 0),
+                "b.bin",
+                0usize,
+                BYTES.len() as AddressValue,
+            )),
+            Some(&env),
+        )
+        .unwrap();
+        // Disassemble the whole run first.
+        db.apply(boxed(AutoDisassemble::new((AddressSpace::Code, 0u32))), None)
+            .unwrap();
+        let region = db.region(AddressSpace::Code).unwrap();
+        assert_eq!(region.get_equivalent_kind(0x3), Some(EquivalentKind::Code));
+        assert_eq!(region.get_equivalent_kind(0x4), Some(EquivalentKind::Code));
+
+        // Drop a barrier mid-flow. Derived code re-derives, so 0x3 onward vanish.
+        db.apply(
+            boxed(MarkUnknown::new((AddressSpace::Code, 0x3u32..0x4u32))),
+            None,
+        )
+        .unwrap();
+        let region = db.region(AddressSpace::Code).unwrap();
+        assert_eq!(region.get_equivalent_kind(0x0), Some(EquivalentKind::Code));
+        assert_eq!(region.get_equivalent_kind(0x2), Some(EquivalentKind::Code));
+        assert_eq!(
+            region.get_equivalent_kind(0x3),
+            Some(EquivalentKind::Unknown)
+        );
+        assert_eq!(region.get_equivalent_kind(0x4), None);
+    }
+
+    #[test]
+    fn extent_commands_round_trip_and_coalesce_on_export() {
+        use crate::commands::{DisassembleRange, MarkData};
+        use crate::store::{from_dsl_many, to_dsl_many};
+
+        // MOV A,#1 / INC A (a 3-byte code block), then 2 data bytes.
+        let env = TestEnvironment::new().with_file("m.bin", vec![0x74, 0x01, 0x04, 0xAA, 0xBB]);
+        let mut db = Db::new();
+        db.apply(
+            boxed(MapBytes::new((AddressSpace::Code, 0), "m.bin", 0usize, 5u32)),
+            Some(&env),
+        )
+        .unwrap();
+        db.apply(
+            boxed(DisassembleRange::new((AddressSpace::Code, 0u32..3u32))),
+            None,
+        )
+        .unwrap();
+        db.apply(
+            boxed(MarkData::new((AddressSpace::Code, 3u32..5u32), DataType::Byte)),
+            None,
+        )
+        .unwrap();
+
+        let dsl = to_dsl_many(&db.to_commands());
+        assert!(
+            dsl.contains("disassemble_range(range=CODE:0x0..0x3)"),
+            "code island coalesced: {dsl}"
+        );
+        assert!(
+            dsl.contains("mark_data(data_type=DataType::Byte, range=CODE:0x3..0x5)"),
+            "data as a verb: {dsl}"
+        );
+        assert!(!dsl.contains("set_equivalent"), "no low-level command: {dsl}");
+
+        let mut reloaded = Db::new();
+        for command in from_dsl_many(&dsl).unwrap() {
+            let env = (command.name() == "map_bytes").then_some(&env as &dyn Environment);
+            reloaded.apply(command, env).expect("command should apply");
+        }
+        assert_eq!(reloaded.to_sdas(), db.to_sdas());
+    }
+
+    #[test]
+    fn override_operand_round_trips_and_undoes() {
+        use crate::commands::{DisassembleRange, OverrideOperand};
+        use crate::db::OperandOverride;
+        use crate::store::{from_dsl_many, to_dsl_many};
+
+        // CJNE A,0x20,rel: three operands. We override the third.
+        let env = TestEnvironment::new().with_file("b.bin", vec![0xB5, 0x20, 0x10]);
+        let mut db = Db::new();
+        db.apply(
+            boxed(MapBytes::new((AddressSpace::Code, 0), "b.bin", 0usize, 3u32)),
+            Some(&env),
+        )
+        .unwrap();
+        db.apply(
+            boxed(DisassembleRange::new((AddressSpace::Code, 0u32..3u32))),
+            None,
+        )
+        .unwrap();
+        let undo = db
+            .apply(
+                boxed(OverrideOperand::new(
+                    (AddressSpace::Code, 0u32),
+                    2u8,
+                    Some(OperandOverride::Text("HOT".into())),
+                )),
+                None,
+            )
+            .unwrap();
+        assert!(db.to_sdas().contains("HOT"), "{}", db.to_sdas());
+
+        let dsl = to_dsl_many(&db.to_commands());
+        assert!(dsl.contains("override_operand("), "{dsl}");
+        let mut reloaded = Db::new();
+        for command in from_dsl_many(&dsl).unwrap() {
+            let env = (command.name() == "map_bytes").then_some(&env as &dyn Environment);
+            reloaded.apply(command, env).expect("command should apply");
+        }
+        assert_eq!(reloaded.to_sdas(), db.to_sdas());
+
+        // Undo clears the override.
+        apply_all(&mut db, undo, &env);
+        assert!(!db.to_sdas().contains("HOT"), "{}", db.to_sdas());
     }
 
     #[test]

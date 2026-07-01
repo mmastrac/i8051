@@ -82,10 +82,9 @@ pub fn from_dsl_many(input: &str) -> Result<Vec<Box<dyn Command>>, DslError> {
 mod tests {
     use crate::address::{AddressRange, AddressSpace};
     use crate::commands::{
-        self, AutoDisassemble, ClearBytes, MapBytes, SetComment, SetEquivalent, SetFunction,
-        SetLabel, SetNote,
+        self, AutoDisassemble, ClearBytes, MapBytes, SetComment, SetFunction, SetLabel, SetNote,
     };
-    use crate::db::{DataType, Equivalent, Function};
+    use crate::db::Function;
     use crate::note::Note;
 
     use super::{from_dsl, to_dsl};
@@ -130,34 +129,6 @@ mod tests {
         let command = commands::boxed(SetComment::new((AddressSpace::Code, 0x10), "say \"hello\""));
         let dsl = to_dsl(&*command);
         assert!(dsl.contains("r#\""));
-        assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
-    }
-
-    #[test]
-    fn round_trip_set_equivalent_code() {
-        let command = commands::boxed(SetEquivalent::new(
-            (AddressSpace::Code, 0),
-            Equivalent::Code(vec![None]),
-        ));
-        let dsl = to_dsl(&*command);
-        assert_eq!(
-            dsl,
-            "set_equivalent(address=CODE:0x0, equivalent=Equivalent::Code([None]))"
-        );
-        assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
-    }
-
-    #[test]
-    fn round_trip_set_equivalent_data() {
-        let command = commands::boxed(SetEquivalent::new(
-            (AddressSpace::Code, 0x20),
-            Equivalent::Data(DataType::Byte, 4),
-        ));
-        let dsl = to_dsl(&*command);
-        assert_eq!(
-            dsl,
-            "set_equivalent(address=CODE:0x20, equivalent=Equivalent::Data(DataType::Byte, 0x4))"
-        );
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
     }
 
