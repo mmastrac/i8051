@@ -10,7 +10,7 @@ pub use crate::note::{
     Note, NoteAddressIndex, NoteDb, NoteField, NoteGlobalIndex, NoteId, NotePath, Notes,
     ProximateNote,
 };
-pub use crate::region::{ByteRange, Region};
+pub use crate::region::{Block, ByteRange, Region};
 use crate::render::Line;
 use crate::render::sdas::SdasWriter;
 
@@ -32,15 +32,18 @@ impl Db {
     }
 
     pub fn region_mut(&mut self, space: AddressSpace) -> &mut Region {
-        self.regions.entry(space).or_default()
+        self.regions
+            .entry(space)
+            .or_insert_with(|| Region::new(space))
     }
 
     pub fn xrefs_to(&self, target: &PhysicalAddr) -> Vec<Xref> {
-        let mut xrefs = Vec::new();
-        for (&space, region) in &self.regions {
-            xrefs.extend(region.xrefs_to(space, target));
-        }
-        xrefs
+        // Each region indexes only its own instructions. Regions without code
+        // carry an empty index and contribute nothing.
+        self.regions
+            .values()
+            .flat_map(|region| region.xrefs_to(target))
+            .collect()
     }
 
     pub fn xrefs_from(&self, source: &PhysicalAddr) -> Vec<Xref> {
@@ -50,10 +53,25 @@ impl Db {
         region.xrefs_from(source)
     }
 
+    /// The control-flow graph of the routine rooted at `entry` in `space`.
+    pub fn basic_blocks(&self, space: AddressSpace, entry: AddressValue) -> Vec<Block> {
+        self.region(space)
+            .map(|region| region.basic_blocks(entry))
+            .unwrap_or_default()
+    }
+
+    /// Follow pure jump thunks from `addr` to the ultimate target. Rendering
+    /// stays faithful to the bytes, so this is how a consumer asks where a call
+    /// or jump really ends up. Returns `addr` when it is not a thunk.
+    pub fn resolve_thunk(&self, space: AddressSpace, addr: AddressValue) -> AddressValue {
+        self.region(space)
+            .map_or(addr, |region| region.resolve_thunks(addr))
+    }
+
     fn implicit_labels(&self) -> ImplicitLabels {
         let mut label_collector = LabelCollector::default();
-        for (&space, region) in &self.regions {
-            region.collect_refs(space, &mut label_collector);
+        for region in self.regions.values() {
+            region.collect_refs(&mut label_collector);
         }
         label_collector.into_implicit_labels()
     }
@@ -492,11 +510,17 @@ loc_0010:
         assert_eq!(reloaded.notes.get(&second.id), Some(&second));
         assert_eq!(
             reloaded.note_location(&first.id),
-            Some((AddressSpace::Code, crate::address::AddressRange::new(0x0, 0x3)))
+            Some((
+                AddressSpace::Code,
+                crate::address::AddressRange::new(0x0, 0x3)
+            ))
         );
         assert_eq!(
             reloaded.note_location(&second.id),
-            Some((AddressSpace::Code, crate::address::AddressRange::new(0x3, 0x5)))
+            Some((
+                AddressSpace::Code,
+                crate::address::AddressRange::new(0x3, 0x5)
+            ))
         );
 
         // The listing (which excludes notes) is unchanged.
@@ -661,12 +685,21 @@ loc_0010:
         let env = TestEnvironment::new().with_file("loop.bin", BYTES.to_vec());
         let mut db = Db::new();
         db.apply(
-            boxed(MapBytes::new((AddressSpace::Code, 0), "loop.bin", 0usize, 5u32)),
+            boxed(MapBytes::new(
+                (AddressSpace::Code, 0),
+                "loop.bin",
+                0usize,
+                5u32,
+            )),
             Some(&env),
         )
         .unwrap();
         // The region method (which library callers use) must record a root.
-        assert!(db.region_mut(AddressSpace::Code).auto_disassemble(0).is_success());
+        assert!(
+            db.region_mut(AddressSpace::Code)
+                .auto_disassemble(0)
+                .is_success()
+        );
         assert!(db.region(AddressSpace::Code).unwrap().is_auto_root(0));
 
         let dsl = to_dsl_many(&db.to_commands());
@@ -706,8 +739,11 @@ loc_0010:
             None,
         )
         .unwrap();
-        db.apply(boxed(AutoDisassemble::new((AddressSpace::Code, 0u32))), None)
-            .unwrap();
+        db.apply(
+            boxed(AutoDisassemble::new((AddressSpace::Code, 0u32))),
+            None,
+        )
+        .unwrap();
 
         // Flow stops at the barrier: 0x3 stays unknown, 0x4 is never reached.
         let region = db.region(AddressSpace::Code).unwrap();
@@ -751,8 +787,11 @@ loc_0010:
         )
         .unwrap();
         // Disassemble the whole run first.
-        db.apply(boxed(AutoDisassemble::new((AddressSpace::Code, 0u32))), None)
-            .unwrap();
+        db.apply(
+            boxed(AutoDisassemble::new((AddressSpace::Code, 0u32))),
+            None,
+        )
+        .unwrap();
         let region = db.region(AddressSpace::Code).unwrap();
         assert_eq!(region.get_equivalent_kind(0x3), Some(EquivalentKind::Code));
         assert_eq!(region.get_equivalent_kind(0x4), Some(EquivalentKind::Code));
@@ -782,7 +821,12 @@ loc_0010:
         let env = TestEnvironment::new().with_file("m.bin", vec![0x74, 0x01, 0x04, 0xAA, 0xBB]);
         let mut db = Db::new();
         db.apply(
-            boxed(MapBytes::new((AddressSpace::Code, 0), "m.bin", 0usize, 5u32)),
+            boxed(MapBytes::new(
+                (AddressSpace::Code, 0),
+                "m.bin",
+                0usize,
+                5u32,
+            )),
             Some(&env),
         )
         .unwrap();
@@ -792,7 +836,10 @@ loc_0010:
         )
         .unwrap();
         db.apply(
-            boxed(MarkData::new((AddressSpace::Code, 3u32..5u32), DataType::Byte)),
+            boxed(MarkData::new(
+                (AddressSpace::Code, 3u32..5u32),
+                DataType::Byte,
+            )),
             None,
         )
         .unwrap();
@@ -806,7 +853,10 @@ loc_0010:
             dsl.contains("mark_data(data_type=DataType::Byte, range=CODE:0x3..0x5)"),
             "data as a verb: {dsl}"
         );
-        assert!(!dsl.contains("set_equivalent"), "no low-level command: {dsl}");
+        assert!(
+            !dsl.contains("set_equivalent"),
+            "no low-level command: {dsl}"
+        );
 
         let mut reloaded = Db::new();
         for command in from_dsl_many(&dsl).unwrap() {
@@ -826,7 +876,12 @@ loc_0010:
         let env = TestEnvironment::new().with_file("b.bin", vec![0xB5, 0x20, 0x10]);
         let mut db = Db::new();
         db.apply(
-            boxed(MapBytes::new((AddressSpace::Code, 0), "b.bin", 0usize, 3u32)),
+            boxed(MapBytes::new(
+                (AddressSpace::Code, 0),
+                "b.bin",
+                0usize,
+                3u32,
+            )),
             Some(&env),
         )
         .unwrap();

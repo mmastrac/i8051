@@ -576,16 +576,20 @@ fn note_matches(note: &Note, needle: &str) -> bool {
     if note.content.to_lowercase().contains(needle) {
         return true;
     }
-    if note.tags.iter().any(|tag| tag.to_lowercase().contains(needle)) {
+    if note
+        .tags
+        .iter()
+        .any(|tag| tag.to_lowercase().contains(needle))
+    {
         return true;
     }
     note.fields.iter().any(|(key, value)| {
         key.to_lowercase().contains(needle)
             || match value {
                 NoteField::String(s) => s.to_lowercase().contains(needle),
-                NoteField::List(items) => {
-                    items.iter().any(|item| item.to_lowercase().contains(needle))
-                }
+                NoteField::List(items) => items
+                    .iter()
+                    .any(|item| item.to_lowercase().contains(needle)),
             }
     })
 }
@@ -816,9 +820,21 @@ mod tests {
         let a = db.create("note at 0x10");
         let b = db.create("note at 0x40");
         let c = db.create("far note at 0x200");
-        db.set_address(AddressSpace::Code, AddressRange::from(0x10..0x14), a.clone());
-        db.set_address(AddressSpace::Code, AddressRange::from(0x40..0x44), b.clone());
-        db.set_address(AddressSpace::Code, AddressRange::from(0x200..0x204), c.clone());
+        db.set_address(
+            AddressSpace::Code,
+            AddressRange::from(0x10..0x14),
+            a.clone(),
+        );
+        db.set_address(
+            AddressSpace::Code,
+            AddressRange::from(0x40..0x44),
+            b.clone(),
+        );
+        db.set_address(
+            AddressSpace::Code,
+            AddressRange::from(0x200..0x204),
+            c.clone(),
+        );
 
         // Probe inside `a`'s range, with a window that reaches `b` but not `c`.
         let near = db.notes_near(AddressSpace::Code, 0x12, 0x40);

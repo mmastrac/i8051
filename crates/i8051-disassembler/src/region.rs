@@ -1,16 +1,19 @@
-use i8051::Instruction;
+use i8051::{ControlFlow, Instruction};
 use std::collections::BTreeMap;
 use std::ops::RangeBounds;
 use std::range::Range;
+use std::sync::OnceLock;
 
 mod weak;
+mod xrefs;
 
 pub use weak::{AutoDisassembleError, AutoDisassembleResult};
 use weak::{CodeSource, Weak};
+use xrefs::Xrefs;
 
 use crate::address::{
-    AddressRange, AddressSpace, AddressValue, PhysicalAddr, Xref, branch_target,
-    branch_target_operand_index, xrefs_from_instruction, xrefs_to_target,
+    AddressRange, AddressSpace, AddressValue, PhysicalAddr, Xref, XrefType, branch_target,
+    branch_target_operand_index, xrefs_from_instruction,
 };
 use crate::commands::{
     AutoDisassemble, Command, DisassembleRange, MapBytes, MarkData, MarkUnknown, OverrideOperand,
@@ -20,7 +23,7 @@ use crate::db::{
     Equivalent, EquivalentAt, EquivalentKind, EquivalentRange, Error, Function, OperandOverride,
     SpaceUsage,
 };
-use crate::labels::{ImplicitLabels, LabelCollector, Labels};
+use crate::labels::{ImplicitLabels, LabelCollector, LabelKind, Labels};
 use crate::pattern::BytePattern;
 use crate::render::Line;
 
@@ -43,7 +46,17 @@ impl ByteRange {
     }
 }
 
+/// A basic block in a routine's control-flow graph: a maximal straight-line run
+/// of instructions `[start, end)` with the starts of its successor blocks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Block {
+    pub start: AddressValue,
+    pub end: AddressValue,
+    pub successors: Vec<AddressValue>,
+}
+
 pub struct Region {
+    space: AddressSpace,
     byte_ranges: BTreeMap<AddressValue, ByteRange>,
     equivalents: BTreeMap<AddressValue, EquivalentRange>,
     labels: BTreeMap<AddressValue, String>,
@@ -54,17 +67,15 @@ pub struct Region {
     /// The derived auto-disassembly layer (roots + their code). Reads overlay
     /// `equivalents` over `weak.code()`. Never serialized.
     weak: Weak,
-}
-
-impl Default for Region {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Reverse cross-reference index, derived from the code. Cleared on every
+    /// code change and rebuilt on the next read. Never serialized.
+    xrefs: OnceLock<Xrefs>,
 }
 
 impl Region {
-    pub fn new() -> Self {
+    pub fn new(space: AddressSpace) -> Self {
         Self {
+            space,
             byte_ranges: BTreeMap::new(),
             equivalents: BTreeMap::new(),
             labels: BTreeMap::new(),
@@ -72,6 +83,7 @@ impl Region {
             functions: BTreeMap::new(),
             overrides: BTreeMap::new(),
             weak: Weak::default(),
+            xrefs: OnceLock::new(),
         }
     }
 
@@ -115,10 +127,24 @@ impl Region {
         self.with_weak(|weak, src| weak.refresh(src));
     }
 
+    /// Drop the cached xref index. Cheap: the rebuild is deferred to the next
+    /// read, so a bulk load pays for one rebuild, not one per command.
+    fn invalidate_xrefs(&mut self) {
+        self.xrefs.take();
+    }
+
+    /// The reverse xref index, built on demand and cached until the next code
+    /// change. Reads `self` (bytes, equivalents, weak) to derive the edges.
+    fn xref_index(&self) -> &Xrefs {
+        self.xrefs.get_or_init(|| Xrefs::build(self))
+    }
+
     /// Auto-disassemble from `start`, recording it as a root (so the export is
     /// one `auto_disassemble` command). Returns the traversal diagnostics.
     pub fn auto_disassemble(&mut self, start: AddressValue) -> AutoDisassembleResult {
-        self.with_weak(|weak, src| weak.extend(src, start))
+        let result = self.with_weak(|weak, src| weak.extend(src, start));
+        self.invalidate_xrefs();
+        result
     }
 
     pub fn add_auto_root(&mut self, start: AddressValue) {
@@ -130,6 +156,7 @@ impl Region {
         let removed = self.weak.remove_root(start);
         if removed {
             self.refresh_weak();
+            self.invalidate_xrefs();
         }
         removed
     }
@@ -143,6 +170,106 @@ impl Region {
             self.equivalents.get(&offset).map(|r| r.equivalent.kind()),
             Some(EquivalentKind::Code)
         ) || self.weak.code().contains_key(&offset)
+    }
+
+    /// If `addr` is a pure thunk, its forwarding target. A pure thunk is a code
+    /// instruction whose entire body is one unconditional jump.
+    fn thunk_target(&self, addr: AddressValue) -> Option<AddressValue> {
+        if !self.is_code_start(addr) {
+            return None;
+        }
+        match self.decode_at(addr)?.control_flow() {
+            ControlFlow::Jump { target } => Some(target),
+            _ => None,
+        }
+    }
+
+    /// Follow pure jump thunks from `addr` to the ultimate target. Returns
+    /// `addr` unchanged when it is not a thunk, and treats a jump cycle as not
+    /// a thunk at all. The hop cap bounds degenerate chains.
+    pub(crate) fn resolve_thunks(&self, addr: AddressValue) -> AddressValue {
+        const MAX_HOPS: usize = 16;
+        let mut seen = [addr; MAX_HOPS];
+        let mut current = addr;
+        for hops in 1..MAX_HOPS {
+            let Some(next) = self.thunk_target(current) else {
+                break;
+            };
+            if seen[..hops].contains(&next) {
+                return addr;
+            }
+            seen[hops] = next;
+            current = next;
+        }
+        current
+    }
+
+    /// The control-flow graph of the routine rooted at `entry`: maximal
+    /// straight-line blocks split at branch targets and terminators. Calls fall
+    /// through, except a call to a `noreturn` function, which ends its block.
+    /// Derived on demand from the xref index and the linear code.
+    pub(crate) fn basic_blocks(&self, entry: AddressValue) -> Vec<Block> {
+        let index = self.xref_index();
+        // Only control-flow edges make a leader. A data reference to a code
+        // address (a table read, say) does not split a block.
+        let is_leader = |addr: AddressValue| {
+            index
+                .to(&PhysicalAddr {
+                    space: self.space,
+                    offset: addr,
+                })
+                .iter()
+                .any(|e| matches!(e.kind, XrefType::Call | XrefType::Jump))
+        };
+        let mut blocks: BTreeMap<AddressValue, Block> = BTreeMap::new();
+        let mut worklist = vec![entry];
+        while let Some(start) = worklist.pop() {
+            if blocks.contains_key(&start) || !self.is_code_start(start) {
+                continue;
+            }
+            let mut addr = start;
+            let (end, successors) = loop {
+                let Some(insn) = self.decode_at(addr) else {
+                    break (addr, vec![]);
+                };
+                let next = addr + insn.len() as AddressValue;
+                // `Some` ends the block with those successors. `None` extends it.
+                let ended = match insn.control_flow() {
+                    ControlFlow::Jump { target } => Some(vec![target]),
+                    ControlFlow::Choice {
+                        fall_through,
+                        branch_target,
+                    } => Some(vec![fall_through, branch_target]),
+                    ControlFlow::Diverge => Some(vec![]),
+                    ControlFlow::Call { target, return_pc } => {
+                        if self.functions.get(&target).is_some_and(|f| f.noreturn) {
+                            Some(vec![])
+                        } else if is_leader(return_pc) {
+                            Some(vec![return_pc])
+                        } else {
+                            None
+                        }
+                    }
+                    ControlFlow::Continue { next } => is_leader(next).then(|| vec![next]),
+                };
+                match ended {
+                    Some(successors) => break (next, successors),
+                    None => addr = next,
+                }
+            };
+            for &succ in &successors {
+                worklist.push(succ);
+            }
+            blocks.insert(
+                start,
+                Block {
+                    start,
+                    end,
+                    successors,
+                },
+            );
+        }
+        blocks.into_values().collect()
     }
 
     /// Every code instruction start across both layers, deduplicated.
@@ -193,6 +320,7 @@ impl Region {
             ByteRange::Mapped(file.to_string(), file_offset, bytes.to_vec()),
         );
         self.refresh_weak();
+        self.invalidate_xrefs();
     }
 
     pub fn set_constant(&mut self, offset: AddressValue, size: AddressValue, value: u8) {
@@ -203,6 +331,7 @@ impl Region {
         self.byte_ranges
             .insert(offset, ByteRange::Constant(size, value));
         self.refresh_weak();
+        self.invalidate_xrefs();
     }
 
     pub fn find_bytes(&self, pattern: &BytePattern) -> impl Iterator<Item = Range<AddressValue>> {
@@ -333,6 +462,7 @@ impl Region {
 
         self.byte_ranges = kept;
         self.refresh_weak();
+        self.invalidate_xrefs();
     }
 
     pub fn set_equivalent(
@@ -350,8 +480,8 @@ impl Region {
 
         // Only a barrier landing on already-derived code forces a re-derive (a
         // chop). A code island, or a barrier over undefined bytes, leaves weak as-is.
-        let chops_weak =
-            equivalent.kind() != EquivalentKind::Code && self.weak.overlaps(offset, span);
+        let kind = equivalent.kind();
+        let chops_weak = kind != EquivalentKind::Code && self.weak.overlaps(offset, span);
         self.equivalents.insert(
             offset,
             EquivalentRange {
@@ -361,6 +491,10 @@ impl Region {
         );
         if chops_weak {
             self.refresh_weak();
+            self.invalidate_xrefs();
+        } else if kind == EquivalentKind::Code {
+            // A strong code island adds a new instruction source.
+            self.invalidate_xrefs();
         }
         Ok(&self.equivalents[&offset])
     }
@@ -373,6 +507,7 @@ impl Region {
         self.equivalents
             .retain(|&start, range| range.end <= offset || start >= end);
         self.refresh_weak();
+        self.invalidate_xrefs();
     }
 
     /// Linear-sweep `[start, end)` as strong code. Errors (mutating nothing) on
@@ -405,6 +540,7 @@ impl Region {
             );
         }
         self.refresh_weak();
+        self.invalidate_xrefs();
         Ok(addr)
     }
 
@@ -728,7 +864,10 @@ impl Region {
                     )));
                 }
                 Equivalent::Unknown(_) => {
-                    commands.push(boxed(MarkUnknown::new((space, offset..equivalent_range.end))));
+                    commands.push(boxed(MarkUnknown::new((
+                        space,
+                        offset..equivalent_range.end,
+                    ))));
                 }
                 Equivalent::Code => {}
             }
@@ -780,16 +919,19 @@ impl Region {
         commands
     }
 
-    pub(crate) fn xrefs_to(&self, space: AddressSpace, target: &PhysicalAddr) -> Vec<Xref> {
-        let mut xrefs = Vec::new();
-        for offset in self.code_offsets() {
-            let Some(instruction) = self.decode_at(offset) else {
-                continue;
-            };
-            let source = PhysicalAddr { space, offset };
-            xrefs.extend(xrefs_to_target(&instruction, source, target));
-        }
-        xrefs
+    pub(crate) fn xrefs_to(&self, target: &PhysicalAddr) -> Vec<Xref> {
+        self.xref_index()
+            .to(target)
+            .iter()
+            .map(|edge| Xref {
+                from: PhysicalAddr {
+                    space: self.space,
+                    offset: edge.from,
+                },
+                to: *target,
+                xref_type: edge.kind,
+            })
+            .collect()
     }
 
     pub(crate) fn xrefs_from(&self, source: &PhysicalAddr) -> Vec<Xref> {
@@ -803,19 +945,22 @@ impl Region {
         xrefs_from_instruction(&instruction, *source)
     }
 
-    /// Collect all the necessary references for this region.
-    pub(crate) fn collect_refs(&self, space: AddressSpace, refs: &mut LabelCollector) {
-        for offset in self.code_offsets() {
-            let Some(instruction) = self.decode_at(offset) else {
+    /// Feed implicit code labels from the xref index: every code target with an
+    /// inbound call (`sub_`) or jump (`loc_`) that lacks an explicit name.
+    pub(crate) fn collect_refs(&self, refs: &mut LabelCollector) {
+        let index = self.xref_index();
+        for (target, edges) in index.targets() {
+            if target.space != AddressSpace::Code || self.get_label(target.offset).is_some() {
+                continue;
+            }
+            let kind = if edges.iter().any(|e| e.kind == XrefType::Call) {
+                LabelKind::Sub
+            } else if edges.iter().any(|e| e.kind == XrefType::Jump) {
+                LabelKind::Loc
+            } else {
                 continue;
             };
-            xrefs_from_instruction(&instruction, PhysicalAddr { space, offset })
-                .into_iter()
-                .for_each(|xref| {
-                    if self.get_label(xref.to.offset).is_none() {
-                        refs.collect(xref.to.space, xref.to.offset, None);
-                    }
-                });
+            refs.collect(*target, kind);
         }
     }
 
@@ -990,7 +1135,6 @@ impl Region {
         };
         sdas_indent_instruction(&text)
     }
-
 }
 
 impl CodeSource for Region {
@@ -1109,7 +1253,7 @@ mod tests {
 
     #[test]
     fn overlapping_equivalents_are_rejected() {
-        let mut region = Region::new();
+        let mut region = Region::new(AddressSpace::Code);
         region.set_bytes(
             "test.bin",
             0,
@@ -1130,7 +1274,7 @@ mod tests {
 
     #[test]
     fn clear_bytes_splits_straddling_range() {
-        let mut region = Region::new();
+        let mut region = Region::new(AddressSpace::Code);
         region.set_bytes("test.bin", 0, 0, &[1, 2, 3, 4, 5]);
         region.clear_bytes(1, 2);
         assert_eq!(region.bytes_at(0, 5), vec![1, 4, 5]);
@@ -1138,7 +1282,7 @@ mod tests {
 
     #[test]
     fn decode_at_does_not_require_bytes_at_zero() {
-        let mut region = Region::new();
+        let mut region = Region::new(AddressSpace::Code);
         region.set_bytes("test.bin", 0, 0x100, &[0x74, 0x42]);
         let insn = region.decode_at(0x100).unwrap();
         assert_eq!(insn.len(), 2);
@@ -1147,7 +1291,7 @@ mod tests {
 
     #[test]
     fn decode_at_requires_full_instruction_length() {
-        let mut region = Region::new();
+        let mut region = Region::new(AddressSpace::Code);
         region.set_bytes("test.bin", 0, 0, &[0x02, 0x00]);
         assert!(
             region.decode_at(0).is_none(),
@@ -1158,13 +1302,13 @@ mod tests {
 
     #[test]
     fn branch_target_uses_implicit_label() {
-        let mut region = Region::new();
+        let mut region = Region::new(AddressSpace::Code);
         region.set_bytes("test.bin", 0, 0, &[0x12, 0x01, 0x6D, 0x02, 0x03, 0x04]);
         region.set_equivalent(0, Equivalent::Code).unwrap();
         region.set_equivalent(3, Equivalent::Code).unwrap();
 
         let mut collector = LabelCollector::default();
-        region.collect_refs(AddressSpace::Code, &mut collector);
+        region.collect_refs(&mut collector);
         let implicit_labels = collector.into_implicit_labels();
 
         let lines = region.render(AddressSpace::Code, &implicit_labels);
@@ -1176,13 +1320,80 @@ mod tests {
             })
             .unwrap();
         assert!(insn.contains("LCALL"), "{insn}");
-        assert!(insn.contains("loc_016D"), "{insn}");
+        // A call target is named `sub_`, not `loc_`.
+        assert!(insn.contains("sub_016D"), "{insn}");
         assert!(!insn.contains("#0x016D"), "{insn}");
     }
 
     #[test]
+    fn xref_index_reflects_weak_and_chop() {
+        let mut region = Region::new(AddressSpace::Code);
+        // LJMP 0x0006 / NOP x4. Auto-disassembly flows through the jump.
+        region.set_bytes("t.bin", 0, 0, &[0x02, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00]);
+        region.add_auto_root(0);
+
+        let target = PhysicalAddr {
+            space: AddressSpace::Code,
+            offset: 6,
+        };
+        let before = region.xrefs_to(&target);
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].from.offset, 0);
+        assert_eq!(before[0].xref_type, XrefType::Jump);
+
+        // A barrier over the LJMP chops the derived code, so its edge drops.
+        region.set_equivalent(0, Equivalent::Unknown(3)).unwrap();
+        assert!(region.xrefs_to(&target).is_empty());
+    }
+
+    #[test]
+    fn basic_blocks_split_at_branch_targets() {
+        let mut region = Region::new(AddressSpace::Code);
+        // 0: JZ 0x03 / 2: NOP / 3: RET
+        region.set_bytes("t.bin", 0, 0, &[0x60, 0x01, 0x00, 0x22]);
+        region.add_auto_root(0);
+
+        let blocks = region.basic_blocks(0);
+        let starts: Vec<_> = blocks.iter().map(|b| b.start).collect();
+        assert_eq!(starts, vec![0, 2, 3]);
+        // The JZ block falls through to 2 and branches to 3.
+        assert_eq!(blocks[0].end, 2);
+        assert_eq!(blocks[0].successors, vec![2, 3]);
+        // The NOP block ends where the branch target (a leader) begins.
+        assert_eq!(blocks[1].successors, vec![3]);
+    }
+
+    #[test]
+    fn thunk_resolves_but_render_stays_faithful() {
+        let mut region = Region::new(AddressSpace::Code);
+        // 0: LCALL 0x0003 / 3: LJMP 0x0006 (a pure thunk) / 6: RET
+        region.set_bytes("t.bin", 0, 0, &[0x12, 0x00, 0x03, 0x02, 0x00, 0x06, 0x22]);
+        region.add_auto_root(0);
+
+        // Resolution follows the lone jump at 3 through to 6. 6 is not a thunk.
+        assert_eq!(region.resolve_thunks(3), 6);
+        assert_eq!(region.resolve_thunks(6), 6);
+
+        // Rendering stays faithful to the bytes: the LCALL shows the stub it
+        // actually targets (sub_0003), so the text reassembles to the ROM.
+        let mut collector = LabelCollector::default();
+        region.collect_refs(&mut collector);
+        let implicit = collector.into_implicit_labels();
+        let call = region
+            .render(AddressSpace::Code, &implicit)
+            .into_iter()
+            .find_map(|l| match l {
+                Line::Instruction { addr: 0, text, .. } => Some(text),
+                _ => None,
+            })
+            .unwrap();
+        assert!(call.contains("0003"), "{call}");
+        assert!(!call.contains("0006"), "{call}");
+    }
+
+    #[test]
     fn operand_override_preserves_other_operands() {
-        let mut region = Region::new();
+        let mut region = Region::new(AddressSpace::Code);
         region.set_bytes("test.bin", 0, 0, &[0xB5, 0x20, 0x10]);
         region.set_label(0x13, "target");
         region.set_equivalent(0, Equivalent::Code).unwrap();
@@ -1201,7 +1412,7 @@ mod tests {
 
     #[test]
     fn render_emits_org_after_unmapped_gap() {
-        let mut region = Region::new();
+        let mut region = Region::new(AddressSpace::Code);
         region.set_bytes("test.bin", 0, 0, &[1, 2, 3]);
         region.set_bytes("test.bin", 3, 0x10, &[4, 5]);
         let implicit_labels = ImplicitLabels::default();
@@ -1218,7 +1429,7 @@ mod tests {
 
     #[test]
     fn space_usage_counts_code_data_and_undefined() {
-        let mut region = Region::new();
+        let mut region = Region::new(AddressSpace::Code);
         region.set_bytes(
             "test.bin",
             0,

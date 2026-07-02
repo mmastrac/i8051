@@ -27,7 +27,10 @@ impl Apply for DisassembleRange {
         let SpaceAddressRange { space, range } = self.range;
         let region = db.region_mut(space);
         let end = region.disassemble_linear(range.start, range.end)?;
-        Ok(vec![boxed(ClearEquivalents::new((space, range.start..end)))])
+        Ok(vec![boxed(ClearEquivalents::new((
+            space,
+            range.start..end,
+        )))])
     }
 }
 

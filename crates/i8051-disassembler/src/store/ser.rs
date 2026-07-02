@@ -372,9 +372,9 @@ fn expect_parts<const N: usize>(value: Value) -> Result<[Value; N], DslError> {
 fn as_space(value: Value) -> Result<String, DslError> {
     match value {
         Value::String(s) => Ok(s),
-        other => Err(DslError::new(
-            format!("expected address space, got {other:?}"),
-        )),
+        other => Err(DslError::new(format!(
+            "expected address space, got {other:?}"
+        ))),
     }
 }
 

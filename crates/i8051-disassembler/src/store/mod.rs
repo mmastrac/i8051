@@ -205,8 +205,8 @@ mod tests {
 
     #[test]
     fn from_dsl_value_parses_bare_address() {
-        use crate::address::{SpaceAddressRange, SpaceAddressValue};
         use super::from_dsl_value;
+        use crate::address::{SpaceAddressRange, SpaceAddressValue};
 
         let addr: SpaceAddressValue = from_dsl_value("CODE:0x84").unwrap();
         assert_eq!(addr.space, AddressSpace::Code);

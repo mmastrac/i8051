@@ -31,38 +31,45 @@ impl ops::Deref for Labels {
     }
 }
 
+/// What an auto-generated code label is named after, following Ghidra: a call
+/// target is a `sub_`, a plain jump target a `loc_`.
+#[derive(Clone, Copy)]
+pub(crate) enum LabelKind {
+    Sub,
+    Loc,
+}
+
 #[derive(Default)]
 pub(crate) struct LabelCollector {
-    labels: HashMap<PhysicalAddr, Option<String>>,
+    labels: HashMap<PhysicalAddr, LabelKind>,
 }
 
 impl LabelCollector {
-    pub fn collect(&mut self, space: AddressSpace, addr: AddressValue, label: Option<String>) {
-        self.labels.insert(
-            PhysicalAddr {
-                space,
-                offset: addr,
-            },
-            label,
-        );
+    /// Record an implicit code label at `target`. A call anywhere upgrades it to
+    /// `sub_`, which outranks a `loc_` from a plain jump.
+    pub fn collect(&mut self, target: PhysicalAddr, kind: LabelKind) {
+        self.labels
+            .entry(target)
+            .and_modify(|existing| {
+                if matches!(kind, LabelKind::Sub) {
+                    *existing = LabelKind::Sub;
+                }
+            })
+            .or_insert(kind);
     }
 
     pub fn into_implicit_labels(self) -> ImplicitLabels {
-        let mut implicit_labels = BTreeMap::new();
-        for (addr, ref_name) in self.labels {
-            if let Some(ref_name) = ref_name {
-                implicit_labels
-                    .entry(addr.space)
-                    .or_insert_with(Labels::default)
-                    .labels
-                    .insert(addr.offset, ref_name);
-            } else {
-                implicit_labels
-                    .entry(addr.space)
-                    .or_insert_with(Labels::default)
-                    .labels
-                    .insert(addr.offset, format!("loc_{addr:04X}", addr = addr.offset));
-            }
+        let mut implicit_labels: BTreeMap<AddressSpace, Labels> = BTreeMap::new();
+        for (addr, kind) in self.labels {
+            let name = match kind {
+                LabelKind::Sub => format!("sub_{:04X}", addr.offset),
+                LabelKind::Loc => format!("loc_{:04X}", addr.offset),
+            };
+            implicit_labels
+                .entry(addr.space)
+                .or_default()
+                .labels
+                .insert(addr.offset, name);
         }
         ImplicitLabels {
             labels: implicit_labels,

@@ -387,7 +387,9 @@ pub fn parse_command(input: &str) -> Result<Value, DslError> {
             kwargs: fields,
         }),
         Value::Call { .. } => Ok(value),
-        other => Err(DslError::new(format!("expected command call, got {other:?}"))),
+        other => Err(DslError::new(format!(
+            "expected command call, got {other:?}"
+        ))),
     }
 }
 

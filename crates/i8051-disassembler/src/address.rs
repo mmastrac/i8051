@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 use std::ops::{Bound, Deref, Range, RangeBounds};
 
-use i8051::{ControlFlow, Instruction, Mnemonic};
+use i8051::{ControlFlow, Instruction, Mnemonic, Operand};
 use rangemap::RangeSet;
 use serde::de::value::SeqAccessDeserializer;
 use serde::de::{Error as _, SeqAccess, Visitor};
@@ -325,9 +325,19 @@ pub struct Xref {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum XrefType {
+    /// Control flow: `LCALL`/`ACALL`.
     Call,
+    /// Control flow: an unconditional or conditional jump/branch.
     Jump,
-    Data,
+    /// Data: reads the target byte or bit.
+    Read,
+    /// Data: writes the target byte or bit.
+    Write,
+    /// Data: read-modify-write (e.g. `INC direct`, `ANL direct,A`, `CPL bit`).
+    ReadWrite,
+    /// Data: materializes the target as an address (`MOV DPTR,#addr`), not a
+    /// dereference.
+    Pointer,
 }
 
 pub fn branch_target_operand_index(insn: &Instruction) -> Option<usize> {
@@ -365,27 +375,109 @@ pub fn branch_target(insn: &Instruction) -> Option<u32> {
 
 pub fn xrefs_from_instruction(instruction: &Instruction, source: PhysicalAddr) -> Vec<Xref> {
     let mut xrefs = Vec::new();
-    let mut push = |to_offset: u32, xref_type: XrefType| {
+    let mut push = |space: AddressSpace, offset: u32, xref_type: XrefType| {
         xrefs.push(Xref {
             from: source,
-            to: PhysicalAddr {
-                space: source.space,
-                offset: to_offset,
-            },
+            to: PhysicalAddr { space, offset },
             xref_type,
         });
     };
 
+    // Control-flow edges: the target is code, in the source's own space.
     match instruction.control_flow() {
         ControlFlow::Jump { target } => {
-            push(target, xref_type_for(instruction.mnemonic()));
+            push(source.space, target, xref_type_for(instruction.mnemonic()));
         }
-        ControlFlow::Call { target, .. } => push(target, XrefType::Call),
-        ControlFlow::Choice { branch_target, .. } => push(branch_target, XrefType::Jump),
+        ControlFlow::Call { target, .. } => push(source.space, target, XrefType::Call),
+        ControlFlow::Choice { branch_target, .. } => {
+            push(source.space, branch_target, XrefType::Jump);
+        }
         _ => {}
     }
 
+    // Data edges: direct byte/bit operands and DPTR address loads. Indirect
+    // operands (`@Ri`, `@DPTR`, `@A+DPTR`, `@A+PC`) and branch operands
+    // (`rel`/`addr`) have no static data target, so they are skipped here.
+    let dptr_load = is_dptr_load(instruction);
+    for (index, operand) in instruction.operands().as_slice().iter().enumerate() {
+        match operand {
+            Operand::Direct(addr) => {
+                if let Some(access) = memory_access(instruction.mnemonic(), index) {
+                    let space = if *addr >= 0x80 {
+                        AddressSpace::Sfr
+                    } else {
+                        AddressSpace::Idata
+                    };
+                    push(space, u32::from(*addr), access.kind());
+                }
+            }
+            Operand::Bit(addr) | Operand::BitNot(addr) => {
+                if let Some(access) = memory_access(instruction.mnemonic(), index) {
+                    push(AddressSpace::Bit, u32::from(*addr), access.kind());
+                }
+            }
+            Operand::Imm16(value) if dptr_load => {
+                push(AddressSpace::Xdata, u32::from(*value), XrefType::Pointer);
+            }
+            _ => {}
+        }
+    }
+
     xrefs
+}
+
+/// Read/write role of a memory operand, from the ISA semantics.
+#[derive(Debug, Clone, Copy)]
+enum Access {
+    Read,
+    Write,
+    ReadWrite,
+}
+
+impl Access {
+    fn kind(self) -> XrefType {
+        match self {
+            Access::Read => XrefType::Read,
+            Access::Write => XrefType::Write,
+            Access::ReadWrite => XrefType::ReadWrite,
+        }
+    }
+}
+
+/// Access role of a `Direct`/`Bit` operand at `index` (0 = destination, 1 =
+/// source on the 8051). `None` for mnemonics that never address memory.
+/// Transcribed from the ISA bodies in `i8051::op`: `MOV direct,A` writes,
+/// `MOV A,direct` reads, `ANL direct,A` and `INC direct` read-modify-write.
+fn memory_access(mnemonic: Mnemonic, index: usize) -> Option<Access> {
+    use Mnemonic::*;
+    Some(match mnemonic {
+        MOV => {
+            if index == 0 {
+                Access::Write
+            } else {
+                Access::Read
+            }
+        }
+        ANL | ORL | XRL => {
+            if index == 0 {
+                Access::ReadWrite
+            } else {
+                Access::Read
+            }
+        }
+        CJNE | ADD | ADDC | SUBB | PUSH | JB | JNB => Access::Read,
+        POP | CLR | SETB => Access::Write,
+        INC | DEC | CPL | DJNZ | XCH | JBC => Access::ReadWrite,
+        _ => return None,
+    })
+}
+
+fn is_dptr_load(instruction: &Instruction) -> bool {
+    instruction.mnemonic() == Mnemonic::MOV
+        && matches!(
+            instruction.operands().as_slice(),
+            [Operand::Dptr, Operand::Imm16(_)]
+        )
 }
 
 pub fn xrefs_to_target(
@@ -409,6 +501,44 @@ fn xref_type_for(opcode: Mnemonic) -> XrefType {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn data_xrefs_classify_direction_and_space() {
+        let src = PhysicalAddr {
+            space: AddressSpace::Code,
+            offset: 0,
+        };
+        let edges =
+            |bytes: &[u8]| xrefs_from_instruction(&Instruction::decode_from_bytes(0, bytes), src);
+        let edge = |space, offset, xref_type| Xref {
+            from: src,
+            to: PhysicalAddr { space, offset },
+            xref_type,
+        };
+        use AddressSpace::{Bit, Code, Idata, Sfr, Xdata};
+        use XrefType::{Jump, Pointer, Read, ReadWrite, Write};
+
+        // MOV A,P1 (E5 90) reads SFR 0x90. MOV P1,A (F5 90) writes it.
+        assert_eq!(edges(&[0xE5, 0x90]), vec![edge(Sfr, 0x90, Read)]);
+        assert_eq!(edges(&[0xF5, 0x90]), vec![edge(Sfr, 0x90, Write)]);
+        // Low direct addresses land in IDATA. INC direct is read-modify-write.
+        assert_eq!(edges(&[0x05, 0x30]), vec![edge(Idata, 0x30, ReadWrite)]);
+        // MOV DPTR,#0x1234 materializes an address, not a dereference.
+        assert_eq!(
+            edges(&[0x90, 0x12, 0x34]),
+            vec![edge(Xdata, 0x1234, Pointer)]
+        );
+        // MOV 0x30,0x40 (85 src dst): a write to the dest, a read of the source.
+        assert_eq!(
+            edges(&[0x85, 0x40, 0x30]),
+            vec![edge(Idata, 0x30, Write), edge(Idata, 0x40, Read)]
+        );
+        // JB 0x20,rel (20 20 05) is a branch AND a bit read.
+        assert_eq!(
+            edges(&[0x20, 0x20, 0x05]),
+            vec![edge(Code, 8, Jump), edge(Bit, 0x20, Read)]
+        );
+    }
 
     // The `$dsl::address` token is advisory: a non-DSL serializer ignores the
     // newtype name and (de)serializes the inner `(space, offset)` tuple. So the

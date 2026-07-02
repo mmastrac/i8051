@@ -108,10 +108,7 @@ impl<'a> Lexer<'a> {
             'r' if self.raw_string_start() => self.read_raw_string(offset),
             '0'..='9' => self.read_number(offset),
             'a'..='z' | 'A'..='Z' | '_' => self.read_ident(offset),
-            _ => Err(DslError::at(
-                offset,
-                format!("unexpected character {ch:?}"),
-            )),
+            _ => Err(DslError::at(offset, format!("unexpected character {ch:?}"))),
         }
     }
 
