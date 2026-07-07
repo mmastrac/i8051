@@ -231,40 +231,27 @@ fn data_refs(insn: &Instruction) -> Vec<DataRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::address::PhysicalAddr;
-    use crate::platform::xrefs_from_instruction;
+    use crate::platform::test_util::edges;
     use pretty_assertions::assert_eq;
 
     #[test]
     fn data_xrefs_classify_direction_and_space() {
-        let src = PhysicalAddr {
-            space: CODE,
-            offset: 0,
-        };
-        let edges = |bytes: &[u8]| xrefs_from_instruction(&I8051.decode(0, bytes), src);
-        let edge = |space, offset, xref_type| crate::address::Xref {
-            from: src,
-            to: PhysicalAddr { space, offset },
-            xref_type,
-        };
         use XrefType::{Jump, Pointer, Read, ReadWrite, Write};
+        let e = |bytes: &[u8]| edges(&I8051, bytes);
 
         // MOV A,P1 (E5 90) reads SFR 0x90. MOV P1,A (F5 90) writes it.
-        assert_eq!(edges(&[0xE5, 0x90]), vec![edge(SFR, 0x90, Read)]);
-        assert_eq!(edges(&[0xF5, 0x90]), vec![edge(SFR, 0x90, Write)]);
+        assert_eq!(e(&[0xE5, 0x90]), vec![(SFR, 0x90, Read)]);
+        assert_eq!(e(&[0xF5, 0x90]), vec![(SFR, 0x90, Write)]);
         // Low direct addresses land in IDATA. INC direct is read-modify-write.
-        assert_eq!(edges(&[0x05, 0x30]), vec![edge(IDATA, 0x30, ReadWrite)]);
+        assert_eq!(e(&[0x05, 0x30]), vec![(IDATA, 0x30, ReadWrite)]);
         // MOV DPTR,#0x1234 materializes an address, not a dereference.
-        assert_eq!(edges(&[0x90, 0x12, 0x34]), vec![edge(XDATA, 0x1234, Pointer)]);
+        assert_eq!(e(&[0x90, 0x12, 0x34]), vec![(XDATA, 0x1234, Pointer)]);
         // MOV 0x30,0x40 (85 src dst): a write to the dest, a read of the source.
         assert_eq!(
-            edges(&[0x85, 0x40, 0x30]),
-            vec![edge(IDATA, 0x30, Write), edge(IDATA, 0x40, Read)]
+            e(&[0x85, 0x40, 0x30]),
+            vec![(IDATA, 0x30, Write), (IDATA, 0x40, Read)]
         );
         // JB 0x20,rel (20 20 05) is a branch AND a bit read.
-        assert_eq!(
-            edges(&[0x20, 0x20, 0x05]),
-            vec![edge(CODE, 8, Jump), edge(BIT, 0x20, Read)]
-        );
+        assert_eq!(e(&[0x20, 0x20, 0x05]), vec![(CODE, 8, Jump), (BIT, 0x20, Read)]);
     }
 }

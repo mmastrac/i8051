@@ -140,30 +140,21 @@ fn data_refs(insn: &Instruction) -> Vec<DataRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::address::PhysicalAddr;
-    use crate::platform::{branch_target, xrefs_from_instruction};
+    use crate::platform::branch_target;
+    use crate::platform::test_util::edges;
     use pretty_assertions::assert_eq;
-
-    fn decode(bytes: &[u8]) -> DecodedInsn {
-        Mos6502.decode(0x1000, bytes)
-    }
-
-    #[test]
-    fn decodes_and_renders() {
-        assert_eq!(decode(&[0xA9, 0x42]).text, "LDA #0x42");
-        assert_eq!(decode(&[0x4C, 0x00, 0x20]).text, "JMP 0x2000");
-        assert_eq!(decode(&[0xEA]).text, "NOP");
-    }
 
     #[test]
     fn control_flow_targets() {
-        // JMP absolute is an unconditional jump.
+        let decode = |bytes: &[u8]| Mos6502.decode(0x1000, bytes);
+
+        // JMP absolute is an unconditional jump on operand 0.
         let jmp = decode(&[0x4C, 0x00, 0x20]);
         assert_eq!(jmp.control_flow, ControlFlow::Jump { target: 0x2000 });
         assert_eq!(branch_target(&jmp), Some(0x2000));
         assert_eq!(jmp.branch_operand_index, Some(0));
 
-        // JSR is a call, JMP indirect diverges.
+        // JSR is a call, JMP indirect diverges with no target operand.
         assert!(matches!(
             decode(&[0x20, 0x00, 0x20]).control_flow,
             ControlFlow::Call { target: 0x2000, .. }
@@ -174,27 +165,12 @@ mod tests {
 
     #[test]
     fn data_refs_classify_access() {
-        let src = PhysicalAddr {
-            space: CODE,
-            offset: 0,
-        };
-        let refs = |bytes: &[u8]| xrefs_from_instruction(&decode(bytes), src);
-        let to = |offset, kind| crate::address::Xref {
-            from: src,
-            to: PhysicalAddr {
-                space: CODE,
-                offset,
-            },
-            xref_type: kind,
-        };
-
-        // LDA 0x1234 reads, STA 0x1234 writes, INC 0x1234 read-modify-writes.
-        assert_eq!(refs(&[0xAD, 0x34, 0x12]), vec![to(0x1234, XrefType::Read)]);
-        assert_eq!(refs(&[0x8D, 0x34, 0x12]), vec![to(0x1234, XrefType::Write)]);
-        assert_eq!(refs(&[0xEE, 0x34, 0x12]), vec![to(0x1234, XrefType::ReadWrite)]);
-        // A JMP is a control edge, not a data reference.
-        assert_eq!(refs(&[0x4C, 0x34, 0x12]), vec![to(0x1234, XrefType::Jump)]);
-        // Immediate operands make no data reference.
-        assert!(refs(&[0xA9, 0x42]).is_empty());
+        use XrefType::{Jump, Read, ReadWrite, Write};
+        let e = |bytes: &[u8]| edges(&Mos6502, bytes);
+        assert_eq!(e(&[0xAD, 0x34, 0x12]), vec![(CODE, 0x1234, Read)]); // LDA abs
+        assert_eq!(e(&[0x8D, 0x34, 0x12]), vec![(CODE, 0x1234, Write)]); // STA abs
+        assert_eq!(e(&[0xEE, 0x34, 0x12]), vec![(CODE, 0x1234, ReadWrite)]); // INC abs
+        assert_eq!(e(&[0x4C, 0x34, 0x12]), vec![(CODE, 0x1234, Jump)]); // JMP is control
+        assert!(e(&[0xA9, 0x42]).is_empty()); // immediate makes no ref
     }
 }

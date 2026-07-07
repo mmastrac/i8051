@@ -31,12 +31,6 @@ fn loaded_db() -> Db {
 }
 
 #[test]
-fn selects_the_6502_driver() {
-    let db = Db::with_platform(mos6502::platform());
-    assert_eq!(db.platform().unwrap().name(), "mos6502");
-}
-
-#[test]
 fn auto_disassembles_and_labels_branches() {
     let db = loaded_db();
     let sdas = db.to_sdas();

@@ -212,3 +212,25 @@ pub fn by_name(name: &str) -> Option<PlatformRef> {
         _ => None,
     }
 }
+
+/// Shared helpers for the per-driver test modules.
+#[cfg(test)]
+pub(crate) mod test_util {
+    use super::*;
+
+    /// Decode `bytes` with `driver` (at pc 0) and return the cross-reference
+    /// edges it makes from a source at offset 0, as `(space, offset, kind)`.
+    pub(crate) fn edges(
+        driver: &dyn Platform,
+        bytes: &[u8],
+    ) -> Vec<(AddressSpace, AddressValue, XrefType)> {
+        let source = PhysicalAddr {
+            space: driver.regions()[0].space,
+            offset: 0,
+        };
+        xrefs_from_instruction(&driver.decode(0, bytes), source)
+            .into_iter()
+            .map(|x| (x.to.space, x.to.offset, x.xref_type))
+            .collect()
+    }
+}

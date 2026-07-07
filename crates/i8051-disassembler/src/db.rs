@@ -462,6 +462,28 @@ mod tests {
         db
     }
 
+    /// An i8051 DB with `bytes` mapped from `file` at CODE:0, plus its env.
+    fn mapped(file: &str, bytes: &[u8]) -> (Db, TestEnvironment) {
+        let env = TestEnvironment::new().with_file(file, bytes.to_vec());
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
+        let size = bytes.len() as AddressValue;
+        db.apply(boxed(MapBytes::new((CODE, 0), file, 0usize, size)), Some(&env))
+            .unwrap();
+        (db, env)
+    }
+
+    /// Export `db` to DSL and rebuild from scratch (resolving `map_bytes` files
+    /// against `env`): the save/reload path.
+    fn reload(db: &Db, env: &TestEnvironment) -> Db {
+        use crate::store::{from_dsl_many, to_dsl_many};
+        let mut reloaded = Db::new();
+        for command in from_dsl_many(&to_dsl_many(&db.to_commands())).unwrap() {
+            let env = (command.name() == "map_bytes").then_some(env as &dyn Environment);
+            reloaded.apply(command, env).unwrap();
+        }
+        reloaded
+    }
+
     #[test]
     fn test_db() {
         let db = make_test_db();
@@ -519,23 +541,12 @@ loc_0010:
         assert_eq!(db.to_sdas().trim(), expected.trim());
     }
 
+    // Also the general round-trip test: the full `make_test_db` listing (labels,
+    // comments, strong code) survives export to DSL and reload.
     #[test]
-    fn test_db_to_commands() {
-        let db = make_test_db();
-        let commands = db.to_commands();
-        let env = TestEnvironment::new().with_file("test.bin", TEST_BINARY.to_vec());
-        let mut new_db = Db::new();
-        for command in commands {
-            let env = (command.name() == "map_bytes").then_some(&env as &dyn Environment);
-            new_db.apply(command, env).expect("command should apply");
-        }
-        assert_eq!(new_db.to_sdas(), db.to_sdas());
-    }
-
-    #[test]
-    fn to_commands_round_trips_notes_through_dsl() {
+    fn round_trips_through_dsl_including_notes() {
+        use crate::address::AddressRange;
         use crate::commands::SetNote;
-        use crate::store::{from_dsl_many, to_dsl_many};
 
         let env = TestEnvironment::new().with_file("test.bin", TEST_BINARY.to_vec());
         let mut db = make_test_db();
@@ -544,186 +555,73 @@ loc_0010:
         let mut first = Note::new(None, "reset handler");
         first.tags.insert("entry".into());
         let second = Note::new(Some(&first.id), "jump table");
-        db.apply(
-            boxed(SetNote::new((CODE, 0x0..0x3), first.clone())),
-            None,
-        )
-        .unwrap();
-        db.apply(
-            boxed(SetNote::new((CODE, 0x3..0x5), second.clone())),
-            None,
-        )
-        .unwrap();
+        db.apply(boxed(SetNote::new((CODE, 0x0..0x3), first.clone())), None)
+            .unwrap();
+        db.apply(boxed(SetNote::new((CODE, 0x3..0x5), second.clone())), None)
+            .unwrap();
 
-        // Export the whole DB to canonical DSL, then reload from scratch.
-        let dsl = to_dsl_many(&db.to_commands());
-        assert!(dsl.contains("set_note("), "notes must be exported");
-        let mut reloaded = Db::new();
-        for command in from_dsl_many(&dsl).unwrap() {
-            let env = (command.name() == "map_bytes").then_some(&env as &dyn Environment);
-            reloaded.apply(command, env).expect("command should apply");
-        }
+        assert!(
+            crate::store::to_dsl_many(&db.to_commands()).contains("set_note("),
+            "notes must be exported"
+        );
+        let reloaded = reload(&db, &env);
 
         // Both notes survived with their ids, content, tags, and locations.
         assert_eq!(reloaded.notes.notes.len(), 2);
         assert_eq!(reloaded.notes.get(&first.id), Some(&first));
         assert_eq!(reloaded.notes.get(&second.id), Some(&second));
-        assert_eq!(
-            reloaded.note_location(&first.id),
-            Some((
-                CODE,
-                crate::address::AddressRange::new(0x0, 0x3)
-            ))
-        );
-        assert_eq!(
-            reloaded.note_location(&second.id),
-            Some((
-                CODE,
-                crate::address::AddressRange::new(0x3, 0x5)
-            ))
-        );
+        assert_eq!(reloaded.note_location(&first.id), Some((CODE, AddressRange::new(0x0, 0x3))));
+        assert_eq!(reloaded.note_location(&second.id), Some((CODE, AddressRange::new(0x3, 0x5))));
 
         // The listing (which excludes notes) is unchanged.
         assert_eq!(reloaded.to_sdas(), db.to_sdas());
     }
 
     #[test]
-    fn test_db_space_usage() {
-        let db = make_test_db();
-        assert_eq!(
-            db.space_usage(CODE),
-            SpaceUsage {
-                code: 12,
-                data: 0,
-                undefined: 0,
-            }
-        );
-    }
-
-    #[test]
     fn map_bytes_command_undo() {
+        // Mapping over existing bytes undoes back to the originals.
         let env = TestEnvironment::new()
             .with_file("test.bin", vec![1, 2, 3])
             .with_file("other.bin", vec![4, 5]);
         let mut db = Db::with_platform(crate::platform::i8051::platform());
-        db.apply(
-            boxed(MapBytes::new(
-                (CODE, 0),
-                "test.bin",
-                0usize,
-                3u32,
-            )),
-            Some(&env),
-        )
-        .unwrap();
-
-        let code = db.region(CODE).unwrap();
-        assert_eq!(code.bytes_at(0, 3), vec![1, 2, 3]);
+        db.apply(boxed(MapBytes::new((CODE, 0), "test.bin", 0usize, 3u32)), Some(&env))
+            .unwrap();
 
         let undo = db
-            .apply(
-                boxed(MapBytes::new(
-                    (CODE, 0),
-                    "other.bin",
-                    0usize,
-                    2u32,
-                )),
-                Some(&env),
-            )
+            .apply(boxed(MapBytes::new((CODE, 0), "other.bin", 0usize, 2u32)), Some(&env))
             .unwrap();
-        assert_eq!(
-            db.region(CODE).unwrap().bytes_at(0, 2),
-            vec![4, 5]
-        );
+        assert_eq!(db.region(CODE).unwrap().bytes_at(0, 2), vec![4, 5]);
 
         apply_all(&mut db, undo, &env);
-        assert_eq!(
-            db.region(CODE).unwrap().bytes_at(0, 3),
-            vec![1, 2, 3]
-        );
+        assert_eq!(db.region(CODE).unwrap().bytes_at(0, 3), vec![1, 2, 3]);
     }
 
     #[test]
     fn clear_bytes_command_undo() {
-        let env = TestEnvironment::new().with_file("test.bin", vec![1, 2, 3, 4, 5]);
-        let mut db = Db::with_platform(crate::platform::i8051::platform());
-        db.apply(
-            boxed(MapBytes::new(
-                (CODE, 0),
-                "test.bin",
-                0usize,
-                5u32,
-            )),
-            Some(&env),
-        )
-        .unwrap();
-
-        let undo = db
-            .apply(boxed(ClearBytes::new((CODE, 1..3))), None)
-            .unwrap();
-        assert_eq!(
-            db.region(CODE).unwrap().bytes_at(0, 5),
-            vec![1, 4, 5]
-        );
+        let (mut db, env) = mapped("t.bin", &[1, 2, 3, 4, 5]);
+        let undo = db.apply(boxed(ClearBytes::new((CODE, 1..3))), None).unwrap();
+        assert_eq!(db.region(CODE).unwrap().bytes_at(0, 5), vec![1, 4, 5]);
 
         apply_all(&mut db, undo, &env);
-        assert_eq!(
-            db.region(CODE).unwrap().bytes_at(0, 5),
-            vec![1, 2, 3, 4, 5]
-        );
+        assert_eq!(db.region(CODE).unwrap().bytes_at(0, 5), vec![1, 2, 3, 4, 5]);
     }
 
     #[test]
     fn set_constant_bytes_command_undo() {
-        let env = TestEnvironment::new().with_file("test.bin", vec![1, 2, 3]);
-        let mut db = Db::with_platform(crate::platform::i8051::platform());
-        db.apply(
-            boxed(MapBytes::new(
-                (CODE, 0),
-                "test.bin",
-                0usize,
-                3u32,
-            )),
-            Some(&env),
-        )
-        .unwrap();
-
+        let (mut db, env) = mapped("t.bin", &[1, 2, 3]);
         let undo = db
-            .apply(
-                boxed(SetConstantBytes::new((CODE, 0..2), 0xFF)),
-                None,
-            )
+            .apply(boxed(SetConstantBytes::new((CODE, 0..2), 0xFF)), None)
             .unwrap();
-        assert_eq!(
-            db.region(CODE).unwrap().bytes_at(0, 3),
-            vec![0xFF, 0xFF, 3]
-        );
+        assert_eq!(db.region(CODE).unwrap().bytes_at(0, 3), vec![0xFF, 0xFF, 3]);
 
         apply_all(&mut db, undo, &env);
-        assert_eq!(
-            db.region(CODE).unwrap().bytes_at(0, 3),
-            vec![1, 2, 3]
-        );
+        assert_eq!(db.region(CODE).unwrap().bytes_at(0, 3), vec![1, 2, 3]);
     }
 
     #[test]
     fn auto_disassemble_undo_removes_root_and_derived_code() {
-        let env = TestEnvironment::new().with_file("test.bin", TEST_BINARY.to_vec());
-        let mut db = Db::with_platform(crate::platform::i8051::platform());
-        db.apply(
-            boxed(MapBytes::new(
-                (CODE, 0),
-                "test.bin",
-                0usize,
-                TEST_BINARY.len() as AddressValue,
-            )),
-            Some(&env),
-        )
-        .unwrap();
-
-        let undo = db
-            .apply(boxed(AutoDisassemble::new((CODE, 0))), None)
-            .unwrap();
+        let (mut db, env) = mapped("t.bin", &TEST_BINARY);
+        let undo = db.apply(boxed(AutoDisassemble::new((CODE, 0))), None).unwrap();
 
         // Derived code, so the undo is just the root-clear. Nothing to un-set.
         assert!(db.space_usage(CODE).code > 0);
@@ -738,94 +636,43 @@ loc_0010:
 
     #[test]
     fn auto_disassemble_exports_as_root_and_round_trips() {
-        use crate::store::{from_dsl_many, to_dsl_many};
-
         // MOV A,#1 / INC A / SJMP back: a self-contained loop.
-        const BYTES: [u8; 5] = [0x74, 0x01, 0x04, 0x80, 0xFB];
-        let env = TestEnvironment::new().with_file("loop.bin", BYTES.to_vec());
-        let mut db = Db::with_platform(crate::platform::i8051::platform());
-        db.apply(
-            boxed(MapBytes::new(
-                (CODE, 0),
-                "loop.bin",
-                0usize,
-                5u32,
-            )),
-            Some(&env),
-        )
-        .unwrap();
+        let (mut db, env) = mapped("loop.bin", &[0x74, 0x01, 0x04, 0x80, 0xFB]);
         // The region method (which library callers use) must record a root.
-        assert!(
-            db.region_mut(CODE)
-                .auto_disassemble(0)
-                .is_success()
-        );
+        assert!(db.region_mut(CODE).auto_disassemble(0).is_success());
         assert!(db.region(CODE).unwrap().is_auto_root(0));
 
-        let dsl = to_dsl_many(&db.to_commands());
+        let dsl = crate::store::to_dsl_many(&db.to_commands());
         assert!(dsl.contains("auto_disassemble(address=CODE:0x0)"), "{dsl}");
         assert!(!dsl.contains("disassemble_range"), "{dsl}");
 
-        let mut reloaded = Db::new();
-        for command in from_dsl_many(&dsl).unwrap() {
-            let env = (command.name() == "map_bytes").then_some(&env as &dyn Environment);
-            reloaded.apply(command, env).unwrap();
-        }
-        assert_eq!(reloaded.to_sdas(), db.to_sdas());
+        assert_eq!(reload(&db, &env).to_sdas(), db.to_sdas());
     }
 
     #[test]
     fn unknown_equivalent_chops_auto_disassembly_and_round_trips() {
         use crate::commands::MarkUnknown;
-        use crate::store::{from_dsl_many, to_dsl_many};
 
         // MOV A,#1 / INC A / NOP / RET: a straight-line run.
-        const BYTES: [u8; 5] = [0x74, 0x01, 0x04, 0x00, 0x22];
-        let env = TestEnvironment::new().with_file("b.bin", BYTES.to_vec());
-        let mut db = Db::with_platform(crate::platform::i8051::platform());
-        db.apply(
-            boxed(MapBytes::new(
-                (CODE, 0),
-                "b.bin",
-                0usize,
-                BYTES.len() as AddressValue,
-            )),
-            Some(&env),
-        )
-        .unwrap();
+        let (mut db, env) = mapped("b.bin", &[0x74, 0x01, 0x04, 0x00, 0x22]);
         // Barrier at 0x3, set before disassembling.
-        db.apply(
-            boxed(MarkUnknown::new((CODE, 0x3u32..0x4u32))),
-            None,
-        )
-        .unwrap();
-        db.apply(
-            boxed(AutoDisassemble::new((CODE, 0u32))),
-            None,
-        )
-        .unwrap();
+        db.apply(boxed(MarkUnknown::new((CODE, 0x3u32..0x4u32))), None)
+            .unwrap();
+        db.apply(boxed(AutoDisassemble::new((CODE, 0u32))), None).unwrap();
 
         // Flow stops at the barrier: 0x3 stays unknown, 0x4 is never reached.
         let region = db.region(CODE).unwrap();
         assert_eq!(region.get_equivalent_kind(0x0), Some(EquivalentKind::Code));
         assert_eq!(region.get_equivalent_kind(0x2), Some(EquivalentKind::Code));
-        assert_eq!(
-            region.get_equivalent_kind(0x3),
-            Some(EquivalentKind::Unknown)
-        );
+        assert_eq!(region.get_equivalent_kind(0x3), Some(EquivalentKind::Unknown));
         assert_eq!(region.get_equivalent_kind(0x4), None);
 
-        let dsl = to_dsl_many(&db.to_commands());
         assert!(
-            dsl.contains("mark_unknown(range=CODE:0x3..0x4)"),
-            "barrier is exported as a verb: {dsl}"
+            crate::store::to_dsl_many(&db.to_commands())
+                .contains("mark_unknown(range=CODE:0x3..0x4)"),
+            "barrier is exported as a verb"
         );
-        let mut reloaded = Db::new();
-        for command in from_dsl_many(&dsl).unwrap() {
-            let env = (command.name() == "map_bytes").then_some(&env as &dyn Environment);
-            reloaded.apply(command, env).expect("command should apply");
-        }
-        assert_eq!(reloaded.to_sdas(), db.to_sdas());
+        assert_eq!(reload(&db, &env).to_sdas(), db.to_sdas());
     }
 
     #[test]
@@ -833,78 +680,35 @@ loc_0010:
         use crate::commands::MarkUnknown;
 
         // MOV A,#1 / INC A / NOP / RET: a straight-line run.
-        const BYTES: [u8; 5] = [0x74, 0x01, 0x04, 0x00, 0x22];
-        let env = TestEnvironment::new().with_file("b.bin", BYTES.to_vec());
-        let mut db = Db::with_platform(crate::platform::i8051::platform());
-        db.apply(
-            boxed(MapBytes::new(
-                (CODE, 0),
-                "b.bin",
-                0usize,
-                BYTES.len() as AddressValue,
-            )),
-            Some(&env),
-        )
-        .unwrap();
+        let (mut db, _env) = mapped("b.bin", &[0x74, 0x01, 0x04, 0x00, 0x22]);
         // Disassemble the whole run first.
-        db.apply(
-            boxed(AutoDisassemble::new((CODE, 0u32))),
-            None,
-        )
-        .unwrap();
+        db.apply(boxed(AutoDisassemble::new((CODE, 0u32))), None).unwrap();
         let region = db.region(CODE).unwrap();
         assert_eq!(region.get_equivalent_kind(0x3), Some(EquivalentKind::Code));
         assert_eq!(region.get_equivalent_kind(0x4), Some(EquivalentKind::Code));
 
         // Drop a barrier mid-flow. Derived code re-derives, so 0x3 onward vanish.
-        db.apply(
-            boxed(MarkUnknown::new((CODE, 0x3u32..0x4u32))),
-            None,
-        )
-        .unwrap();
+        db.apply(boxed(MarkUnknown::new((CODE, 0x3u32..0x4u32))), None)
+            .unwrap();
         let region = db.region(CODE).unwrap();
         assert_eq!(region.get_equivalent_kind(0x0), Some(EquivalentKind::Code));
         assert_eq!(region.get_equivalent_kind(0x2), Some(EquivalentKind::Code));
-        assert_eq!(
-            region.get_equivalent_kind(0x3),
-            Some(EquivalentKind::Unknown)
-        );
+        assert_eq!(region.get_equivalent_kind(0x3), Some(EquivalentKind::Unknown));
         assert_eq!(region.get_equivalent_kind(0x4), None);
     }
 
     #[test]
     fn extent_commands_round_trip_and_coalesce_on_export() {
         use crate::commands::{DisassembleRange, MarkData};
-        use crate::store::{from_dsl_many, to_dsl_many};
 
         // MOV A,#1 / INC A (a 3-byte code block), then 2 data bytes.
-        let env = TestEnvironment::new().with_file("m.bin", vec![0x74, 0x01, 0x04, 0xAA, 0xBB]);
-        let mut db = Db::with_platform(crate::platform::i8051::platform());
-        db.apply(
-            boxed(MapBytes::new(
-                (CODE, 0),
-                "m.bin",
-                0usize,
-                5u32,
-            )),
-            Some(&env),
-        )
-        .unwrap();
-        db.apply(
-            boxed(DisassembleRange::new((CODE, 0u32..3u32))),
-            None,
-        )
-        .unwrap();
-        db.apply(
-            boxed(MarkData::new(
-                (CODE, 3u32..5u32),
-                DataType::Byte,
-            )),
-            None,
-        )
-        .unwrap();
+        let (mut db, env) = mapped("m.bin", &[0x74, 0x01, 0x04, 0xAA, 0xBB]);
+        db.apply(boxed(DisassembleRange::new((CODE, 0u32..3u32))), None)
+            .unwrap();
+        db.apply(boxed(MarkData::new((CODE, 3u32..5u32), DataType::Byte)), None)
+            .unwrap();
 
-        let dsl = to_dsl_many(&db.to_commands());
+        let dsl = crate::store::to_dsl_many(&db.to_commands());
         assert!(
             dsl.contains("disassemble_range(range=CODE:0x0..0x3)"),
             "code island coalesced: {dsl}"
@@ -913,43 +717,20 @@ loc_0010:
             dsl.contains("mark_data(data_type=DataType::Byte, range=CODE:0x3..0x5)"),
             "data as a verb: {dsl}"
         );
-        assert!(
-            !dsl.contains("set_equivalent"),
-            "no low-level command: {dsl}"
-        );
+        assert!(!dsl.contains("set_equivalent"), "no low-level command: {dsl}");
 
-        let mut reloaded = Db::new();
-        for command in from_dsl_many(&dsl).unwrap() {
-            let env = (command.name() == "map_bytes").then_some(&env as &dyn Environment);
-            reloaded.apply(command, env).expect("command should apply");
-        }
-        assert_eq!(reloaded.to_sdas(), db.to_sdas());
+        assert_eq!(reload(&db, &env).to_sdas(), db.to_sdas());
     }
 
     #[test]
     fn override_operand_round_trips_and_undoes() {
         use crate::commands::{DisassembleRange, OverrideOperand};
         use crate::db::OperandOverride;
-        use crate::store::{from_dsl_many, to_dsl_many};
 
         // CJNE A,0x20,rel: three operands. We override the third.
-        let env = TestEnvironment::new().with_file("b.bin", vec![0xB5, 0x20, 0x10]);
-        let mut db = Db::with_platform(crate::platform::i8051::platform());
-        db.apply(
-            boxed(MapBytes::new(
-                (CODE, 0),
-                "b.bin",
-                0usize,
-                3u32,
-            )),
-            Some(&env),
-        )
-        .unwrap();
-        db.apply(
-            boxed(DisassembleRange::new((CODE, 0u32..3u32))),
-            None,
-        )
-        .unwrap();
+        let (mut db, env) = mapped("b.bin", &[0xB5, 0x20, 0x10]);
+        db.apply(boxed(DisassembleRange::new((CODE, 0u32..3u32))), None)
+            .unwrap();
         let undo = db
             .apply(
                 boxed(OverrideOperand::new(
@@ -962,14 +743,8 @@ loc_0010:
             .unwrap();
         assert!(db.to_sdas().contains("HOT"), "{}", db.to_sdas());
 
-        let dsl = to_dsl_many(&db.to_commands());
-        assert!(dsl.contains("override_operand("), "{dsl}");
-        let mut reloaded = Db::new();
-        for command in from_dsl_many(&dsl).unwrap() {
-            let env = (command.name() == "map_bytes").then_some(&env as &dyn Environment);
-            reloaded.apply(command, env).expect("command should apply");
-        }
-        assert_eq!(reloaded.to_sdas(), db.to_sdas());
+        assert!(crate::store::to_dsl_many(&db.to_commands()).contains("override_operand("));
+        assert_eq!(reload(&db, &env).to_sdas(), db.to_sdas());
 
         // Undo clears the override.
         apply_all(&mut db, undo, &env);

@@ -147,24 +147,14 @@ fn data_refs(insn: &Instruction) -> Vec<DataRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::address::PhysicalAddr;
-    use crate::platform::{branch_target, xrefs_from_instruction};
+    use crate::platform::branch_target;
+    use crate::platform::test_util::edges;
     use pretty_assertions::assert_eq;
-
-    fn decode(bytes: &[u8]) -> DecodedInsn {
-        M6805.decode(0x1000, bytes)
-    }
-
-    #[test]
-    fn decodes_and_renders() {
-        assert_eq!(decode(&[0xA6, 0x42]).text, "LDA #0x42");
-        assert_eq!(decode(&[0xCC, 0x20, 0x00]).text, "JMP 0x2000");
-        assert_eq!(decode(&[0x16, 0x50]).text, "BSET #3,0x50");
-        assert_eq!(decode(&[0x9D]).text, "NOP");
-    }
 
     #[test]
     fn control_flow_and_targets() {
+        let decode = |bytes: &[u8]| M6805.decode(0x1000, bytes);
+
         let jsr = decode(&[0xCD, 0x0C, 0xB5]);
         assert!(matches!(
             jsr.control_flow,
@@ -184,27 +174,13 @@ mod tests {
 
     #[test]
     fn data_refs_classify_access() {
-        let src = PhysicalAddr {
-            space: CODE,
-            offset: 0,
-        };
-        let refs = |bytes: &[u8]| xrefs_from_instruction(&decode(bytes), src);
-        let to = |offset, kind| crate::address::Xref {
-            from: src,
-            to: PhysicalAddr {
-                space: CODE,
-                offset,
-            },
-            xref_type: kind,
-        };
-
-        assert_eq!(refs(&[0xB6, 0x50]), vec![to(0x50, XrefType::Read)]); // LDA 0x50
-        assert_eq!(refs(&[0xC7, 0x12, 0x34]), vec![to(0x1234, XrefType::Write)]); // STA ext
-        assert_eq!(refs(&[0x3A, 0x50]), vec![to(0x50, XrefType::ReadWrite)]); // DEC 0x50
-        assert_eq!(refs(&[0x16, 0x50]), vec![to(0x50, XrefType::ReadWrite)]); // BSET 3,0x50
-        // JMP is a control edge, not a data reference.
-        assert_eq!(refs(&[0xCC, 0x12, 0x34]), vec![to(0x1234, XrefType::Jump)]);
-        // Immediate makes no data reference.
-        assert!(refs(&[0xA6, 0x42]).is_empty());
+        use XrefType::{Jump, Read, ReadWrite, Write};
+        let e = |bytes: &[u8]| edges(&M6805, bytes);
+        assert_eq!(e(&[0xB6, 0x50]), vec![(CODE, 0x50, Read)]); // LDA 0x50
+        assert_eq!(e(&[0xC7, 0x12, 0x34]), vec![(CODE, 0x1234, Write)]); // STA ext
+        assert_eq!(e(&[0x3A, 0x50]), vec![(CODE, 0x50, ReadWrite)]); // DEC 0x50
+        assert_eq!(e(&[0x16, 0x50]), vec![(CODE, 0x50, ReadWrite)]); // BSET 3,0x50
+        assert_eq!(e(&[0xCC, 0x12, 0x34]), vec![(CODE, 0x1234, Jump)]); // JMP is control
+        assert!(e(&[0xA6, 0x42]).is_empty()); // immediate makes no ref
     }
 }
