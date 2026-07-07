@@ -22,6 +22,9 @@ impl Apply for DisassembleRange {
         db: &mut Db,
         _env: Option<&dyn Environment>,
     ) -> Result<Vec<Box<dyn Command>>, Error> {
+        if db.platform().is_none() {
+            return Err(Error::NoCpu);
+        }
         let SpaceAddressRange { space, range } = self.range;
         let region = db.region_mut(space);
         let end = region.disassemble_linear(range.start, range.end)?;

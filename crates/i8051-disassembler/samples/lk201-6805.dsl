@@ -1,0 +1,5 @@
+set_cpu(name="m6805")
+map_bytes(address=CODE:0x0, file="lk201-6805.bin", file_offset=0x0, size=0x2000)
+auto_disassemble(address=CODE:0x100)
+auto_disassemble(address=CODE:0xC24)
+auto_disassemble(address=CODE:0xCB5)

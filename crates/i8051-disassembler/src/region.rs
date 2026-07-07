@@ -57,8 +57,9 @@ pub struct Block {
 
 pub struct Region {
     space: AddressSpace,
-    /// The driver that decodes this region's bytes.
-    platform: PlatformRef,
+    /// The driver that decodes this region's bytes. `None` until a CPU is set,
+    /// in which case nothing decodes.
+    platform: Option<PlatformRef>,
     byte_ranges: BTreeMap<AddressValue, ByteRange>,
     equivalents: BTreeMap<AddressValue, EquivalentRange>,
     labels: BTreeMap<AddressValue, String>,
@@ -75,7 +76,7 @@ pub struct Region {
 }
 
 impl Region {
-    pub fn new(space: AddressSpace, platform: PlatformRef) -> Self {
+    pub fn new(space: AddressSpace, platform: Option<PlatformRef>) -> Self {
         Self {
             space,
             platform,
@@ -88,6 +89,13 @@ impl Region {
             weak: Weak::default(),
             xrefs: OnceLock::new(),
         }
+    }
+
+    /// Swap the decoding driver and re-derive, since decode results change.
+    pub(crate) fn set_platform(&mut self, platform: Option<PlatformRef>) {
+        self.platform = platform;
+        self.refresh_weak();
+        self.invalidate_xrefs();
     }
 
     /// Set or clear the override at `(addr, index)`, returning the prior value.
@@ -1024,7 +1032,9 @@ impl Region {
     }
 
     fn decode_at(&self, address: AddressValue) -> Option<DecodedInsn> {
-        let max = self.platform.max_insn_len();
+        // No CPU means nothing decodes.
+        let platform = self.platform.as_ref()?;
+        let max = platform.max_insn_len();
         let mut available = Vec::with_capacity(max);
 
         for i in 0..max as AddressValue {
@@ -1038,7 +1048,7 @@ impl Region {
             return None;
         }
 
-        let ins = self.platform.decode(address, &available);
+        let ins = platform.decode(address, &available);
         if ins.len() > available.len() {
             return None;
         }
@@ -1269,7 +1279,7 @@ mod tests {
 
     #[test]
     fn overlapping_equivalents_are_rejected() {
-        let mut region = Region::new(CODE, platform());
+        let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes(
             "test.bin",
             0,
@@ -1290,7 +1300,7 @@ mod tests {
 
     #[test]
     fn clear_bytes_splits_straddling_range() {
-        let mut region = Region::new(CODE, platform());
+        let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[1, 2, 3, 4, 5]);
         region.clear_bytes(1, 2);
         assert_eq!(region.bytes_at(0, 5), vec![1, 4, 5]);
@@ -1298,7 +1308,7 @@ mod tests {
 
     #[test]
     fn decode_at_does_not_require_bytes_at_zero() {
-        let mut region = Region::new(CODE, platform());
+        let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0x100, &[0x74, 0x42]);
         let insn = region.decode_at(0x100).unwrap();
         assert_eq!(insn.len(), 2);
@@ -1307,7 +1317,7 @@ mod tests {
 
     #[test]
     fn decode_at_requires_full_instruction_length() {
-        let mut region = Region::new(CODE, platform());
+        let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[0x02, 0x00]);
         assert!(
             region.decode_at(0).is_none(),
@@ -1318,7 +1328,7 @@ mod tests {
 
     #[test]
     fn branch_target_uses_implicit_label() {
-        let mut region = Region::new(CODE, platform());
+        let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[0x12, 0x01, 0x6D, 0x02, 0x03, 0x04]);
         region.set_equivalent(0, Equivalent::Code).unwrap();
         region.set_equivalent(3, Equivalent::Code).unwrap();
@@ -1343,7 +1353,7 @@ mod tests {
 
     #[test]
     fn xref_index_reflects_weak_and_chop() {
-        let mut region = Region::new(CODE, platform());
+        let mut region = Region::new(CODE, Some(platform()));
         // LJMP 0x0006 / NOP x4. Auto-disassembly flows through the jump.
         region.set_bytes("t.bin", 0, 0, &[0x02, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00]);
         region.add_auto_root(0);
@@ -1364,7 +1374,7 @@ mod tests {
 
     #[test]
     fn basic_blocks_split_at_branch_targets() {
-        let mut region = Region::new(CODE, platform());
+        let mut region = Region::new(CODE, Some(platform()));
         // 0: JZ 0x03 / 2: NOP / 3: RET
         region.set_bytes("t.bin", 0, 0, &[0x60, 0x01, 0x00, 0x22]);
         region.add_auto_root(0);
@@ -1381,7 +1391,7 @@ mod tests {
 
     #[test]
     fn thunk_resolves_but_render_stays_faithful() {
-        let mut region = Region::new(CODE, platform());
+        let mut region = Region::new(CODE, Some(platform()));
         // 0: LCALL 0x0003 / 3: LJMP 0x0006 (a pure thunk) / 6: RET
         region.set_bytes("t.bin", 0, 0, &[0x12, 0x00, 0x03, 0x02, 0x00, 0x06, 0x22]);
         region.add_auto_root(0);
@@ -1409,7 +1419,7 @@ mod tests {
 
     #[test]
     fn operand_override_preserves_other_operands() {
-        let mut region = Region::new(CODE, platform());
+        let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[0xB5, 0x20, 0x10]);
         region.set_label(0x13, "target");
         region.set_equivalent(0, Equivalent::Code).unwrap();
@@ -1428,7 +1438,7 @@ mod tests {
 
     #[test]
     fn render_emits_org_after_unmapped_gap() {
-        let mut region = Region::new(CODE, platform());
+        let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[1, 2, 3]);
         region.set_bytes("test.bin", 3, 0x10, &[4, 5]);
         let implicit_labels = ImplicitLabels::default();
@@ -1445,7 +1455,7 @@ mod tests {
 
     #[test]
     fn space_usage_counts_code_data_and_undefined() {
-        let mut region = Region::new(CODE, platform());
+        let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes(
             "test.bin",
             0,

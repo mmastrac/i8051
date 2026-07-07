@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::address::{AddressSpace, AddressValue, PhysicalAddr, Xref};
 use crate::platform::{Platform, PlatformRef};
-use crate::commands::{Command, Environment, SetNote, boxed};
+use crate::commands::{Command, Environment, SetCpu, SetNote, boxed};
 use crate::labels::{ImplicitLabels, LabelCollector};
 pub use crate::note::{
     Note, NoteAddressIndex, NoteDb, NoteField, NoteGlobalIndex, NoteId, NotePath, Notes,
@@ -18,28 +18,63 @@ use crate::render::sdas::SdasWriter;
 pub struct Db {
     regions: BTreeMap<AddressSpace, Region>,
     /// The processor driver: decodes bytes and declares the address regions.
-    platform: PlatformRef,
+    /// `None` until a `set_cpu` command (or [`with_platform`](Db::with_platform))
+    /// selects one. Disassembly requires a CPU.
+    platform: Option<PlatformRef>,
     pub notes: NoteDb,
 }
 
 impl Db {
-    /// A database for the default (8051) platform.
+    /// A database with no CPU selected. A `set_cpu` command must run before any
+    /// disassembly.
     pub fn new() -> Self {
-        Self::with_platform(crate::platform::i8051::platform())
-    }
-
-    /// A database driven by `platform`.
-    pub fn with_platform(platform: PlatformRef) -> Self {
         Self {
             regions: BTreeMap::new(),
-            platform,
+            platform: None,
             notes: NoteDb::default(),
         }
     }
 
-    /// The processor driver backing this database.
-    pub fn platform(&self) -> &dyn Platform {
-        &*self.platform
+    /// A database with `platform` already selected.
+    pub fn with_platform(platform: PlatformRef) -> Self {
+        let mut db = Self::new();
+        db.set_platform(Some(platform));
+        db
+    }
+
+    /// The selected processor driver, or `None` if no CPU is set.
+    pub fn platform(&self) -> Option<&dyn Platform> {
+        self.platform.as_deref()
+    }
+
+    /// Select the CPU (or clear it with `None`), propagating it to every region
+    /// so their code re-derives. Returns the previous selection.
+    pub fn set_platform(&mut self, platform: Option<PlatformRef>) -> Option<PlatformRef> {
+        let prev = self.platform.take();
+        self.platform = platform.clone();
+        for region in self.regions.values_mut() {
+            region.set_platform(platform.clone());
+        }
+        prev
+    }
+
+    /// The address spaces to render, in order: the driver's regions when a CPU
+    /// is set, otherwise whatever spaces already hold mapped bytes.
+    pub fn spaces(&self) -> Vec<AddressSpace> {
+        match &self.platform {
+            Some(p) => p.regions().iter().map(|r| r.space).collect(),
+            None => self.regions.keys().copied().collect(),
+        }
+    }
+
+    /// The `.area` header for `space`: the driver's when a CPU is set, else a
+    /// plain default built from the space name.
+    fn area_header(&self, space: AddressSpace) -> String {
+        self.platform
+            .as_ref()
+            .and_then(|p| p.area_header(space))
+            .map(str::to_string)
+            .unwrap_or_else(|| format!(".area {} (ABS)\n", space.dsl_name()))
     }
 
     pub fn region(&self, space: AddressSpace) -> Option<&Region> {
@@ -120,12 +155,11 @@ impl Db {
         let mut writer = SdasWriter::default();
         let implicit_labels = self.implicit_labels();
 
-        for region_def in self.platform.regions() {
-            let space = region_def.space;
+        for space in self.spaces() {
             let Some(region) = self.regions.get(&space) else {
                 continue;
             };
-            writer.write(region_def.area_header);
+            writer.write(&self.area_header(space));
             for line in region.render(space, &implicit_labels) {
                 writer.write_line(&line);
             }
@@ -136,6 +170,10 @@ impl Db {
 
     pub fn to_commands(&self) -> Vec<Box<dyn Command>> {
         let mut commands = Vec::new();
+        // The CPU comes first: the rest of the script decodes against it.
+        if let Some(platform) = &self.platform {
+            commands.push(boxed(SetCpu::new(platform.name().to_string())));
+        }
         for (&space, region) in &self.regions {
             commands.extend(region.to_commands(space));
         }
@@ -327,6 +365,10 @@ impl SpaceUsage {
 #[derive(Debug)]
 pub enum Error {
     NoEnvironment,
+    /// A disassembly command ran with no CPU selected (`set_cpu` must run first).
+    NoCpu,
+    /// `set_cpu` named a CPU with no built-in driver.
+    UnknownCpu(String),
     Overlap(AddressValue),
     InvalidAddress(AddressValue),
     InvalidEquivalent,
@@ -402,7 +444,7 @@ mod tests {
     }
 
     fn make_test_db() -> Db {
-        let mut db = Db::new();
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
 
         let code = db.region_mut(CODE);
         code.set_bytes("test.bin", 0, 0, &TEST_BINARY);
@@ -563,7 +605,7 @@ loc_0010:
         let env = TestEnvironment::new()
             .with_file("test.bin", vec![1, 2, 3])
             .with_file("other.bin", vec![4, 5]);
-        let mut db = Db::new();
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
         db.apply(
             boxed(MapBytes::new(
                 (CODE, 0),
@@ -604,7 +646,7 @@ loc_0010:
     #[test]
     fn clear_bytes_command_undo() {
         let env = TestEnvironment::new().with_file("test.bin", vec![1, 2, 3, 4, 5]);
-        let mut db = Db::new();
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
         db.apply(
             boxed(MapBytes::new(
                 (CODE, 0),
@@ -634,7 +676,7 @@ loc_0010:
     #[test]
     fn set_constant_bytes_command_undo() {
         let env = TestEnvironment::new().with_file("test.bin", vec![1, 2, 3]);
-        let mut db = Db::new();
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
         db.apply(
             boxed(MapBytes::new(
                 (CODE, 0),
@@ -667,7 +709,7 @@ loc_0010:
     #[test]
     fn auto_disassemble_undo_removes_root_and_derived_code() {
         let env = TestEnvironment::new().with_file("test.bin", TEST_BINARY.to_vec());
-        let mut db = Db::new();
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
         db.apply(
             boxed(MapBytes::new(
                 (CODE, 0),
@@ -701,7 +743,7 @@ loc_0010:
         // MOV A,#1 / INC A / SJMP back: a self-contained loop.
         const BYTES: [u8; 5] = [0x74, 0x01, 0x04, 0x80, 0xFB];
         let env = TestEnvironment::new().with_file("loop.bin", BYTES.to_vec());
-        let mut db = Db::new();
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
         db.apply(
             boxed(MapBytes::new(
                 (CODE, 0),
@@ -740,7 +782,7 @@ loc_0010:
         // MOV A,#1 / INC A / NOP / RET: a straight-line run.
         const BYTES: [u8; 5] = [0x74, 0x01, 0x04, 0x00, 0x22];
         let env = TestEnvironment::new().with_file("b.bin", BYTES.to_vec());
-        let mut db = Db::new();
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
         db.apply(
             boxed(MapBytes::new(
                 (CODE, 0),
@@ -793,7 +835,7 @@ loc_0010:
         // MOV A,#1 / INC A / NOP / RET: a straight-line run.
         const BYTES: [u8; 5] = [0x74, 0x01, 0x04, 0x00, 0x22];
         let env = TestEnvironment::new().with_file("b.bin", BYTES.to_vec());
-        let mut db = Db::new();
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
         db.apply(
             boxed(MapBytes::new(
                 (CODE, 0),
@@ -837,7 +879,7 @@ loc_0010:
 
         // MOV A,#1 / INC A (a 3-byte code block), then 2 data bytes.
         let env = TestEnvironment::new().with_file("m.bin", vec![0x74, 0x01, 0x04, 0xAA, 0xBB]);
-        let mut db = Db::new();
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
         db.apply(
             boxed(MapBytes::new(
                 (CODE, 0),
@@ -892,7 +934,7 @@ loc_0010:
 
         // CJNE A,0x20,rel: three operands. We override the third.
         let env = TestEnvironment::new().with_file("b.bin", vec![0xB5, 0x20, 0x10]);
-        let mut db = Db::new();
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
         db.apply(
             boxed(MapBytes::new(
                 (CODE, 0),
@@ -936,7 +978,7 @@ loc_0010:
 
     #[test]
     fn clear_label_set_clears_range_and_undo_restores() {
-        let mut db = Db::new();
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
         let code = db.region_mut(CODE);
         code.set_label(0x10, "a");
         code.set_label(0x14, "b");

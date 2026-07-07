@@ -4,13 +4,15 @@
 //! turns raw bytes into a CPU-neutral [`DecodedInsn`] and declares the address
 //! [`regions`](Platform::regions) that CPU exposes, so the rest of the crate
 //! never names a concrete instruction set. The one built-in driver lives in
-//! [`i8051`]; a caller can supply its own (including user-defined regions).
+//! [`i8051`], a caller can supply its own (including user-defined regions).
 
 use std::sync::Arc;
 
 use crate::address::{AddressSpace, AddressValue, PhysicalAddr, Xref, XrefType};
 
 pub mod i8051;
+pub mod mos6502;
+pub mod m6805;
 
 /// How execution proceeds after an instruction. CPU-neutral: every driver maps
 /// its own control flow onto these cases.
@@ -100,7 +102,7 @@ impl DecodedInsn {
     }
 }
 
-/// What a region holds — advisory metadata a driver attaches to each space.
+/// What a region holds, advisory metadata a driver attaches to each space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegionKind {
     /// Executable code.
@@ -134,13 +136,13 @@ pub trait Platform: Send + Sync {
     /// user-defined regions.
     fn regions(&self) -> &[RegionDef];
 
-    /// The longest instruction in bytes — the fetch window for decoding.
+    /// The longest instruction in bytes, the fetch window for decoding.
     fn max_insn_len(&self) -> usize;
 
     /// Decode the instruction starting at `pc` from `bytes` (a fetch window of
     /// up to [`max_insn_len`](Platform::max_insn_len) bytes). Returns an
     /// instruction even for unknown opcodes (with its length), mirroring the
-    /// underlying decoder; the caller rejects it if it runs past `bytes`.
+    /// underlying decoder, the caller rejects it if it runs past `bytes`.
     fn decode(&self, pc: AddressValue, bytes: &[u8]) -> DecodedInsn;
 
     /// The `.area` header for `space`, if this driver declares it.
@@ -153,7 +155,7 @@ pub trait Platform: Send + Sync {
 }
 
 /// The control-flow and data cross-references an instruction makes from
-/// `source`. Control edges come from the neutral control flow; data edges are
+/// `source`. Control edges come from the neutral control flow, data edges are
 /// the driver's pre-classified [`DataRef`]s.
 pub fn xrefs_from_instruction(insn: &DecodedInsn, source: PhysicalAddr) -> Vec<Xref> {
     let mut xrefs = Vec::new();
@@ -197,3 +199,16 @@ pub fn branch_target_operand_index(insn: &DecodedInsn) -> Option<usize> {
 
 /// Handy alias for a shared driver.
 pub type PlatformRef = Arc<dyn Platform>;
+
+/// The built-in driver names, in a stable order.
+pub const BUILTIN_PLATFORMS: &[&str] = &["i8051", "mos6502", "m6805"];
+
+/// Look up a built-in driver by name (see [`BUILTIN_PLATFORMS`]).
+pub fn by_name(name: &str) -> Option<PlatformRef> {
+    match name {
+        "i8051" => Some(i8051::platform()),
+        "mos6502" => Some(mos6502::platform()),
+        "m6805" => Some(m6805::platform()),
+        _ => None,
+    }
+}

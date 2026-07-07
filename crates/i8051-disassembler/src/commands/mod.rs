@@ -118,6 +118,7 @@ macro_rules! register {
 mod auto_disassemble;
 mod bytes;
 mod comment;
+mod cpu;
 mod equivalent;
 mod extent;
 mod function;
@@ -132,6 +133,7 @@ use std::io;
 pub use auto_disassemble::{AutoDisassemble, ClearAutoDisassembleRoot};
 pub use bytes::{ClearBytes, MapBytes, SetConstantBytes};
 pub use comment::{ClearComment, SetComment};
+pub use cpu::{ClearCpu, SetCpu};
 pub use equivalent::ClearEquivalents;
 pub use extent::{DisassembleRange, MarkData, MarkUnknown};
 pub use function::{ClearFunction, SetFunction};

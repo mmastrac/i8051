@@ -20,6 +20,9 @@ impl Apply for AutoDisassemble {
         db: &mut Db,
         _env: Option<&dyn Environment>,
     ) -> Result<Vec<Box<dyn Command>>, Error> {
+        if db.platform().is_none() {
+            return Err(Error::NoCpu);
+        }
         let Self { address } = self;
         let SpaceAddressValue {
             space,

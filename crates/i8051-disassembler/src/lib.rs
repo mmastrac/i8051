@@ -56,7 +56,7 @@ mod tests {
 
     #[test]
     fn test_asm_examples() {
-        let mut db = Db::new();
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
         db.region_mut(crate::platform::i8051::CODE)
             .set_bytes("test.bin", 0, 0, MATH_BIN);
 

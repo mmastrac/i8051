@@ -16,6 +16,8 @@ analysis = ["leiden-rs"]
 
 [dependencies]
 i8051.workspace = true
+mos6502.workspace = true
+m6805.workspace = true
 regex = "1.12"
 rangemap = "1.7.1"
 xxhash-rust = { version = "0.8.15", features = ["xxh64"] }
