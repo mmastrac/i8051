@@ -3,7 +3,8 @@ use std::range::Range;
 
 use serde::{Deserialize, Serialize};
 
-use crate::address::{AREA_ORDER, AddressSpace, AddressValue, PhysicalAddr, Xref};
+use crate::address::{AddressSpace, AddressValue, PhysicalAddr, Xref};
+use crate::platform::{Platform, PlatformRef};
 use crate::commands::{Command, Environment, SetNote, boxed};
 use crate::labels::{ImplicitLabels, LabelCollector};
 pub use crate::note::{
@@ -16,15 +17,29 @@ use crate::render::sdas::SdasWriter;
 
 pub struct Db {
     regions: BTreeMap<AddressSpace, Region>,
+    /// The processor driver: decodes bytes and declares the address regions.
+    platform: PlatformRef,
     pub notes: NoteDb,
 }
 
 impl Db {
+    /// A database for the default (8051) platform.
     pub fn new() -> Self {
+        Self::with_platform(crate::platform::i8051::platform())
+    }
+
+    /// A database driven by `platform`.
+    pub fn with_platform(platform: PlatformRef) -> Self {
         Self {
             regions: BTreeMap::new(),
+            platform,
             notes: NoteDb::default(),
         }
+    }
+
+    /// The processor driver backing this database.
+    pub fn platform(&self) -> &dyn Platform {
+        &*self.platform
     }
 
     pub fn region(&self, space: AddressSpace) -> Option<&Region> {
@@ -32,9 +47,10 @@ impl Db {
     }
 
     pub fn region_mut(&mut self, space: AddressSpace) -> &mut Region {
+        let platform = self.platform.clone();
         self.regions
             .entry(space)
-            .or_insert_with(|| Region::new(space))
+            .or_insert_with(|| Region::new(space, platform))
     }
 
     pub fn xrefs_to(&self, target: &PhysicalAddr) -> Vec<Xref> {
@@ -104,11 +120,12 @@ impl Db {
         let mut writer = SdasWriter::default();
         let implicit_labels = self.implicit_labels();
 
-        for &space in &AREA_ORDER {
+        for region_def in self.platform.regions() {
+            let space = region_def.space;
             let Some(region) = self.regions.get(&space) else {
                 continue;
             };
-            writer.write(space.area_header());
+            writer.write(region_def.area_header);
             for line in region.render(space, &implicit_labels) {
                 writer.write_line(&line);
             }
@@ -325,6 +342,7 @@ mod tests {
     use super::*;
     use crate::address::SpaceAddressSet;
     use crate::address::XrefType;
+    use crate::platform::i8051::CODE;
     use crate::commands::{
         AutoDisassemble, ClearBytes, ClearLabel, Command, MapBytes, SetConstantBytes, boxed,
     };
@@ -386,7 +404,7 @@ mod tests {
     fn make_test_db() -> Db {
         let mut db = Db::new();
 
-        let code = db.region_mut(AddressSpace::Code);
+        let code = db.region_mut(CODE);
         code.set_bytes("test.bin", 0, 0, &TEST_BINARY);
 
         code.set_label(0, "start");
@@ -407,17 +425,17 @@ mod tests {
         let db = make_test_db();
         assert_eq!(
             db.xrefs_to(&PhysicalAddr {
-                space: AddressSpace::Code,
+                space: CODE,
                 offset: 3
             }),
             vec![Xref {
                 xref_type: XrefType::Jump,
                 from: PhysicalAddr {
-                    space: AddressSpace::Code,
+                    space: CODE,
                     offset: 10
                 },
                 to: PhysicalAddr {
-                    space: AddressSpace::Code,
+                    space: CODE,
                     offset: 3
                 },
             }]
@@ -425,17 +443,17 @@ mod tests {
 
         assert_eq!(
             db.xrefs_from(&PhysicalAddr {
-                space: AddressSpace::Code,
+                space: CODE,
                 offset: 10
             }),
             vec![Xref {
                 xref_type: XrefType::Jump,
                 from: PhysicalAddr {
-                    space: AddressSpace::Code,
+                    space: CODE,
                     offset: 10
                 },
                 to: PhysicalAddr {
-                    space: AddressSpace::Code,
+                    space: CODE,
                     offset: 3
                 },
             }]
@@ -485,12 +503,12 @@ loc_0010:
         first.tags.insert("entry".into());
         let second = Note::new(Some(&first.id), "jump table");
         db.apply(
-            boxed(SetNote::new((AddressSpace::Code, 0x0..0x3), first.clone())),
+            boxed(SetNote::new((CODE, 0x0..0x3), first.clone())),
             None,
         )
         .unwrap();
         db.apply(
-            boxed(SetNote::new((AddressSpace::Code, 0x3..0x5), second.clone())),
+            boxed(SetNote::new((CODE, 0x3..0x5), second.clone())),
             None,
         )
         .unwrap();
@@ -511,14 +529,14 @@ loc_0010:
         assert_eq!(
             reloaded.note_location(&first.id),
             Some((
-                AddressSpace::Code,
+                CODE,
                 crate::address::AddressRange::new(0x0, 0x3)
             ))
         );
         assert_eq!(
             reloaded.note_location(&second.id),
             Some((
-                AddressSpace::Code,
+                CODE,
                 crate::address::AddressRange::new(0x3, 0x5)
             ))
         );
@@ -531,7 +549,7 @@ loc_0010:
     fn test_db_space_usage() {
         let db = make_test_db();
         assert_eq!(
-            db.space_usage(AddressSpace::Code),
+            db.space_usage(CODE),
             SpaceUsage {
                 code: 12,
                 data: 0,
@@ -548,7 +566,7 @@ loc_0010:
         let mut db = Db::new();
         db.apply(
             boxed(MapBytes::new(
-                (AddressSpace::Code, 0),
+                (CODE, 0),
                 "test.bin",
                 0usize,
                 3u32,
@@ -557,13 +575,13 @@ loc_0010:
         )
         .unwrap();
 
-        let code = db.region(AddressSpace::Code).unwrap();
+        let code = db.region(CODE).unwrap();
         assert_eq!(code.bytes_at(0, 3), vec![1, 2, 3]);
 
         let undo = db
             .apply(
                 boxed(MapBytes::new(
-                    (AddressSpace::Code, 0),
+                    (CODE, 0),
                     "other.bin",
                     0usize,
                     2u32,
@@ -572,13 +590,13 @@ loc_0010:
             )
             .unwrap();
         assert_eq!(
-            db.region(AddressSpace::Code).unwrap().bytes_at(0, 2),
+            db.region(CODE).unwrap().bytes_at(0, 2),
             vec![4, 5]
         );
 
         apply_all(&mut db, undo, &env);
         assert_eq!(
-            db.region(AddressSpace::Code).unwrap().bytes_at(0, 3),
+            db.region(CODE).unwrap().bytes_at(0, 3),
             vec![1, 2, 3]
         );
     }
@@ -589,7 +607,7 @@ loc_0010:
         let mut db = Db::new();
         db.apply(
             boxed(MapBytes::new(
-                (AddressSpace::Code, 0),
+                (CODE, 0),
                 "test.bin",
                 0usize,
                 5u32,
@@ -599,16 +617,16 @@ loc_0010:
         .unwrap();
 
         let undo = db
-            .apply(boxed(ClearBytes::new((AddressSpace::Code, 1..3))), None)
+            .apply(boxed(ClearBytes::new((CODE, 1..3))), None)
             .unwrap();
         assert_eq!(
-            db.region(AddressSpace::Code).unwrap().bytes_at(0, 5),
+            db.region(CODE).unwrap().bytes_at(0, 5),
             vec![1, 4, 5]
         );
 
         apply_all(&mut db, undo, &env);
         assert_eq!(
-            db.region(AddressSpace::Code).unwrap().bytes_at(0, 5),
+            db.region(CODE).unwrap().bytes_at(0, 5),
             vec![1, 2, 3, 4, 5]
         );
     }
@@ -619,7 +637,7 @@ loc_0010:
         let mut db = Db::new();
         db.apply(
             boxed(MapBytes::new(
-                (AddressSpace::Code, 0),
+                (CODE, 0),
                 "test.bin",
                 0usize,
                 3u32,
@@ -630,18 +648,18 @@ loc_0010:
 
         let undo = db
             .apply(
-                boxed(SetConstantBytes::new((AddressSpace::Code, 0..2), 0xFF)),
+                boxed(SetConstantBytes::new((CODE, 0..2), 0xFF)),
                 None,
             )
             .unwrap();
         assert_eq!(
-            db.region(AddressSpace::Code).unwrap().bytes_at(0, 3),
+            db.region(CODE).unwrap().bytes_at(0, 3),
             vec![0xFF, 0xFF, 3]
         );
 
         apply_all(&mut db, undo, &env);
         assert_eq!(
-            db.region(AddressSpace::Code).unwrap().bytes_at(0, 3),
+            db.region(CODE).unwrap().bytes_at(0, 3),
             vec![1, 2, 3]
         );
     }
@@ -652,7 +670,7 @@ loc_0010:
         let mut db = Db::new();
         db.apply(
             boxed(MapBytes::new(
-                (AddressSpace::Code, 0),
+                (CODE, 0),
                 "test.bin",
                 0usize,
                 TEST_BINARY.len() as AddressValue,
@@ -662,18 +680,18 @@ loc_0010:
         .unwrap();
 
         let undo = db
-            .apply(boxed(AutoDisassemble::new((AddressSpace::Code, 0))), None)
+            .apply(boxed(AutoDisassemble::new((CODE, 0))), None)
             .unwrap();
 
         // Derived code, so the undo is just the root-clear. Nothing to un-set.
-        assert!(db.space_usage(AddressSpace::Code).code > 0);
-        assert!(db.region(AddressSpace::Code).unwrap().is_auto_root(0));
+        assert!(db.space_usage(CODE).code > 0);
+        assert!(db.region(CODE).unwrap().is_auto_root(0));
         assert_eq!(undo.len(), 1);
         assert_eq!(undo[0].name(), "clear_auto_disassemble_root");
 
         apply_all(&mut db, undo, &env);
-        assert_eq!(db.space_usage(AddressSpace::Code).code, 0);
-        assert!(!db.region(AddressSpace::Code).unwrap().is_auto_root(0));
+        assert_eq!(db.space_usage(CODE).code, 0);
+        assert!(!db.region(CODE).unwrap().is_auto_root(0));
     }
 
     #[test]
@@ -686,7 +704,7 @@ loc_0010:
         let mut db = Db::new();
         db.apply(
             boxed(MapBytes::new(
-                (AddressSpace::Code, 0),
+                (CODE, 0),
                 "loop.bin",
                 0usize,
                 5u32,
@@ -696,11 +714,11 @@ loc_0010:
         .unwrap();
         // The region method (which library callers use) must record a root.
         assert!(
-            db.region_mut(AddressSpace::Code)
+            db.region_mut(CODE)
                 .auto_disassemble(0)
                 .is_success()
         );
-        assert!(db.region(AddressSpace::Code).unwrap().is_auto_root(0));
+        assert!(db.region(CODE).unwrap().is_auto_root(0));
 
         let dsl = to_dsl_many(&db.to_commands());
         assert!(dsl.contains("auto_disassemble(address=CODE:0x0)"), "{dsl}");
@@ -725,7 +743,7 @@ loc_0010:
         let mut db = Db::new();
         db.apply(
             boxed(MapBytes::new(
-                (AddressSpace::Code, 0),
+                (CODE, 0),
                 "b.bin",
                 0usize,
                 BYTES.len() as AddressValue,
@@ -735,18 +753,18 @@ loc_0010:
         .unwrap();
         // Barrier at 0x3, set before disassembling.
         db.apply(
-            boxed(MarkUnknown::new((AddressSpace::Code, 0x3u32..0x4u32))),
+            boxed(MarkUnknown::new((CODE, 0x3u32..0x4u32))),
             None,
         )
         .unwrap();
         db.apply(
-            boxed(AutoDisassemble::new((AddressSpace::Code, 0u32))),
+            boxed(AutoDisassemble::new((CODE, 0u32))),
             None,
         )
         .unwrap();
 
         // Flow stops at the barrier: 0x3 stays unknown, 0x4 is never reached.
-        let region = db.region(AddressSpace::Code).unwrap();
+        let region = db.region(CODE).unwrap();
         assert_eq!(region.get_equivalent_kind(0x0), Some(EquivalentKind::Code));
         assert_eq!(region.get_equivalent_kind(0x2), Some(EquivalentKind::Code));
         assert_eq!(
@@ -778,7 +796,7 @@ loc_0010:
         let mut db = Db::new();
         db.apply(
             boxed(MapBytes::new(
-                (AddressSpace::Code, 0),
+                (CODE, 0),
                 "b.bin",
                 0usize,
                 BYTES.len() as AddressValue,
@@ -788,21 +806,21 @@ loc_0010:
         .unwrap();
         // Disassemble the whole run first.
         db.apply(
-            boxed(AutoDisassemble::new((AddressSpace::Code, 0u32))),
+            boxed(AutoDisassemble::new((CODE, 0u32))),
             None,
         )
         .unwrap();
-        let region = db.region(AddressSpace::Code).unwrap();
+        let region = db.region(CODE).unwrap();
         assert_eq!(region.get_equivalent_kind(0x3), Some(EquivalentKind::Code));
         assert_eq!(region.get_equivalent_kind(0x4), Some(EquivalentKind::Code));
 
         // Drop a barrier mid-flow. Derived code re-derives, so 0x3 onward vanish.
         db.apply(
-            boxed(MarkUnknown::new((AddressSpace::Code, 0x3u32..0x4u32))),
+            boxed(MarkUnknown::new((CODE, 0x3u32..0x4u32))),
             None,
         )
         .unwrap();
-        let region = db.region(AddressSpace::Code).unwrap();
+        let region = db.region(CODE).unwrap();
         assert_eq!(region.get_equivalent_kind(0x0), Some(EquivalentKind::Code));
         assert_eq!(region.get_equivalent_kind(0x2), Some(EquivalentKind::Code));
         assert_eq!(
@@ -822,7 +840,7 @@ loc_0010:
         let mut db = Db::new();
         db.apply(
             boxed(MapBytes::new(
-                (AddressSpace::Code, 0),
+                (CODE, 0),
                 "m.bin",
                 0usize,
                 5u32,
@@ -831,13 +849,13 @@ loc_0010:
         )
         .unwrap();
         db.apply(
-            boxed(DisassembleRange::new((AddressSpace::Code, 0u32..3u32))),
+            boxed(DisassembleRange::new((CODE, 0u32..3u32))),
             None,
         )
         .unwrap();
         db.apply(
             boxed(MarkData::new(
-                (AddressSpace::Code, 3u32..5u32),
+                (CODE, 3u32..5u32),
                 DataType::Byte,
             )),
             None,
@@ -877,7 +895,7 @@ loc_0010:
         let mut db = Db::new();
         db.apply(
             boxed(MapBytes::new(
-                (AddressSpace::Code, 0),
+                (CODE, 0),
                 "b.bin",
                 0usize,
                 3u32,
@@ -886,14 +904,14 @@ loc_0010:
         )
         .unwrap();
         db.apply(
-            boxed(DisassembleRange::new((AddressSpace::Code, 0u32..3u32))),
+            boxed(DisassembleRange::new((CODE, 0u32..3u32))),
             None,
         )
         .unwrap();
         let undo = db
             .apply(
                 boxed(OverrideOperand::new(
-                    (AddressSpace::Code, 0u32),
+                    (CODE, 0u32),
                     2u8,
                     Some(OperandOverride::Text("HOT".into())),
                 )),
@@ -919,24 +937,24 @@ loc_0010:
     #[test]
     fn clear_label_set_clears_range_and_undo_restores() {
         let mut db = Db::new();
-        let code = db.region_mut(AddressSpace::Code);
+        let code = db.region_mut(CODE);
         code.set_label(0x10, "a");
         code.set_label(0x14, "b");
         code.set_label(0x20, "c");
 
         // Clear a single range covering the first two labels in one command.
-        let mut set = SpaceAddressSet::new(AddressSpace::Code);
+        let mut set = SpaceAddressSet::new(CODE);
         set.insert(0x10..0x18);
         let undo = db.apply(boxed(ClearLabel::new(set)), None).unwrap();
 
-        let code = db.region(AddressSpace::Code).unwrap();
+        let code = db.region(CODE).unwrap();
         assert_eq!(code.get_label(0x10), None);
         assert_eq!(code.get_label(0x14), None);
         assert_eq!(code.get_label(0x20), Some("c")); // outside the set, untouched
 
         // The undo restores both cleared labels.
         apply_all(&mut db, undo, &TestEnvironment::new());
-        let code = db.region(AddressSpace::Code).unwrap();
+        let code = db.region(CODE).unwrap();
         assert_eq!(code.get_label(0x10), Some("a"));
         assert_eq!(code.get_label(0x14), Some("b"));
     }

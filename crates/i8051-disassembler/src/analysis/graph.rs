@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use i8051::{ControlFlow, Instruction, Mnemonic, Operand};
 use leiden_rs::{GraphDataBuilder, Leiden, LeidenConfig, LeidenError};
 
-use crate::address::{AddressSpace, AddressValue};
+use crate::address::AddressValue;
 use crate::db::{DataType, Db};
 use crate::render::Line;
 
@@ -72,7 +72,7 @@ pub fn leiden_communities(db: &Db) -> Result<(), LeidenError> {
 
     let mut interesting = HashSet::new();
 
-    for line in db.render(AddressSpace::Code) {
+    for line in db.render(crate::platform::i8051::CODE) {
         if let Line::Data {
             addr,
             bytes,
@@ -83,7 +83,7 @@ pub fn leiden_communities(db: &Db) -> Result<(), LeidenError> {
             for i in 0..bytes.len() / 2 {
                 let offset = addr + i as AddressValue * 2;
                 let value = db
-                    .region(AddressSpace::Code)
+                    .region(crate::platform::i8051::CODE)
                     .unwrap()
                     .read_u16_le(offset)
                     .unwrap();
@@ -251,7 +251,7 @@ fn dptr_load_value(instruction: &Instruction) -> Option<u16> {
 
 fn code_region_size(db: &Db) -> AddressValue {
     let mut end = 0;
-    for line in db.render(AddressSpace::Code) {
+    for line in db.render(crate::platform::i8051::CODE) {
         match line {
             Line::Instruction { addr, bytes, .. } => {
                 end = end.max(addr.saturating_add(bytes.len() as AddressValue));

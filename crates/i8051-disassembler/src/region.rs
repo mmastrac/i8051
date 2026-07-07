@@ -1,4 +1,3 @@
-use i8051::{ControlFlow, Instruction};
 use std::collections::BTreeMap;
 use std::ops::RangeBounds;
 use std::range::Range;
@@ -11,9 +10,10 @@ pub use weak::{AutoDisassembleError, AutoDisassembleResult};
 use weak::{CodeSource, Weak};
 use xrefs::Xrefs;
 
-use crate::address::{
-    AddressRange, AddressSpace, AddressValue, PhysicalAddr, Xref, XrefType, branch_target,
-    branch_target_operand_index, xrefs_from_instruction,
+use crate::address::{AddressRange, AddressSpace, AddressValue, PhysicalAddr, Xref, XrefType};
+use crate::platform::{
+    ControlFlow, DecodedInsn, PlatformRef, branch_target, branch_target_operand_index,
+    xrefs_from_instruction,
 };
 use crate::commands::{
     AutoDisassemble, Command, DisassembleRange, MapBytes, MarkData, MarkUnknown, OverrideOperand,
@@ -57,6 +57,8 @@ pub struct Block {
 
 pub struct Region {
     space: AddressSpace,
+    /// The driver that decodes this region's bytes.
+    platform: PlatformRef,
     byte_ranges: BTreeMap<AddressValue, ByteRange>,
     equivalents: BTreeMap<AddressValue, EquivalentRange>,
     labels: BTreeMap<AddressValue, String>,
@@ -73,9 +75,10 @@ pub struct Region {
 }
 
 impl Region {
-    pub fn new(space: AddressSpace) -> Self {
+    pub fn new(space: AddressSpace, platform: PlatformRef) -> Self {
         Self {
             space,
+            platform,
             byte_ranges: BTreeMap::new(),
             equivalents: BTreeMap::new(),
             labels: BTreeMap::new(),
@@ -960,7 +963,9 @@ impl Region {
     pub(crate) fn collect_refs(&self, refs: &mut LabelCollector) {
         let index = self.xref_index();
         for (target, edges) in index.targets() {
-            if target.space != AddressSpace::Code || self.get_label(target.offset).is_some() {
+            // Implicit code labels only apply to targets in this region's own
+            // (code) space; data references into other spaces are not labelled.
+            if target.space != self.space || self.get_label(target.offset).is_some() {
                 continue;
             }
             let kind = if edges.iter().any(|e| e.kind == XrefType::Call) {
@@ -1018,10 +1023,11 @@ impl Region {
         }
     }
 
-    fn decode_at(&self, address: AddressValue) -> Option<Instruction> {
-        let mut available = Vec::with_capacity(Instruction::MAX_LENGTH);
+    fn decode_at(&self, address: AddressValue) -> Option<DecodedInsn> {
+        let max = self.platform.max_insn_len();
+        let mut available = Vec::with_capacity(max);
 
-        for i in 0..Instruction::MAX_LENGTH as AddressValue {
+        for i in 0..max as AddressValue {
             if let Some(b) = self.read_byte(address + i) {
                 available.push(b);
             } else {
@@ -1032,7 +1038,7 @@ impl Region {
             return None;
         }
 
-        let ins = Instruction::decode_from_bytes(address as _, &available);
+        let ins = self.platform.decode(address, &available);
         if ins.len() > available.len() {
             return None;
         }
@@ -1116,7 +1122,7 @@ impl Region {
     fn format_instruction(
         &self,
         _addr: AddressValue,
-        insn: &Instruction,
+        insn: &DecodedInsn,
         overrides: &[Option<OperandOverride>],
         implicit_labels: &Labels,
     ) -> String {
@@ -1141,14 +1147,14 @@ impl Region {
         let text = if merged.iter().all(|o| o.is_none()) {
             decoded.to_string()
         } else {
-            apply_operand_overrides(&decoded, &merged)
+            apply_operand_overrides(decoded, &merged)
         };
         sdas_indent_instruction(&text)
     }
 }
 
 impl CodeSource for Region {
-    fn decode(&self, addr: AddressValue) -> Option<Instruction> {
+    fn decode(&self, addr: AddressValue) -> Option<DecodedInsn> {
         self.decode_at(addr)
     }
 
@@ -1258,12 +1264,12 @@ fn ranges_overlap_inclusive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::address::AddressSpace;
+    use crate::platform::i8051::{CODE, platform};
     use crate::db::{DataType, OperandOverride, SpaceUsage};
 
     #[test]
     fn overlapping_equivalents_are_rejected() {
-        let mut region = Region::new(AddressSpace::Code);
+        let mut region = Region::new(CODE, platform());
         region.set_bytes(
             "test.bin",
             0,
@@ -1284,7 +1290,7 @@ mod tests {
 
     #[test]
     fn clear_bytes_splits_straddling_range() {
-        let mut region = Region::new(AddressSpace::Code);
+        let mut region = Region::new(CODE, platform());
         region.set_bytes("test.bin", 0, 0, &[1, 2, 3, 4, 5]);
         region.clear_bytes(1, 2);
         assert_eq!(region.bytes_at(0, 5), vec![1, 4, 5]);
@@ -1292,7 +1298,7 @@ mod tests {
 
     #[test]
     fn decode_at_does_not_require_bytes_at_zero() {
-        let mut region = Region::new(AddressSpace::Code);
+        let mut region = Region::new(CODE, platform());
         region.set_bytes("test.bin", 0, 0x100, &[0x74, 0x42]);
         let insn = region.decode_at(0x100).unwrap();
         assert_eq!(insn.len(), 2);
@@ -1301,7 +1307,7 @@ mod tests {
 
     #[test]
     fn decode_at_requires_full_instruction_length() {
-        let mut region = Region::new(AddressSpace::Code);
+        let mut region = Region::new(CODE, platform());
         region.set_bytes("test.bin", 0, 0, &[0x02, 0x00]);
         assert!(
             region.decode_at(0).is_none(),
@@ -1312,7 +1318,7 @@ mod tests {
 
     #[test]
     fn branch_target_uses_implicit_label() {
-        let mut region = Region::new(AddressSpace::Code);
+        let mut region = Region::new(CODE, platform());
         region.set_bytes("test.bin", 0, 0, &[0x12, 0x01, 0x6D, 0x02, 0x03, 0x04]);
         region.set_equivalent(0, Equivalent::Code).unwrap();
         region.set_equivalent(3, Equivalent::Code).unwrap();
@@ -1321,7 +1327,7 @@ mod tests {
         region.collect_refs(&mut collector);
         let implicit_labels = collector.into_implicit_labels();
 
-        let lines = region.render(AddressSpace::Code, &implicit_labels);
+        let lines = region.render(CODE, &implicit_labels);
         let insn = lines
             .iter()
             .find_map(|line| match line {
@@ -1337,13 +1343,13 @@ mod tests {
 
     #[test]
     fn xref_index_reflects_weak_and_chop() {
-        let mut region = Region::new(AddressSpace::Code);
+        let mut region = Region::new(CODE, platform());
         // LJMP 0x0006 / NOP x4. Auto-disassembly flows through the jump.
         region.set_bytes("t.bin", 0, 0, &[0x02, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00]);
         region.add_auto_root(0);
 
         let target = PhysicalAddr {
-            space: AddressSpace::Code,
+            space: CODE,
             offset: 6,
         };
         let before = region.xrefs_to(&target);
@@ -1358,7 +1364,7 @@ mod tests {
 
     #[test]
     fn basic_blocks_split_at_branch_targets() {
-        let mut region = Region::new(AddressSpace::Code);
+        let mut region = Region::new(CODE, platform());
         // 0: JZ 0x03 / 2: NOP / 3: RET
         region.set_bytes("t.bin", 0, 0, &[0x60, 0x01, 0x00, 0x22]);
         region.add_auto_root(0);
@@ -1375,7 +1381,7 @@ mod tests {
 
     #[test]
     fn thunk_resolves_but_render_stays_faithful() {
-        let mut region = Region::new(AddressSpace::Code);
+        let mut region = Region::new(CODE, platform());
         // 0: LCALL 0x0003 / 3: LJMP 0x0006 (a pure thunk) / 6: RET
         region.set_bytes("t.bin", 0, 0, &[0x12, 0x00, 0x03, 0x02, 0x00, 0x06, 0x22]);
         region.add_auto_root(0);
@@ -1390,7 +1396,7 @@ mod tests {
         region.collect_refs(&mut collector);
         let implicit = collector.into_implicit_labels();
         let call = region
-            .render(AddressSpace::Code, &implicit)
+            .render(CODE, &implicit)
             .into_iter()
             .find_map(|l| match l {
                 Line::Instruction { addr: 0, text, .. } => Some(text),
@@ -1403,13 +1409,13 @@ mod tests {
 
     #[test]
     fn operand_override_preserves_other_operands() {
-        let mut region = Region::new(AddressSpace::Code);
+        let mut region = Region::new(CODE, platform());
         region.set_bytes("test.bin", 0, 0, &[0xB5, 0x20, 0x10]);
         region.set_label(0x13, "target");
         region.set_equivalent(0, Equivalent::Code).unwrap();
         region.set_operand_override(0, 2, Some(OperandOverride::Label("target".into())));
         let implicit_labels = ImplicitLabels::default();
-        let lines = region.render(AddressSpace::Code, &implicit_labels);
+        let lines = region.render(CODE, &implicit_labels);
         let insn = lines
             .iter()
             .find_map(|line| match line {
@@ -1422,11 +1428,11 @@ mod tests {
 
     #[test]
     fn render_emits_org_after_unmapped_gap() {
-        let mut region = Region::new(AddressSpace::Code);
+        let mut region = Region::new(CODE, platform());
         region.set_bytes("test.bin", 0, 0, &[1, 2, 3]);
         region.set_bytes("test.bin", 3, 0x10, &[4, 5]);
         let implicit_labels = ImplicitLabels::default();
-        let lines = region.render(AddressSpace::Code, &implicit_labels);
+        let lines = region.render(CODE, &implicit_labels);
         let orgs: Vec<_> = lines
             .iter()
             .filter_map(|line| match line {
@@ -1439,7 +1445,7 @@ mod tests {
 
     #[test]
     fn space_usage_counts_code_data_and_undefined() {
-        let mut region = Region::new(AddressSpace::Code);
+        let mut region = Region::new(CODE, platform());
         region.set_bytes(
             "test.bin",
             0,

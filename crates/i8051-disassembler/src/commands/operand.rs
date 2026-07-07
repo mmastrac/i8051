@@ -3,8 +3,6 @@ use crate::db::{Db, Error, OperandOverride};
 
 use super::{Apply, Command, Environment, boxed};
 
-#[cfg(test)]
-use crate::address::AddressSpace;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OverrideOperand {
@@ -50,7 +48,7 @@ serialize_test!(
     override_operand_struct_variant,
     r#"override_operand(address=CODE:0x0, index=0x1, operand=OperandOverride::LabelOffset(label="tbl", offset=0x4))"#,
     OverrideOperand {
-        address: (AddressSpace::Code, 0x0).into(),
+        address: (crate::platform::i8051::CODE, 0x0).into(),
         index: 1,
         operand: Some(OperandOverride::LabelOffset {
             label: "tbl".into(),

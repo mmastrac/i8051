@@ -4,15 +4,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use i8051::{ControlFlow, Instruction};
-
 use crate::address::AddressValue;
 use crate::db::{Equivalent, EquivalentKind, EquivalentRange};
+use crate::platform::{ControlFlow, DecodedInsn};
 
 /// What the traversal reads from the region. Strong *code* is intentionally not
 /// exposed, so the traversal flows through code islands and re-derives them.
 pub(crate) trait CodeSource {
-    fn decode(&self, addr: AddressValue) -> Option<Instruction>;
+    fn decode(&self, addr: AddressValue) -> Option<DecodedInsn>;
     /// The kind of the first barrier overlapping `[addr, addr + len)`, if any.
     fn barrier_in(&self, addr: AddressValue, len: AddressValue) -> Option<EquivalentKind>;
 }

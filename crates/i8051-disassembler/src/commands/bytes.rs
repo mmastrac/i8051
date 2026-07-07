@@ -5,7 +5,7 @@ use crate::region::ByteRange;
 use super::{Apply, Command, Environment, boxed};
 
 #[cfg(test)]
-use crate::address::{AddressRange, AddressSpace};
+use crate::address::AddressRange;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MapBytes {
@@ -151,7 +151,7 @@ serialize_test!(
     constant_bytes_range_and_byte,
     "set_constant_bytes(range=CODE:0x10..0x20, value=0xFF)",
     SetConstantBytes {
-        range: (AddressSpace::Code, AddressRange::new(0x10, 0x20)).into(),
+        range: (crate::platform::i8051::CODE, AddressRange::new(0x10, 0x20)).into(),
         value: 0xFF,
     }
 );

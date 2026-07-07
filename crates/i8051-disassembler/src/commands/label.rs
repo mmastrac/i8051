@@ -3,8 +3,6 @@ use crate::db::{Db, Error};
 
 use super::{Apply, Command, Environment, boxed};
 
-#[cfg(test)]
-use crate::address::AddressSpace;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SetLabel {
@@ -71,7 +69,7 @@ serialize_test!(
     "clear_label(addresses=CODE:{0x10, 0x20})",
     ClearLabel {
         addresses: {
-            let mut set = SpaceAddressSet::new(AddressSpace::Code);
+            let mut set = SpaceAddressSet::new(crate::platform::i8051::CODE);
             set.insert_address(0x10);
             set.insert_address(0x20);
             set

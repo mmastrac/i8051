@@ -6,6 +6,7 @@ pub mod db;
 pub mod labels;
 pub mod note;
 pub mod pattern;
+pub mod platform;
 pub mod region;
 pub mod render;
 pub mod store;
@@ -14,7 +15,7 @@ pub mod store;
 mod tests {
     use std::process::{Command, Stdio};
 
-    use crate::{address::AddressSpace, db::Db};
+    use crate::db::Db;
 
     static MATH_BIN: &[u8] = &hex_literal::hex!(
         "
@@ -56,34 +57,34 @@ mod tests {
     #[test]
     fn test_asm_examples() {
         let mut db = Db::new();
-        db.region_mut(AddressSpace::Code)
+        db.region_mut(crate::platform::i8051::CODE)
             .set_bytes("test.bin", 0, 0, MATH_BIN);
 
-        db.region_mut(AddressSpace::Code)
+        db.region_mut(crate::platform::i8051::CODE)
             .auto_disassemble(0)
             .unwrap_success();
-        db.region_mut(AddressSpace::Code)
+        db.region_mut(crate::platform::i8051::CODE)
             .auto_disassemble(3)
             .unwrap_success();
-        db.region_mut(AddressSpace::Code)
+        db.region_mut(crate::platform::i8051::CODE)
             .auto_disassemble(0xa)
             .unwrap_success();
-        db.region_mut(AddressSpace::Code)
+        db.region_mut(crate::platform::i8051::CODE)
             .auto_disassemble(0x10)
             .unwrap_success();
-        db.region_mut(AddressSpace::Code)
+        db.region_mut(crate::platform::i8051::CODE)
             .auto_disassemble(0x18)
             .unwrap_success();
-        db.region_mut(AddressSpace::Code)
+        db.region_mut(crate::platform::i8051::CODE)
             .auto_disassemble(0x1F)
             .unwrap_success();
-        db.region_mut(AddressSpace::Code)
+        db.region_mut(crate::platform::i8051::CODE)
             .auto_disassemble(0x27)
             .unwrap_success();
-        db.region_mut(AddressSpace::Code)
+        db.region_mut(crate::platform::i8051::CODE)
             .auto_disassemble(0x2F)
             .unwrap_success();
-        db.region_mut(AddressSpace::Code)
+        db.region_mut(crate::platform::i8051::CODE)
             .auto_disassemble(0x3F)
             .unwrap_success();
 

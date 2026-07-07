@@ -60,7 +60,7 @@ serialize_test!(
     "clear_equivalents(addresses=CODE:{0x10..0x13, 0x20})",
     ClearEquivalents {
         addresses: {
-            let mut set = SpaceAddressSet::new(AddressSpace::Code);
+            let mut set = SpaceAddressSet::new(crate::platform::i8051::CODE);
             set.insert(0x10..0x13);
             set.insert_address(0x20);
             set

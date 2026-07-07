@@ -6,7 +6,7 @@
 /// serialize_test!(
 ///     auto_disassemble,
 ///     "auto_disassemble(address=CODE:0x1234)",
-///     AutoDisassemble { address: (AddressSpace::Code, 0x1234).into() }
+///     AutoDisassemble { address: (crate::platform::i8051::CODE, 0x1234).into() }
 /// );
 /// ```
 macro_rules! serialize_test {

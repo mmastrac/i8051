@@ -5,7 +5,8 @@
 
 use std::collections::BTreeMap;
 
-use crate::address::{AddressValue, PhysicalAddr, XrefType, xrefs_from_instruction};
+use crate::address::{AddressValue, PhysicalAddr, XrefType};
+use crate::platform::xrefs_from_instruction;
 
 use super::Region;
 

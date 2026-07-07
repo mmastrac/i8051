@@ -804,10 +804,10 @@ mod tests {
         let range = AddressRange::from(0..4);
         let human = db.create("human note on ISR");
         let llm = db.create("llm note on ISR");
-        db.set_address(AddressSpace::Code, range, human.clone());
-        db.set_address(AddressSpace::Code, range, llm.clone());
+        db.set_address(crate::platform::i8051::CODE, range, human.clone());
+        db.set_address(crate::platform::i8051::CODE, range, llm.clone());
 
-        let found = db.get_notes_inside(AddressSpace::Code, 0..4);
+        let found = db.get_notes_inside(crate::platform::i8051::CODE, 0..4);
         assert_eq!(found.len(), 2);
         let ids: BTreeSet<_> = found.iter().map(|note| &note.id).collect();
         assert!(ids.contains(&human.id));
@@ -821,23 +821,23 @@ mod tests {
         let b = db.create("note at 0x40");
         let c = db.create("far note at 0x200");
         db.set_address(
-            AddressSpace::Code,
+            crate::platform::i8051::CODE,
             AddressRange::from(0x10..0x14),
             a.clone(),
         );
         db.set_address(
-            AddressSpace::Code,
+            crate::platform::i8051::CODE,
             AddressRange::from(0x40..0x44),
             b.clone(),
         );
         db.set_address(
-            AddressSpace::Code,
+            crate::platform::i8051::CODE,
             AddressRange::from(0x200..0x204),
             c.clone(),
         );
 
         // Probe inside `a`'s range, with a window that reaches `b` but not `c`.
-        let near = db.notes_near(AddressSpace::Code, 0x12, 0x40);
+        let near = db.notes_near(crate::platform::i8051::CODE, 0x12, 0x40);
         assert_eq!(near.len(), 2, "c is outside the window");
         assert_eq!(near[0].note.id, a.id);
         assert_eq!(near[0].distance, 0, "probe is inside a");
@@ -845,7 +845,7 @@ mod tests {
         assert_eq!(near[1].distance, 0x40 - 0x12);
 
         // A different space has no notes.
-        assert!(db.notes_near(AddressSpace::Xdata, 0x12, 0x1000).is_empty());
+        assert!(db.notes_near(crate::platform::i8051::XDATA, 0x12, 0x1000).is_empty());
     }
 
     #[test]
@@ -871,7 +871,7 @@ mod tests {
         db.global
             .insert(NotePath::parse("project.vt420").unwrap(), id.clone());
         db.address
-            .entry(AddressSpace::Code)
+            .entry(crate::platform::i8051::CODE)
             .or_default()
             .insert(AddressRange::from(0..4), id.clone());
 
@@ -882,7 +882,7 @@ mod tests {
                 .id,
             id
         );
-        assert_eq!(db.get_notes_inside(AddressSpace::Code, 0..4).len(), 1);
+        assert_eq!(db.get_notes_inside(crate::platform::i8051::CODE, 0..4).len(), 1);
 
         db.clear(&id);
         assert!(db.notes.is_empty());
@@ -891,7 +891,7 @@ mod tests {
                 .is_none()
         );
         assert!(
-            db.get_notes_overlapping(AddressSpace::Code, 0..4)
+            db.get_notes_overlapping(crate::platform::i8051::CODE, 0..4)
                 .is_empty()
         );
     }

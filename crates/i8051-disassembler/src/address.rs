@@ -1,7 +1,6 @@
 use std::marker::PhantomData;
 use std::ops::{Bound, Deref, Range, RangeBounds};
 
-use i8051::{ControlFlow, Instruction, Mnemonic, Operand};
 use rangemap::RangeSet;
 use serde::de::value::SeqAccessDeserializer;
 use serde::de::{Error as _, SeqAccess, Visitor};
@@ -196,7 +195,7 @@ impl<'de> Deserialize<'de> for SpaceAddressSet {
 
 fn decode_space<'de, D: Deserializer<'de>>(name: &str) -> Result<AddressSpace, D::Error> {
     AddressSpace::from_dsl_name(name)
-        .ok_or_else(|| D::Error::custom(format!("unknown address space {name}")))
+        .ok_or_else(|| D::Error::custom(format!("address space name too long: {name:?}")))
 }
 
 /// Deserialize the tuple carried inside an address newtype token, tolerating
@@ -257,56 +256,80 @@ impl<T: RangeBounds<AddressValue>> From<T> for AddressRange {
     }
 }
 
-/// Explicit emission order for sdas area headers.
-pub const AREA_ORDER: [AddressSpace; 5] = [
-    AddressSpace::Code,
-    AddressSpace::Idata,
-    AddressSpace::Sfr,
-    AddressSpace::Bit,
-    AddressSpace::Xdata,
-];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum AddressSpace {
-    Code,
-    Idata,
-    Sfr,
-    Bit,
-    Xdata,
+/// A named address space. A processor driver declares which spaces exist (see
+/// [`Platform::regions`](crate::platform::Platform::regions)); a space is just
+/// its name, so a caller can introduce its own without touching this crate.
+///
+/// The name is stored inline (up to [`CAP`](Self::CAP) bytes), keeping the type
+/// `Copy` and cheap as a map key. The empty name is the default space.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AddressSpace {
+    /// NUL-padded ASCII; a leading NUL means the default space.
+    name: [u8; Self::CAP],
 }
 
 impl AddressSpace {
-    /// The DSL spelling of this space (`CODE`, `IDATA`, ...).
-    pub fn dsl_name(self) -> &'static str {
-        match self {
-            Self::Code => "CODE",
-            Self::Idata => "IDATA",
-            Self::Sfr => "SFR",
-            Self::Bit => "BIT",
-            Self::Xdata => "XDATA",
+    /// Maximum space-name length in bytes.
+    pub const CAP: usize = 16;
+
+    /// The default (unnamed) space.
+    pub const DEFAULT: Self = Self {
+        name: [0; Self::CAP],
+    };
+
+    /// Construct a space from its name. Panics if longer than [`CAP`](Self::CAP).
+    pub const fn new(name: &str) -> Self {
+        let bytes = name.as_bytes();
+        assert!(bytes.len() <= Self::CAP, "address space name too long");
+        let mut buf = [0u8; Self::CAP];
+        let mut i = 0;
+        while i < bytes.len() {
+            buf[i] = bytes[i];
+            i += 1;
         }
+        Self { name: buf }
     }
 
-    /// Parse a DSL space spelling, the inverse of [`dsl_name`](Self::dsl_name).
+    /// The space name (empty for the default space).
+    pub fn as_str(&self) -> &str {
+        let len = self.name.iter().position(|&b| b == 0).unwrap_or(Self::CAP);
+        std::str::from_utf8(&self.name[..len]).unwrap_or("")
+    }
+
+    /// Whether this is the default (unnamed) space.
+    pub fn is_default(&self) -> bool {
+        self.name[0] == 0
+    }
+
+    /// The DSL spelling of this space.
+    pub fn dsl_name(&self) -> &str {
+        self.as_str()
+    }
+
+    /// Parse a DSL space spelling. Any name up to [`CAP`](Self::CAP) bytes is
+    /// valid — regions are driver-defined, so there is no fixed vocabulary.
     pub fn from_dsl_name(name: &str) -> Option<Self> {
-        Some(match name {
-            "CODE" => Self::Code,
-            "IDATA" => Self::Idata,
-            "SFR" => Self::Sfr,
-            "BIT" => Self::Bit,
-            "XDATA" => Self::Xdata,
-            _ => return None,
-        })
+        (name.len() <= Self::CAP).then(|| Self::new(name))
     }
+}
 
-    pub fn area_header(self) -> &'static str {
-        match self {
-            Self::Code => ".area CODE (CODE,ABS)\n",
-            Self::Idata => ".area IDATA (IDATA,ABS)\n",
-            Self::Sfr => ".area SFR (SFR,ABS)\n",
-            Self::Bit => ".area BIT (BIT,ABS)\n",
-            Self::Xdata => ".area XDATA (XDATA,ABS)\n",
-        }
+impl std::fmt::Debug for AddressSpace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "AddressSpace({:?})", self.as_str())
+    }
+}
+
+impl Serialize for AddressSpace {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for AddressSpace {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        AddressSpace::from_dsl_name(&name)
+            .ok_or_else(|| D::Error::custom(format!("address space name too long: {name:?}")))
     }
 }
 
@@ -340,205 +363,12 @@ pub enum XrefType {
     Pointer,
 }
 
-pub fn branch_target_operand_index(insn: &Instruction) -> Option<usize> {
-    branch_target(insn)?;
-    match insn.mnemonic() {
-        Mnemonic::LJMP | Mnemonic::LCALL | Mnemonic::AJMP | Mnemonic::ACALL | Mnemonic::SJMP => {
-            Some(0)
-        }
-        _ => {
-            let decoded = insn.as_string();
-            let operand_count = decoded.split_once(' ').map_or(0, |(_, rest)| {
-                if rest.is_empty() {
-                    0
-                } else {
-                    rest.split(',').count()
-                }
-            });
-            if operand_count == 0 {
-                None
-            } else {
-                Some(operand_count - 1)
-            }
-        }
-    }
-}
-
-pub fn branch_target(insn: &Instruction) -> Option<u32> {
-    match insn.control_flow() {
-        ControlFlow::Jump { target } => Some(target),
-        ControlFlow::Call { target, .. } => Some(target),
-        ControlFlow::Choice { branch_target, .. } => Some(branch_target),
-        _ => None,
-    }
-}
-
-pub fn xrefs_from_instruction(instruction: &Instruction, source: PhysicalAddr) -> Vec<Xref> {
-    let mut xrefs = Vec::new();
-    let mut push = |space: AddressSpace, offset: u32, xref_type: XrefType| {
-        xrefs.push(Xref {
-            from: source,
-            to: PhysicalAddr { space, offset },
-            xref_type,
-        });
-    };
-
-    // Control-flow edges: the target is code, in the source's own space.
-    match instruction.control_flow() {
-        ControlFlow::Jump { target } => {
-            push(source.space, target, xref_type_for(instruction.mnemonic()));
-        }
-        ControlFlow::Call { target, .. } => push(source.space, target, XrefType::Call),
-        ControlFlow::Choice { branch_target, .. } => {
-            push(source.space, branch_target, XrefType::Jump);
-        }
-        _ => {}
-    }
-
-    // Data edges: direct byte/bit operands and DPTR address loads. Indirect
-    // operands (`@Ri`, `@DPTR`, `@A+DPTR`, `@A+PC`) and branch operands
-    // (`rel`/`addr`) have no static data target, so they are skipped here.
-    let dptr_load = is_dptr_load(instruction);
-    for (index, operand) in instruction.operands().as_slice().iter().enumerate() {
-        match operand {
-            Operand::Direct(addr) => {
-                if let Some(access) = memory_access(instruction.mnemonic(), index) {
-                    let space = if *addr >= 0x80 {
-                        AddressSpace::Sfr
-                    } else {
-                        AddressSpace::Idata
-                    };
-                    push(space, u32::from(*addr), access.kind());
-                }
-            }
-            Operand::Bit(addr) | Operand::BitNot(addr) => {
-                if let Some(access) = memory_access(instruction.mnemonic(), index) {
-                    push(AddressSpace::Bit, u32::from(*addr), access.kind());
-                }
-            }
-            Operand::Imm16(value) if dptr_load => {
-                push(AddressSpace::Xdata, u32::from(*value), XrefType::Pointer);
-            }
-            _ => {}
-        }
-    }
-
-    xrefs
-}
-
-/// Read/write role of a memory operand, from the ISA semantics.
-#[derive(Debug, Clone, Copy)]
-enum Access {
-    Read,
-    Write,
-    ReadWrite,
-}
-
-impl Access {
-    fn kind(self) -> XrefType {
-        match self {
-            Access::Read => XrefType::Read,
-            Access::Write => XrefType::Write,
-            Access::ReadWrite => XrefType::ReadWrite,
-        }
-    }
-}
-
-/// Access role of a `Direct`/`Bit` operand at `index` (0 = destination, 1 =
-/// source on the 8051). `None` for mnemonics that never address memory.
-/// Transcribed from the ISA bodies in `i8051::op`: `MOV direct,A` writes,
-/// `MOV A,direct` reads, `ANL direct,A` and `INC direct` read-modify-write.
-fn memory_access(mnemonic: Mnemonic, index: usize) -> Option<Access> {
-    use Mnemonic::*;
-    Some(match mnemonic {
-        MOV => {
-            if index == 0 {
-                Access::Write
-            } else {
-                Access::Read
-            }
-        }
-        ANL | ORL | XRL => {
-            if index == 0 {
-                Access::ReadWrite
-            } else {
-                Access::Read
-            }
-        }
-        CJNE | ADD | ADDC | SUBB | PUSH | JB | JNB => Access::Read,
-        POP | CLR | SETB => Access::Write,
-        INC | DEC | CPL | DJNZ | XCH | JBC => Access::ReadWrite,
-        _ => return None,
-    })
-}
-
-fn is_dptr_load(instruction: &Instruction) -> bool {
-    instruction.mnemonic() == Mnemonic::MOV
-        && matches!(
-            instruction.operands().as_slice(),
-            [Operand::Dptr, Operand::Imm16(_)]
-        )
-}
-
-pub fn xrefs_to_target(
-    instruction: &Instruction,
-    source: PhysicalAddr,
-    target: &PhysicalAddr,
-) -> Vec<Xref> {
-    xrefs_from_instruction(instruction, source)
-        .into_iter()
-        .filter(|xref| xref.to == *target)
-        .collect()
-}
-
-fn xref_type_for(opcode: Mnemonic) -> XrefType {
-    match opcode {
-        Mnemonic::LCALL | Mnemonic::ACALL => XrefType::Call,
-        _ => XrefType::Jump,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn data_xrefs_classify_direction_and_space() {
-        let src = PhysicalAddr {
-            space: AddressSpace::Code,
-            offset: 0,
-        };
-        let edges =
-            |bytes: &[u8]| xrefs_from_instruction(&Instruction::decode_from_bytes(0, bytes), src);
-        let edge = |space, offset, xref_type| Xref {
-            from: src,
-            to: PhysicalAddr { space, offset },
-            xref_type,
-        };
-        use AddressSpace::{Bit, Code, Idata, Sfr, Xdata};
-        use XrefType::{Jump, Pointer, Read, ReadWrite, Write};
-
-        // MOV A,P1 (E5 90) reads SFR 0x90. MOV P1,A (F5 90) writes it.
-        assert_eq!(edges(&[0xE5, 0x90]), vec![edge(Sfr, 0x90, Read)]);
-        assert_eq!(edges(&[0xF5, 0x90]), vec![edge(Sfr, 0x90, Write)]);
-        // Low direct addresses land in IDATA. INC direct is read-modify-write.
-        assert_eq!(edges(&[0x05, 0x30]), vec![edge(Idata, 0x30, ReadWrite)]);
-        // MOV DPTR,#0x1234 materializes an address, not a dereference.
-        assert_eq!(
-            edges(&[0x90, 0x12, 0x34]),
-            vec![edge(Xdata, 0x1234, Pointer)]
-        );
-        // MOV 0x30,0x40 (85 src dst): a write to the dest, a read of the source.
-        assert_eq!(
-            edges(&[0x85, 0x40, 0x30]),
-            vec![edge(Idata, 0x30, Write), edge(Idata, 0x40, Read)]
-        );
-        // JB 0x20,rel (20 20 05) is a branch AND a bit read.
-        assert_eq!(
-            edges(&[0x20, 0x20, 0x05]),
-            vec![edge(Code, 8, Jump), edge(Bit, 0x20, Read)]
-        );
-    }
+    const CODE: AddressSpace = AddressSpace::new("CODE");
+    const XDATA: AddressSpace = AddressSpace::new("XDATA");
 
     // The `$dsl::address` token is advisory: a non-DSL serializer ignores the
     // newtype name and (de)serializes the inner `(space, offset)` tuple. So the
@@ -546,7 +376,7 @@ mod tests {
     #[test]
     fn space_address_value_json_round_trip() {
         let addr = SpaceAddressValue {
-            space: AddressSpace::Xdata,
+            space: XDATA,
             offset: 0x1234,
         };
         let json = serde_json::to_string(&addr).unwrap();
@@ -560,7 +390,7 @@ mod tests {
     #[test]
     fn space_address_range_json_round_trip() {
         let range = SpaceAddressRange {
-            space: AddressSpace::Code,
+            space: CODE,
             range: AddressRange::new(0x10, 0x20),
         };
         let json = serde_json::to_string(&range).unwrap();
@@ -572,33 +402,40 @@ mod tests {
     }
 
     #[test]
-    fn unknown_space_is_rejected() {
-        let err = serde_json::from_str::<SpaceAddressValue>(r#"["NOPE",0]"#).unwrap_err();
-        assert!(err.to_string().contains("unknown address space"));
+    fn space_names_are_free_form() {
+        // Regions are driver-defined, so any name up to `CAP` bytes is a valid
+        // space and round-trips verbatim.
+        let addr: SpaceAddressValue = serde_json::from_str(r#"["MYSPACE",0]"#).unwrap();
+        assert_eq!(addr.space.dsl_name(), "MYSPACE");
+        assert_eq!(serde_json::to_string(&addr).unwrap(), r#"["MYSPACE",0]"#);
+
+        // A name longer than `CAP` bytes is rejected.
+        let long = "X".repeat(AddressSpace::CAP + 1);
+        let err = serde_json::from_str::<SpaceAddressValue>(&format!(r#"["{long}",0]"#)).unwrap_err();
+        assert!(err.to_string().contains("too long"), "{err}");
     }
 
     #[test]
     fn ergonomic_from_conversions() {
         // `SpaceAddressRange` from a half-open std range (end is exclusive).
-        let r: SpaceAddressRange = (AddressSpace::Code, 0x10..0x20).into();
-        assert_eq!(r.space, AddressSpace::Code);
+        let r: SpaceAddressRange = (CODE, 0x10..0x20).into();
+        assert_eq!(r.space, CODE);
         assert_eq!(r.range, AddressRange::new(0x10, 0x20));
 
         // `SpaceAddressSet` from a singleton, a std range, and an `AddressRange`.
-        let single: SpaceAddressSet = (AddressSpace::Code, 0x10).into();
+        let single: SpaceAddressSet = (CODE, 0x10).into();
         assert!(single.contains(0x10) && !single.contains(0x11));
 
-        let range: SpaceAddressSet = (AddressSpace::Code, 0x10..0x13).into();
+        let range: SpaceAddressSet = (CODE, 0x10..0x13).into();
         assert!(range.contains(0x10) && range.contains(0x12) && !range.contains(0x13));
 
-        let from_addr_range: SpaceAddressSet =
-            (AddressSpace::Code, AddressRange::new(0x20, 0x22)).into();
+        let from_addr_range: SpaceAddressSet = (CODE, AddressRange::new(0x20, 0x22)).into();
         assert!(from_addr_range.contains(0x21) && !from_addr_range.contains(0x22));
     }
 
     #[test]
     fn space_address_set_optimal_and_round_trips() {
-        let mut set = SpaceAddressSet::new(AddressSpace::Code);
+        let mut set = SpaceAddressSet::new(CODE);
         for addr in [0x10, 0x11, 0x12, 0x30] {
             set.insert_address(addr);
         }

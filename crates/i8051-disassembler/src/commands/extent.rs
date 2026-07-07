@@ -3,8 +3,6 @@ use crate::db::{DataType, Db, Equivalent, Error};
 
 use super::{Apply, ClearEquivalents, Command, Environment, boxed};
 
-#[cfg(test)]
-use crate::address::AddressSpace;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DisassembleRange {
@@ -98,7 +96,7 @@ serialize_test!(
     mark_data_recursive_datatype,
     "mark_data(data_type=DataType::Array(DataType::Byte, 0x10), range=CODE:0x20..0x30)",
     MarkData {
-        range: (AddressSpace::Code, 0x20..0x30).into(),
+        range: (crate::platform::i8051::CODE, 0x20..0x30).into(),
         data_type: DataType::Array(Box::new(DataType::Byte), 0x10),
     }
 );

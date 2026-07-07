@@ -80,7 +80,7 @@ pub fn from_dsl_many(input: &str) -> Result<Vec<Box<dyn Command>>, DslError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::address::{AddressRange, AddressSpace};
+    use crate::address::AddressRange;
     use crate::commands::{
         self, AutoDisassemble, ClearBytes, MapBytes, SetComment, SetFunction, SetLabel, SetNote,
     };
@@ -91,7 +91,7 @@ mod tests {
 
     #[test]
     fn round_trip_auto_disassemble() {
-        let command = commands::boxed(AutoDisassemble::new((AddressSpace::Code, 0x1234)));
+        let command = commands::boxed(AutoDisassemble::new((crate::platform::i8051::CODE, 0x1234)));
         let dsl = to_dsl(&*command);
         assert_eq!(dsl, "auto_disassemble(address=CODE:0x1234)");
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn round_trip_clear_bytes_range() {
-        let command = commands::boxed(ClearBytes::new((AddressSpace::Code, 0x10..0x20)));
+        let command = commands::boxed(ClearBytes::new((crate::platform::i8051::CODE, 0x10..0x20)));
         let dsl = to_dsl(&*command);
         assert_eq!(dsl, "clear_bytes(addresses=CODE:{0x10..0x20})");
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn round_trip_set_label() {
-        let command = commands::boxed(SetLabel::new((AddressSpace::Code, 0x100), "reset_vector"));
+        let command = commands::boxed(SetLabel::new((crate::platform::i8051::CODE, 0x100), "reset_vector"));
         let dsl = to_dsl(&*command);
         assert_eq!(dsl, "set_label(address=CODE:0x100, label=\"reset_vector\")");
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
@@ -116,7 +116,7 @@ mod tests {
     #[test]
     fn round_trip_multiline_string() {
         let command = commands::boxed(SetComment::new(
-            (AddressSpace::Code, 0x10),
+            (crate::platform::i8051::CODE, 0x10),
             "line one\nline two",
         ));
         let dsl = to_dsl(&*command);
@@ -126,7 +126,7 @@ mod tests {
 
     #[test]
     fn round_trip_raw_string_with_quotes() {
-        let command = commands::boxed(SetComment::new((AddressSpace::Code, 0x10), "say \"hello\""));
+        let command = commands::boxed(SetComment::new((crate::platform::i8051::CODE, 0x10), "say \"hello\""));
         let dsl = to_dsl(&*command);
         assert!(dsl.contains("r#\""));
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
@@ -135,10 +135,10 @@ mod tests {
     #[test]
     fn round_trip_set_function() {
         let command = commands::boxed(SetFunction::new(
-            (AddressSpace::Code, 0),
+            (crate::platform::i8051::CODE, 0),
             Function {
                 addr: crate::address::PhysicalAddr {
-                    space: AddressSpace::Code,
+                    space: crate::platform::i8051::CODE,
                     offset: 0,
                 },
                 name: "main".into(),
@@ -156,7 +156,7 @@ mod tests {
     fn round_trip_set_note_minimal() {
         let note = Note::new(None, "interesting spot");
         let command = commands::boxed(SetNote::new(
-            (AddressSpace::Code, AddressRange::new(0x100, 0x120)),
+            (crate::platform::i8051::CODE, AddressRange::new(0x100, 0x120)),
             note.clone(),
         ));
         let dsl = to_dsl(&*command);
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn round_trip_map_bytes() {
         let command = commands::boxed(MapBytes::new(
-            (AddressSpace::Code, 0),
+            (crate::platform::i8051::CODE, 0),
             "test.bin",
             0usize,
             16u32,
@@ -209,11 +209,11 @@ mod tests {
         use crate::address::{SpaceAddressRange, SpaceAddressValue};
 
         let addr: SpaceAddressValue = from_dsl_value("CODE:0x84").unwrap();
-        assert_eq!(addr.space, AddressSpace::Code);
+        assert_eq!(addr.space, crate::platform::i8051::CODE);
         assert_eq!(addr.offset, 0x84);
 
         let range: SpaceAddressRange = from_dsl_value("CODE:0x10..0x20").unwrap();
-        assert_eq!(range.space, AddressSpace::Code);
+        assert_eq!(range.space, crate::platform::i8051::CODE);
         assert_eq!(range.range, AddressRange::new(0x10, 0x20));
     }
 
