@@ -289,7 +289,7 @@ impl<'a> EquivalentAt<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpaceUsage {
     /// Bytes covered by a `Equivalent::Code` range.
     pub code: AddressValue,

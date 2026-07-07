@@ -1,9 +1,11 @@
+use serde::{Deserialize, Serialize};
+
 use crate::{address::AddressValue, db::DataType};
 
 pub mod data;
 pub mod sdas;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Line {
     Org {
         addr: AddressValue,

@@ -637,6 +637,16 @@ impl Region {
         self.functions.get(&(offset as AddressValue))
     }
 
+    /// Every label in this region, in ascending address order.
+    pub fn labels(&self) -> impl Iterator<Item = (AddressValue, &str)> {
+        self.labels.iter().map(|(&addr, name)| (addr, name.as_str()))
+    }
+
+    /// Every function in this region, in ascending address order.
+    pub fn functions(&self) -> impl Iterator<Item = (AddressValue, &Function)> {
+        self.functions.iter().map(|(&addr, func)| (addr, func))
+    }
+
     pub fn clear_function(&mut self, offset: AddressValue) {
         self.functions.remove(&(offset as AddressValue));
     }
