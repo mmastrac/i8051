@@ -1,0 +1,16 @@
+[package]
+name = "mos6502"
+description = "A decoder/disassembler for the MOS 6502 (NMOS) 8-bit CPU."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+categories.workspace = true
+keywords = ["6502", "mos", "nmos", "disassembler"]
+
+[dependencies]
+
+[dev-dependencies]
+pretty_assertions = "1.4"
+tempfile = "3.27"

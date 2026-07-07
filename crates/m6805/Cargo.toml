@@ -1,0 +1,16 @@
+[package]
+name = "m6805"
+description = "A decoder/disassembler for the Motorola 6805 (M68HC05) 8-bit MCU."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+categories.workspace = true
+keywords = ["6805", "68hc05", "motorola", "disassembler"]
+
+[dependencies]
+
+[dev-dependencies]
+pretty_assertions = "1.4"
+tempfile = "3.27"

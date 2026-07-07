@@ -15,3 +15,5 @@ categories = ["compilers", "embedded", "hardware-support", "emulators", "simulat
 i8051-proc-macro = { version = "0.24.0", path = "crates/i8051-proc-macro" }
 i8051            = { version = "0.24.0", path = "crates/i8051" }
 i8051-debug-tui  = { version = "0.24.0", path = "crates/i8051-debug-tui" }
+mos6502          = { version = "0.24.0", path = "crates/mos6502" }
+m6805            = { version = "0.24.0", path = "crates/m6805" }
