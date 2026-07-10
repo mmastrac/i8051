@@ -59,6 +59,13 @@ pub fn from_dsl_value<T: serde::de::DeserializeOwned>(input: &str) -> Result<T, 
     de::from_value(parser::parse_value(input)?)
 }
 
+/// Parse a single DSL value into its [`Value`] AST, for callers assembling
+/// command kwargs from a structured source (e.g. an MCP tool's JSON arguments)
+/// rather than deserializing into a concrete type.
+pub fn parse_value(input: &str) -> Result<Value, DslError> {
+    parser::parse_value(input)
+}
+
 /// Render many commands, one per line.
 pub fn to_dsl_many(commands: &[Box<dyn Command>]) -> String {
     commands

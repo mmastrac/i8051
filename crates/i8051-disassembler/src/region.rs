@@ -55,6 +55,37 @@ pub struct Block {
     pub successors: Vec<AddressValue>,
 }
 
+/// A referenced control-flow target that is not a clean instruction start.
+/// Either the decode has not reached it (`misaligned` false), or it lands
+/// inside an already-decoded instruction (`misaligned` true, a decode error
+/// upstream).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ControlTarget {
+    pub target: AddressValue,
+    pub kind: XrefType,
+    pub from: AddressValue,
+    pub misaligned: bool,
+}
+
+/// A decoded run whose successor is not code: execution leaves known code.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FlowLeak {
+    pub from: AddressValue,
+    pub to: AddressValue,
+    pub kind: LeakKind,
+}
+
+/// Where a [`FlowLeak`] lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LeakKind {
+    /// Into mapped bytes carrying no equivalent yet.
+    IntoUndefined,
+    /// Into bytes typed as data.
+    IntoData,
+    /// Past the end of mapped bytes.
+    OffEnd,
+}
+
 pub struct Region {
     space: AddressSpace,
     /// The driver that decodes this region's bytes. `None` until a CPU is set,
@@ -737,15 +768,139 @@ impl Region {
             }
         }
 
-        let mapped: AddressValue = self
-            .byte_ranges
-            .iter()
-            .map(|(&start, range)| range.len().saturating_sub(start))
-            .sum();
+        let mapped: AddressValue = self.byte_ranges.values().map(ByteRange::len).sum();
 
         usage.undefined = mapped.saturating_sub(usage.code).saturating_sub(usage.data);
 
         usage
+    }
+
+    /// Byte counts for the completeness assessment, deriving `undefined` from
+    /// the actual undefined spans (so it is correct regardless of where mapped
+    /// ranges are based).
+    pub(crate) fn coverage(&self) -> SpaceUsage {
+        let mut usage = SpaceUsage::default();
+        for (&start, range) in &self.equivalents {
+            let span = range.end.saturating_sub(start);
+            match &range.equivalent {
+                Equivalent::Code => usage.code += span,
+                Equivalent::Data(_, _) => usage.data += span,
+                Equivalent::Unknown(_) => {}
+            }
+        }
+        for (&start, range) in self.weak.code() {
+            if !self.equivalents.contains_key(&start) {
+                usage.code += range.end.saturating_sub(start);
+            }
+        }
+        usage.undefined = self.undefined_spans().iter().map(|(a, b)| b - a).sum();
+        usage
+    }
+
+    /// Half-open `[start, end)` spans of mapped bytes carrying no equivalent
+    /// (rendered raw). Adjacent spans across byte-range boundaries coalesce.
+    pub(crate) fn undefined_spans(&self) -> Vec<(AddressValue, AddressValue)> {
+        let mut spans: Vec<(AddressValue, AddressValue)> = Vec::new();
+        for (&start, byte_range) in &self.byte_ranges {
+            let range_end = start.saturating_add(byte_range.len());
+            let mut addr = start;
+            while addr < range_end {
+                match self.get_equivalent(addr) {
+                    EquivalentAt::Undefined(run) => {
+                        let end = run.end.min(range_end);
+                        match spans.last_mut() {
+                            Some(last) if last.1 == addr => last.1 = end,
+                            _ => spans.push((addr, end)),
+                        }
+                        addr = end.max(addr.saturating_add(1));
+                    }
+                    EquivalentAt::Defined { range, .. } => {
+                        addr = range.end.min(range_end).max(addr.saturating_add(1));
+                    }
+                }
+            }
+        }
+        spans
+    }
+
+    /// Control-flow targets (calls/jumps) that are not clean instruction starts.
+    pub(crate) fn unresolved_control_targets(&self) -> Vec<ControlTarget> {
+        let index = self.xref_index();
+        let mut out = Vec::new();
+        for (target, edges) in index.targets() {
+            if target.space != self.space || self.is_code_start(target.offset) {
+                continue;
+            }
+            let edge = edges
+                .iter()
+                .find(|e| e.kind == XrefType::Call)
+                .or_else(|| edges.iter().find(|e| e.kind == XrefType::Jump));
+            let Some(edge) = edge else {
+                continue;
+            };
+            let misaligned =
+                matches!(self.get_equivalent_kind(target.offset), Some(EquivalentKind::Code));
+            out.push(ControlTarget {
+                target: target.offset,
+                kind: edge.kind,
+                from: edge.from,
+                misaligned,
+            });
+        }
+        out
+    }
+
+    /// Decoded runs whose successor is not code (execution leaves known code).
+    pub(crate) fn flow_leaks(&self) -> Vec<FlowLeak> {
+        let mut leaks = Vec::new();
+        for offset in self.code_offsets() {
+            let Some(insn) = self.decode_at(offset) else {
+                continue;
+            };
+            let successor = match insn.control_flow() {
+                ControlFlow::Continue { next } => Some(next),
+                ControlFlow::Choice { fall_through, .. } => Some(fall_through),
+                ControlFlow::Call { return_pc, .. } => Some(return_pc),
+                ControlFlow::Jump { .. } | ControlFlow::Diverge => None,
+            };
+            let Some(to) = successor else {
+                continue;
+            };
+            if self.is_code_start(to) {
+                continue;
+            }
+            let kind = if self.read_byte(to).is_none() {
+                LeakKind::OffEnd
+            } else if matches!(self.get_equivalent_kind(to), Some(EquivalentKind::Data)) {
+                LeakKind::IntoData
+            } else {
+                LeakKind::IntoUndefined
+            };
+            leaks.push(FlowLeak { from: offset, to, kind });
+        }
+        leaks
+    }
+
+    /// Referenced code targets in this region carrying only an auto-generated
+    /// name (`sub_`/`loc_`), the provisional labels an assessment flags for
+    /// naming. Mirrors [`collect_refs`](Region::collect_refs).
+    pub(crate) fn provisional_labels(&self) -> Vec<(AddressValue, LabelKind)> {
+        let index = self.xref_index();
+        let mut out = Vec::new();
+        for (target, edges) in index.targets() {
+            if target.space != self.space || self.get_label(target.offset).is_some() {
+                continue;
+            }
+            let kind = if edges.iter().any(|e| e.kind == XrefType::Call) {
+                LabelKind::Sub
+            } else if edges.iter().any(|e| e.kind == XrefType::Jump) {
+                LabelKind::Loc
+            } else {
+                continue;
+            };
+            out.push((target.offset, kind));
+        }
+        out
     }
 
     pub(crate) fn render(
@@ -1486,5 +1641,20 @@ mod tests {
                 undefined: 2,
             }
         );
+    }
+
+    #[test]
+    fn space_usage_counts_bytes_mapped_at_a_nonzero_base() {
+        // A byte range based at a nonzero offset must still count in full.
+        let mut region = Region::new(CODE, Some(platform()));
+        region.set_bytes("test.bin", 0, 0x1000, &[0xAA, 0xBB, 0xCC, 0xDD]);
+
+        let usage = region.space_usage();
+        assert_eq!(usage.undefined, 4);
+        assert_eq!(usage.code, 0);
+        assert_eq!(usage.data, 0);
+        // The completeness `coverage()` derives `undefined` from the spans and
+        // must agree.
+        assert_eq!(region.coverage().undefined, 4);
     }
 }
