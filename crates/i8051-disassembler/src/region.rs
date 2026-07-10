@@ -566,8 +566,12 @@ impl Region {
         while addr < end {
             let insn = self.decode_at(addr).ok_or(Error::InvalidEquivalent)?;
             let insn_end = addr.saturating_add(insn.len() as AddressValue);
-            if !self.snapshot_equivalents(addr, insn_end - addr).is_empty() {
-                return Err(Error::Overlap(addr));
+            let overlaps = self.snapshot_equivalents(addr, insn_end - addr);
+            if let Some((at, range)) = overlaps.first() {
+                return Err(Error::Overlap {
+                    at: (self.space, *at).into(),
+                    existing: range.equivalent.kind(),
+                });
             }
             spans.push((addr, insn_end));
             addr = insn_end;
@@ -1248,7 +1252,10 @@ impl Region {
         if let Some((&other_start, other)) = self.equivalents.range(..end).next_back()
             && other.end > offset
         {
-            return Err(Error::Overlap(other_start));
+            return Err(Error::Overlap {
+                at: (self.space, other_start).into(),
+                existing: other.equivalent.kind(),
+            });
         }
         Ok(())
     }
@@ -1430,7 +1437,21 @@ fn ranges_overlap_inclusive(
 mod tests {
     use super::*;
     use crate::platform::i8051::{CODE, platform};
-    use crate::db::{DataType, OperandOverride, SpaceUsage};
+    use crate::db::{DataType, Equivalent, EquivalentKind, OperandOverride, SpaceUsage};
+
+    #[test]
+    fn overlap_error_names_space_and_kind() {
+        let mut region = Region::new(CODE, Some(platform()));
+        region.set_bytes("test.bin", 0, 0, &[0x00, 0x00, 0x22]);
+        region.set_equivalent(0, Equivalent::Code).unwrap();
+        let err = region
+            .disassemble_linear(0, 2)
+            .expect_err("second instruction overlaps code at 0");
+        assert_eq!(
+            err.to_string(),
+            "range overlaps existing code at CODE:0x0"
+        );
+    }
 
     #[test]
     fn overlapping_equivalents_are_rejected() {
@@ -1449,7 +1470,10 @@ mod tests {
         region.set_equivalent(6, Equivalent::Code).unwrap();
         assert!(matches!(
             region.set_equivalent(4, Equivalent::Data(DataType::Byte, 3)),
-            Err(Error::Overlap(6))
+            Err(Error::Overlap {
+                at,
+                existing: EquivalentKind::Code,
+            }) if at == (CODE, 6).into()
         ));
     }
 

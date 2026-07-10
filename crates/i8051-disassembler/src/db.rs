@@ -3,7 +3,7 @@ use std::range::Range;
 
 use serde::{Deserialize, Serialize};
 
-use crate::address::{AddressSpace, AddressValue, PhysicalAddr, Xref};
+use crate::address::{AddressSpace, AddressValue, PhysicalAddr, SpaceAddressValue, Xref};
 use crate::platform::{Platform, PlatformRef};
 use crate::commands::{Command, Environment, SetCpu, SetNote, boxed};
 use crate::labels::{ImplicitLabels, LabelCollector};
@@ -369,11 +369,41 @@ pub enum Error {
     NoCpu,
     /// `set_cpu` named a CPU with no built-in driver.
     UnknownCpu(String),
-    Overlap(AddressValue),
+    Overlap {
+        at: SpaceAddressValue,
+        existing: EquivalentKind,
+    },
     InvalidAddress(AddressValue),
     InvalidEquivalent,
     NotUndefined(AddressValue),
     Io(std::io::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Overlap { at, existing } => {
+                let kind = match existing {
+                    EquivalentKind::Code => "code",
+                    EquivalentKind::Data => "data",
+                    EquivalentKind::Unknown => "barrier",
+                };
+                write!(
+                    f,
+                    "range overlaps existing {kind} at {}:0x{:x}",
+                    at.space.dsl_name(),
+                    at.offset
+                )
+            }
+            Self::NotUndefined(offset) => {
+                write!(f, "byte at offset 0x{offset:x} is not undefined")
+            }
+            Self::InvalidAddress(offset) => {
+                write!(f, "invalid address at offset 0x{offset:x}")
+            }
+            other => write!(f, "{other:?}"),
+        }
+    }
 }
 
 #[cfg(test)]
