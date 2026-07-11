@@ -86,6 +86,37 @@ pub(crate) enum LeakKind {
     OffEnd,
 }
 
+/// One instruction from a scratch decode (see [`Region::scratch_decode`]).
+#[derive(Debug, Clone)]
+pub struct ScratchInsn {
+    pub addr: AddressValue,
+    pub text: String,
+    pub bytes: Vec<u8>,
+    /// The branch/call target, if the instruction has one.
+    pub target: Option<AddressValue>,
+    /// Whether `target` points at a mapped byte. A target beyond the loaded
+    /// image is strong evidence the bytes are not really code.
+    pub target_mapped: bool,
+    /// Whether `target` lands inside an existing instruction rather than at its
+    /// start. Also strong evidence the bytes are not really code.
+    pub target_misaligned: bool,
+}
+
+/// The result of decoding bytes as code without committing them: a look before
+/// leaping to a real disassemble.
+#[derive(Debug, Clone, Default)]
+pub struct ScratchDecode {
+    pub lines: Vec<ScratchInsn>,
+    /// Flow ended at a return or unconditional jump (a clean block end).
+    pub terminates: bool,
+    /// Decoding stopped early because an opcode ran past the mapped bytes.
+    pub ran_out: bool,
+    /// How many decoded targets point outside the loaded image.
+    pub out_of_range_targets: usize,
+    /// How many decoded targets land inside an existing instruction.
+    pub misaligned_targets: usize,
+}
+
 pub struct Region {
     space: AddressSpace,
     /// The driver that decodes this region's bytes. `None` until a CPU is set,
@@ -390,19 +421,19 @@ impl Region {
         range: impl RangeBounds<AddressValue>,
     ) -> impl Iterator<Item = Range<AddressValue>> {
         let range = AddressRange::from(range);
+        let end_inclusive = range.end.saturating_sub(1);
         self.byte_ranges
             .iter()
             .filter_map(move |(addr, byte_range)| match byte_range {
                 ByteRange::Mapped(_, _, data) => {
                     if ranges_overlap_inclusive(
                         range.start,
-                        range.end,
+                        end_inclusive,
                         *addr,
                         *addr + data.len() as AddressValue,
                     ) {
                         let data_start = range.start.saturating_sub(*addr) as usize;
-                        let data_end = range
-                            .end
+                        let data_end = end_inclusive
                             .saturating_sub(*addr)
                             .min((data.len() - 1) as AddressValue)
                             as usize;
@@ -885,6 +916,60 @@ impl Region {
         leaks
     }
 
+    /// Decode bytes as code from `start` without committing anything, following
+    /// fall-through up to `max_lines` instructions and stopping at the first
+    /// return or unconditional jump. Lets a caller judge whether a run is code
+    /// before disassembling it (out-of-range targets flag likely garbage).
+    pub(crate) fn scratch_decode(&self, start: AddressValue, max_lines: usize) -> ScratchDecode {
+        let mut result = ScratchDecode::default();
+        let mut addr = start;
+        for _ in 0..max_lines {
+            let Some(insn) = self.decode_at(addr) else {
+                result.ran_out = true;
+                break;
+            };
+            let target = branch_target(&insn);
+            let target_mapped = target.is_none_or(|t| self.read_byte(t).is_some());
+            // Misaligned only makes sense for a mapped target already decoded as
+            // code.
+            let target_misaligned = target.is_some_and(|t| {
+                matches!(self.get_equivalent_kind(t), Some(EquivalentKind::Code))
+                    && !self.is_code_start(t)
+            });
+            if !target_mapped {
+                result.out_of_range_targets += 1;
+            }
+            if target_misaligned {
+                result.misaligned_targets += 1;
+            }
+            result.lines.push(ScratchInsn {
+                addr,
+                text: insn.as_string().to_string(),
+                bytes: insn.bytes().to_vec(),
+                target,
+                target_mapped,
+                target_misaligned,
+            });
+            addr = match insn.control_flow() {
+                ControlFlow::Continue { next } => next,
+                ControlFlow::Choice { fall_through, .. } => fall_through,
+                ControlFlow::Call { return_pc, .. } => return_pc,
+                ControlFlow::Jump { .. } | ControlFlow::Diverge => {
+                    result.terminates = true;
+                    break;
+                }
+            };
+        }
+        result
+    }
+
+    /// The rendered mnemonic of the instruction at `offset`, if one decodes
+    /// there. Used to give a caller enough context to name a routine.
+    pub(crate) fn instruction_text(&self, offset: AddressValue) -> Option<String> {
+        self.decode_at(offset)
+            .map(|insn| insn.as_string().trim().to_string())
+    }
+
     /// Referenced code targets in this region carrying only an auto-generated
     /// name (`sub_`/`loc_`), the provisional labels an assessment flags for
     /// naming. Mirrors [`collect_refs`](Region::collect_refs).
@@ -904,6 +989,34 @@ impl Region {
             };
             out.push((target.offset, kind));
         }
+        out
+    }
+
+    /// Named routines in this region: code entries that carry a real
+    /// (non-provisional) label and are either called or marked as functions.
+    pub(crate) fn named_routines(&self) -> Vec<(AddressValue, String)> {
+        let index = self.xref_index();
+        let mut out: Vec<(AddressValue, String)> = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for (target, edges) in index.targets() {
+            if target.space != self.space {
+                continue;
+            }
+            let Some(name) = self.get_label(target.offset) else {
+                continue;
+            };
+            if edges.iter().any(|e| e.kind == XrefType::Call) && seen.insert(target.offset) {
+                out.push((target.offset, name.to_string()));
+            }
+        }
+        for (offset, _func) in self.functions() {
+            if let Some(name) = self.get_label(offset)
+                && seen.insert(offset)
+            {
+                out.push((offset, name.to_string()));
+            }
+        }
+        out.sort_by_key(|(offset, _)| *offset);
         out
     }
 

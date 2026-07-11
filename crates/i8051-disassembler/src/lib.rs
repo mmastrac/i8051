@@ -1,8 +1,6 @@
 pub mod address;
-#[cfg(feature = "analysis")]
 pub mod analysis;
 pub mod commands;
-pub mod completeness;
 pub mod db;
 pub mod diff;
 pub mod labels;
@@ -12,6 +10,7 @@ pub mod platform;
 pub mod region;
 pub mod render;
 pub mod store;
+mod strings;
 
 #[cfg(test)]
 mod tests {

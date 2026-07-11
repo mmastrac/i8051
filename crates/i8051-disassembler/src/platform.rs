@@ -213,6 +213,47 @@ pub fn by_name(name: &str) -> Option<PlatformRef> {
     }
 }
 
+/// Built-in CPU names closest to `query`, substring matches first, then by
+/// Levenshtein distance.
+pub fn suggest_names(query: &str) -> Vec<String> {
+    let q = query.to_ascii_lowercase();
+    let mut ranked: Vec<(bool, usize, &str)> = BUILTIN_PLATFORMS
+        .iter()
+        .map(|&name| {
+            let n = name.to_ascii_lowercase();
+            let substring = n.contains(&q) || q.contains(&n);
+            (substring, crate::strings::levenshtein(&q, &n), name)
+        })
+        .collect();
+    ranked.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(b.2))
+    });
+    ranked
+        .into_iter()
+        .map(|(_, _, name)| name.to_string())
+        .collect()
+}
+
+#[cfg(test)]
+mod suggest_tests {
+    use super::*;
+
+    #[test]
+    fn suggest_names_prefers_substring_match() {
+        assert_eq!(suggest_names("8051")[0], "i8051");
+        assert_eq!(suggest_names("6502")[0], "mos6502");
+    }
+
+    #[test]
+    fn suggest_names_orders_by_levenshtein() {
+        let ranked = suggest_names("z80");
+        assert_eq!(ranked.len(), 3);
+        assert!(ranked.contains(&"i8051".to_string()));
+    }
+}
+
 /// Shared helpers for the per-driver test modules.
 #[cfg(test)]
 pub(crate) mod test_util {

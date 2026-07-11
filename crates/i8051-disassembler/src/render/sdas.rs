@@ -26,6 +26,14 @@ impl SdasWriter {
         line_to_sdas(self, line);
     }
 
+    /// Format one listing line as sdas text, without the register preamble that
+    /// [`Self::into_string`] adds for a full listing.
+    pub fn format_line(line: &Line) -> String {
+        let mut writer = Self::default();
+        writer.write_line(line);
+        writer.code
+    }
+
     pub fn use_named_register(&mut self, register: u8) {
         self.used_registers[register as usize] = true;
     }

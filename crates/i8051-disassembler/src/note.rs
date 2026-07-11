@@ -799,6 +799,18 @@ mod tests {
     }
 
     #[test]
+    fn exact_range_overlap_query_finds_a_single_byte_note() {
+        let mut db = NoteDb::default();
+        let note = db.create("one byte");
+        db.set_address(crate::platform::i8051::CODE, AddressRange::from(4..5), note.clone());
+
+        assert_eq!(db.get_notes_overlapping(crate::platform::i8051::CODE, 4..5).len(), 1);
+        assert_eq!(db.get_notes_inside(crate::platform::i8051::CODE, 4..5).len(), 1);
+        // The adjacent byte must not match: the range is half-open `[4, 5)`.
+        assert!(db.get_notes_overlapping(crate::platform::i8051::CODE, 5..6).is_empty());
+    }
+
+    #[test]
     fn two_notes_at_same_address_are_both_retrievable() {
         let mut db = NoteDb::default();
         let range = AddressRange::from(0..4);

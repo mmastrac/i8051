@@ -239,25 +239,22 @@ impl AddressRange {
 
 impl<T: RangeBounds<AddressValue>> From<T> for AddressRange {
     fn from(range: T) -> Self {
-        let range_start_inclusive = match range.start_bound() {
+        let start = match range.start_bound() {
             Bound::Included(addr) => *addr,
             Bound::Excluded(addr) => addr.saturating_add(1),
             Bound::Unbounded => 0,
         };
-        let range_end_inclusive = match range.end_bound() {
-            Bound::Included(addr) => *addr,
-            Bound::Excluded(addr) => addr.saturating_sub(1),
+        let end = match range.end_bound() {
+            Bound::Included(addr) => addr.saturating_add(1),
+            Bound::Excluded(addr) => *addr,
             Bound::Unbounded => AddressValue::MAX,
         };
-        Self {
-            start: range_start_inclusive,
-            end: range_end_inclusive,
-        }
+        Self { start, end }
     }
 }
 
 /// A named address space. A processor driver declares which spaces exist (see
-/// [`Platform::regions`](crate::platform::Platform::regions)); a space is just
+/// [`Platform::regions`](crate::platform::Platform::regions)). A space is just
 /// its name, so a caller can introduce its own without touching this crate.
 ///
 /// The name is stored inline (up to [`CAP`](Self::CAP) bytes), keeping the type

@@ -21,8 +21,17 @@ impl Apply for SetCpu {
         db: &mut Db,
         _env: Option<&dyn Environment>,
     ) -> Result<Vec<Box<dyn Command>>, Error> {
-        let driver =
-            platform::by_name(&self.name).ok_or_else(|| Error::UnknownCpu(self.name.clone()))?;
+        let Some(driver) = platform::by_name(&self.name) else {
+            if let Some(current) = db.platform() {
+                return Err(Error::CpuAlreadySet {
+                    current: current.name().to_string(),
+                });
+            }
+            return Err(Error::UnknownCpu {
+                name: self.name.clone(),
+                suggestions: platform::suggest_names(&self.name),
+            });
+        };
         let prev = db.set_platform(Some(driver));
         Ok(vec![restore(prev)])
     }
@@ -100,11 +109,30 @@ mod tests {
     }
 
     #[test]
-    fn unknown_cpu_is_rejected() {
+    fn unknown_cpu_is_rejected_with_suggestions() {
         let mut db = Db::new();
+        let err = db.apply(boxed(SetCpu::new("z80")), None).unwrap_err();
+        match err {
+            Error::UnknownCpu { name, suggestions } => {
+                assert_eq!(name, "z80");
+                assert_eq!(suggestions[0], "i8051");
+            }
+            other => panic!("expected UnknownCpu, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_cpu_substring_match_ranks_first() {
+        let suggestions = platform::suggest_names("8051");
+        assert_eq!(suggestions[0], "i8051");
+    }
+
+    #[test]
+    fn unknown_cpu_when_already_set_reports_cpu_already_set() {
+        let mut db = Db::with_platform(i8051::platform());
         assert!(matches!(
             db.apply(boxed(SetCpu::new("z80")), None),
-            Err(Error::UnknownCpu(_))
+            Err(Error::CpuAlreadySet { current }) if current == "i8051"
         ));
     }
 }

@@ -11,7 +11,7 @@ pub use crate::note::{
     Note, NoteAddressIndex, NoteDb, NoteField, NoteGlobalIndex, NoteId, NotePath, Notes,
     ProximateNote,
 };
-pub use crate::region::{Block, ByteRange, Region};
+pub use crate::region::{Block, ByteRange, Region, ScratchDecode, ScratchInsn};
 use crate::render::Line;
 use crate::render::sdas::SdasWriter;
 
@@ -108,6 +108,14 @@ impl Db {
     pub fn basic_blocks(&self, space: AddressSpace, entry: AddressValue) -> Vec<Block> {
         self.region(space)
             .map(|region| region.basic_blocks(entry))
+            .unwrap_or_default()
+    }
+
+    /// Decode bytes as code from `start` without committing, for a caller to
+    /// judge whether a run is really code (see [`Region::scratch_decode`]).
+    pub fn peek(&self, space: AddressSpace, start: AddressValue, max_lines: usize) -> ScratchDecode {
+        self.region(space)
+            .map(|region| region.scratch_decode(start, max_lines))
             .unwrap_or_default()
     }
 
@@ -367,8 +375,13 @@ pub enum Error {
     NoEnvironment,
     /// A disassembly command ran with no CPU selected (`set_cpu` must run first).
     NoCpu,
+    /// `set_cpu` ran while a CPU was already selected.
+    CpuAlreadySet { current: String },
     /// `set_cpu` named a CPU with no built-in driver.
-    UnknownCpu(String),
+    UnknownCpu {
+        name: String,
+        suggestions: Vec<String>,
+    },
     Overlap {
         at: SpaceAddressValue,
         existing: EquivalentKind,
@@ -394,6 +407,19 @@ impl std::fmt::Display for Error {
                     at.space.dsl_name(),
                     at.offset
                 )
+            }
+            Self::CpuAlreadySet { current } => {
+                write!(
+                    f,
+                    "CPU already set to {current:?} (use clear_cpu() before selecting another)"
+                )
+            }
+            Self::UnknownCpu { name, suggestions } => {
+                write!(f, "unknown CPU {name:?}")?;
+                if !suggestions.is_empty() {
+                    write!(f, ", did you mean: {}", suggestions.join(", "))?;
+                }
+                Ok(())
             }
             Self::NotUndefined(offset) => {
                 write!(f, "byte at offset 0x{offset:x} is not undefined")
