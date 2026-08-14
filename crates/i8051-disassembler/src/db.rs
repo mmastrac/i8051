@@ -555,9 +555,17 @@ pub enum Error {
         name: String,
         suggestion: Option<String>,
     },
-    InvalidAddress(AddressValue),
+    /// This address is not valid for this operation.
+    InvalidAddress(SpaceAddressValue),
     InvalidEquivalent,
-    NotUndefined(AddressValue),
+    /// This range is already classified.
+    NotUndefined {
+        at: SpaceAddressValue,
+        existing: EquivalentKind,
+        start: AddressValue,
+        end: AddressValue,
+        requested_end: AddressValue,
+    },
     Io(std::io::Error),
 }
 
@@ -622,11 +630,56 @@ impl std::fmt::Display for Error {
                 }
                 Ok(())
             }
-            Self::NotUndefined(offset) => {
-                write!(f, "byte at offset 0x{offset:x} is not undefined")
+            Self::NotUndefined { at, existing, start, end, requested_end } => {
+                let kind = match existing {
+                    EquivalentKind::Code => "code",
+                    EquivalentKind::Data => "data",
+                    EquivalentKind::Unknown => "a barrier",
+                };
+                let space = at.space.dsl_name();
+                write!(
+                    f,
+                    "{space}:0x{:x} is already {kind}, covering {space}:0x{start:x}..0x{end:x}. \
+                     Marking only applies to undefined bytes, so clear what is there first: \
+                     clear_equivalents(addresses={space}:{{0x{start:x}..0x{end:x}}})",
+                    at.offset
+                )?;
+                let covering = end.saturating_sub(*start);
+                let asked = requested_end.saturating_sub(at.offset);
+                if covering > asked {
+                    write!(
+                        f,
+                        ". That clears all 0x{covering:x} byte(s), well past the 0x{asked:x} you \
+                         asked about, so restore the remainder straight after"
+                    )?;
+                    if at.offset > *start {
+                        write!(
+                            f,
+                            ": mark_data(range={space}:0x{start:x}..0x{:x}, \
+                             data_type=DataType::Byte)",
+                            at.offset
+                        )?;
+                    }
+                    if requested_end < end {
+                        write!(
+                            f,
+                            "{} mark_data(range={space}:0x{requested_end:x}..0x{end:x}, \
+                             data_type=DataType::Byte)",
+                            if at.offset > *start { " and" } else { ":" }
+                        )?;
+                    }
+                }
+                Ok(())
             }
-            Self::InvalidAddress(offset) => {
-                write!(f, "invalid address at offset 0x{offset:x}")
+            Self::InvalidAddress(at) => {
+                let space = at.space.dsl_name();
+                write!(
+                    f,
+                    "no byte is mapped at {space}:0x{:x}, so nothing there can be classified. \
+                     Map it first: `map_bytes` to bring bytes in from the image file, or \
+                     `set_constant_bytes` to fill the gap with a value and then classify again",
+                    at.offset
+                )
             }
             other => write!(f, "{other:?}"),
         }

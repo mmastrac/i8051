@@ -723,7 +723,21 @@ impl Region {
         equivalent: Equivalent,
     ) -> Result<&EquivalentRange, Error> {
         if self.has_equivalent(offset) {
-            return Err(Error::NotUndefined(offset));
+            let (start, end, existing) = match self.get_equivalent(offset) {
+                EquivalentAt::Defined { start, range } => (start, range.end, range.equivalent.kind()),
+                EquivalentAt::Undefined(range) => (range.start, range.end, EquivalentKind::Unknown),
+            };
+            let requested_end = self
+                .equivalent_span(offset, &equivalent)
+                .map(|span| offset.saturating_add(span))
+                .unwrap_or(offset.saturating_add(1));
+            return Err(Error::NotUndefined {
+                at: (self.space, offset).into(),
+                existing,
+                start,
+                end,
+                requested_end,
+            });
         }
 
         let span = self.equivalent_span(offset, &equivalent)?;
@@ -1781,7 +1795,7 @@ impl Region {
     ) -> Result<(), Error> {
         for i in 0..span {
             if self.read_byte(offset + i).is_none() {
-                return Err(Error::InvalidAddress(offset + i));
+                return Err(Error::InvalidAddress((self.space, offset + i).into()));
             }
         }
         Ok(())
@@ -2062,7 +2076,7 @@ mod tests {
         region.set_equivalent(0, Equivalent::Code).unwrap();
         assert!(matches!(
             region.set_equivalent(1, Equivalent::Code),
-            Err(Error::NotUndefined(1))
+            Err(Error::NotUndefined { at, .. }) if at.offset == 1
         ));
         region.set_equivalent(6, Equivalent::Code).unwrap();
         assert!(matches!(
@@ -2598,5 +2612,38 @@ mod tests {
             .unwrap();
 
         assert_eq!(db.peek(CODE, 0, 16).self_misaligned_targets, 1);
+    }
+
+    #[test]
+    fn retyping_inside_a_large_run_says_what_clearing_costs() {
+        let mut region = Region::new(CODE, Some(platform()));
+        region.set_bytes("test.bin", 0, 0, &[0x00; 0x40]);
+        region.set_equivalent(0, Equivalent::Data(DataType::Byte, 0x40)).unwrap();
+
+        let err = region
+            .set_equivalent(0x10, Equivalent::Data(DataType::Byte, 4))
+            .expect_err("those bytes already carry a classification");
+        let text = err.to_string();
+
+        assert!(text.contains("already data"), "{text}");
+        assert!(text.contains("clear_equivalents"), "{text}");
+        // The cost, and how to put back what was not being retyped.
+        assert!(text.contains("0x40 byte(s)"), "the true cost: {text}");
+        assert!(text.contains("past the 0x4 you asked about"), "{text}");
+        assert!(text.contains("mark_data(range=CODE:0x0..0x10"), "restore before: {text}");
+        assert!(text.contains("mark_data(range=CODE:0x14..0x40"), "restore after: {text}");
+    }
+
+    #[test]
+    fn classifying_an_unmapped_address_names_the_space() {
+        let mut region = Region::new(CODE, Some(platform()));
+        region.set_bytes("test.bin", 0, 0, &[0x00, 0x00]);
+
+        let err = region
+            .set_equivalent(0, Equivalent::Data(DataType::Byte, 8))
+            .expect_err("the run runs past the mapped bytes");
+        let text = err.to_string();
+        assert!(text.starts_with("no byte is mapped at CODE:0x2"), "{text}");
+        assert!(text.contains("map_bytes"), "{text}");
     }
 }
