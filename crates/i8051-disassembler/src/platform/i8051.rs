@@ -304,11 +304,6 @@ mod tests {
         // JB 0x20,rel (20 20 05) is a branch AND a bit read.
         assert_eq!(e(&[0x20, 0x20, 0x05]), vec![(CODE, 8, Jump), (BIT, 0x20, Read)]);
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     #[test]
     fn bit_addresses_resolve_to_the_byte_that_holds_them() {
