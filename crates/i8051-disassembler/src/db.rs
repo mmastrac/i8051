@@ -1135,4 +1135,55 @@ loc_0010:
         assert_eq!(code.get_label(0x10), Some("a"));
         assert_eq!(code.get_label(0x14), Some("b"));
     }
+
+    #[test]
+    fn a_refusal_over_a_larger_equivalent_names_the_bytes_to_restore() {
+        let text = Error::NotUndefined {
+            at: (CODE, 0xb6eu32).into(),
+            existing: EquivalentKind::Data,
+            start: 0xad5,
+            end: 0x1000,
+            requested_end: 0xb72,
+        }
+        .to_string();
+
+        assert!(
+            text.contains("clear_equivalents(addresses=CODE:{0xad5..0x1000})"),
+            "the clear has to be named: {text}"
+        );
+        assert!(text.contains("0x52b"), "the real cost has to be stated: {text}");
+        assert!(
+            text.contains("mark_data(range=CODE:0xad5..0xb6e"),
+            "the bytes before the request have to be restorable: {text}"
+        );
+        assert!(
+            text.contains("mark_data(range=CODE:0xb72..0x1000"),
+            "the bytes after the request have to be restorable: {text}"
+        );
+    }
+
+    #[test]
+    fn classification_refusals_name_the_command_that_unblocks_them() {
+        let occupied = Error::NotUndefined {
+            at: (CODE, 0x8u32).into(),
+            existing: EquivalentKind::Code,
+            start: 0x8,
+            end: 0xA,
+            requested_end: 0xA,
+        };
+        let text = occupied.to_string();
+        assert!(text.contains("already code"), "{text}");
+        assert!(
+            text.contains("clear_equivalents(addresses=CODE:{0x8..0xa})"),
+            "the message must carry a runnable command: {text}"
+        );
+        // Request and equivalent coincide, so there is no remainder to mention.
+        assert!(!text.contains("restore the remainder"), "{text}");
+
+        let unmapped = Error::InvalidAddress((CODE, 0x8u32).into());
+        let text = unmapped.to_string();
+        assert!(text.contains("no byte is mapped at CODE:0x8"), "{text}");
+        assert!(text.contains("map_bytes"), "{text}");
+        assert!(text.contains("set_constant_bytes"), "the fill route is valid too: {text}");
+    }
 }

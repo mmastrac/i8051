@@ -1186,30 +1186,6 @@ mod tests {
         );
     }
 
-    /// A barrier stops the sweep and `auto_disassemble` reports success anyway.
-    #[test]
-    fn a_target_behind_a_barrier_says_so() {
-        use crate::commands::MarkData;
-        use crate::db::DataType;
-
-        let db = db_with(vec![
-            boxed(DisassembleRange::new((CODE, 0u32..4u32), false)),
-            boxed(MarkData::new((CODE, 4u32..6u32), DataType::Byte)),
-        ]);
-        let report = assess_at(&db, Gate::Structural);
-        let item = report
-            .items
-            .iter()
-            .find(|i| i.kind == "unfollowed_target")
-            .expect("the call target sits behind a data barrier");
-        assert!(item.detail.contains("marked data"), "{}", item.detail);
-        assert!(
-            item.suggested.iter().any(|c| c.starts_with("clear_equivalents(")),
-            "{:?}",
-            item.suggested
-        );
-    }
-
     #[test]
     fn flow_into_data_offers_both_readings() {
         use crate::commands::MarkData;
@@ -1419,5 +1395,259 @@ mod tests {
             "a scoped name comes first: {:?}",
             item.suggested
         );
+    }
+
+    /// A filler run must never start on a live vector. Swallowing one produces a
+    /// filler reading that retires the handler and marks it data, and the vector
+    /// guard permits exactly that, so following the advice buries a live handler.
+    #[test]
+    fn a_filler_run_stops_at_a_live_vector() {
+        // 0xb (INT_timer0) holds `LJMP 0x0100`; 0xe..0x10 is filler after it that
+        // falls into data at 0x10.
+        let mut image = vec![0x00u8; 0x110];
+        image[0x0..0x3].copy_from_slice(&[0x02, 0x01, 0x00]); // reset: LJMP 0x100
+        image[0xb..0xe].copy_from_slice(&[0x02, 0x01, 0x00]); // INT_timer0: LJMP 0x100
+        image[0x100] = 0x22; // RET
+        struct Fixture(Vec<u8>);
+        impl crate::commands::Environment for Fixture {
+            fn load_file_bytes(
+                &self,
+                _f: &str,
+                offset: usize,
+                size: AddressValue,
+            ) -> Result<Vec<u8>, std::io::Error> {
+                Ok(self.0[offset..offset + size as usize].to_vec())
+            }
+        }
+        let env = Fixture(image);
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
+        db.apply(boxed(MapBytes::new((CODE, 0), "img", 0usize, 0x110u32)), Some(&env)).unwrap();
+        db.apply(boxed(AutoDisassemble::new((CODE, 0xbu32))), Some(&env)).unwrap();
+        db.apply(boxed(DisassembleRange::new((CODE, 0xeu32..0x10u32), true)), Some(&env)).unwrap();
+
+        // The run leading into 0x10 must stop after the vector's own instruction.
+        assert_eq!(
+            code_run_start(&db, CODE, 0xf),
+            0xe,
+            "the run must not reach back over INT_timer0 at 0xb"
+        );
+        assert!(is_live_entry_point(&db, CODE, 0xb), "0xb is a vector nobody retired");
+    }
+
+    /// A working name is shown but not settled: the address keeps its place on
+    /// the naming worklist, deferred behind untouched ones, until a later pass
+    /// commits a real name.
+    #[test]
+    fn a_provisional_label_stays_on_the_worklist_until_settled() {
+        use crate::commands::{AutoDisassemble, SetLabel, boxed};
+
+        let mut db = db_with(vec![boxed(AutoDisassemble::new((CODE, 0u32)))]);
+        let listed = |db: &Db| {
+            assess_at(db, Gate::Named)
+                .items
+                .iter()
+                .filter(|i| i.kind == "provisional_label" && i.address.contains("0x4"))
+                .map(|i| (i.sort.2, i.detail.clone()))
+                .next()
+        };
+        assert!(listed(&db).is_some(), "0x4 is an unnamed call target to begin with");
+
+        db.apply(boxed(SetLabel::new((CODE, 4u32), "maybe_inc".to_string(), true, false)), Some(&Env))
+            .unwrap();
+        let (deferred, detail) = listed(&db).expect("a working name must stay listed");
+        assert_eq!(deferred, 1, "a working name should sort behind untouched addresses");
+        assert!(detail.contains("maybe_inc"), "the item should show the current guess: {detail}");
+
+        db.apply(boxed(SetLabel::new((CODE, 4u32), "inc_a".to_string(), false, false)), Some(&Env))
+            .unwrap();
+        assert!(listed(&db).is_none(), "settling the name retires the item");
+    }
+
+    /// Marking an address that code branches to is refused, so an item must not
+    /// suggest it. The clear in front of the mark runs first, which leaves the
+    /// caller half applied with the item still standing.
+    #[test]
+    fn a_run_that_is_branched_to_is_never_suggested_for_marking() {
+        // 0x4 is the `LCALL` target, so the run entered there carries a branch.
+        let db = db_with(vec![
+            boxed(DisassembleRange::new((CODE, 0u32..4u32), false)),
+            boxed(DisassembleRange::new((CODE, 4u32..6u32), false)),
+        ]);
+
+        for item in assess_at(&db, Gate::Named).items {
+            for suggestion in item.suggested.iter().filter(|s| s.starts_with("mark_data")) {
+                let range = suggestion
+                    .split("range=CODE:")
+                    .nth(1)
+                    .and_then(|s| s.split(',').next())
+                    .expect("a mark_data suggestion names its range");
+                let (start, end) = range.split_once("..").expect("a range has both bounds");
+                let start = AddressValue::from_str_radix(start.trim_start_matches("0x"), 16);
+                let end = AddressValue::from_str_radix(end.trim_start_matches("0x"), 16);
+                let (Ok(start), Ok(end)) = (start, end) else { continue };
+                assert!(
+                    settle_reference_first(&db, CODE, start, end).is_none(),
+                    "{} suggests marking a branched-to run: {suggestion}",
+                    item.kind
+                );
+            }
+        }
+    }
+
+    /// A database saved before the classification guards existed can hold a
+    /// call target inside a data range. `auto_disassemble` cannot clear that on
+    /// its own, so the item has to name the barrier and the verb that drops it.
+    #[test]
+    fn an_unfollowed_target_behind_a_barrier_says_to_clear_the_barrier() {
+        use crate::commands::MarkData;
+        use crate::db::DataType;
+
+        let db = db_with(vec![
+            boxed(DisassembleRange::new((CODE, 0u32..4u32), false)),
+            boxed(MarkData::new((CODE, 4u32..6u32), DataType::Byte)),
+        ]);
+        let report = assess_at(&db, Gate::Named);
+        let item = report
+            .items
+            .iter()
+            .find(|i| i.kind == "unfollowed_target")
+            .expect("the call at 0x0 still points into the data range");
+
+        assert!(item.detail.contains("marked data"), "{}", item.detail);
+        assert!(
+            item.suggested.iter().any(|s| s.starts_with("clear_equivalents")),
+            "the barrier has to be droppable from the suggestions: {:?}",
+            item.suggested
+        );
+    }
+
+    /// A vector slot decoded out of filler branches somewhere impossible, and
+    /// the way out is to classify its bytes. That is refused while the vector is
+    /// live, so the item has to say to retire it first or it suggests a command
+    /// the caller cannot run.
+    #[test]
+    fn classifying_a_vector_slot_is_suggested_with_the_retire_step_first() {
+        // 0x13 (INT_ext1) holds `LJMP 0x1FD1`, past the end of a 0x26-byte image.
+        let mut image = vec![0x00u8; 0x26];
+        image[0x13..0x16].copy_from_slice(&[0x02, 0x1F, 0xD1]);
+        struct SmallEnv(Vec<u8>);
+        impl crate::commands::Environment for SmallEnv {
+            fn load_file_bytes(
+                &self,
+                _f: &str,
+                offset: usize,
+                size: AddressValue,
+            ) -> Result<Vec<u8>, std::io::Error> {
+                Ok(self.0[offset..offset + size as usize].to_vec())
+            }
+        }
+        let env = SmallEnv(image);
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
+        db.apply(boxed(MapBytes::new((CODE, 0), "img", 0usize, 0x26u32)), Some(&env)).unwrap();
+        db.apply(boxed(DisassembleRange::new((CODE, 0x13u32..0x16u32), true)), Some(&env)).unwrap();
+
+        let item = assess_at(&db, Gate::Named)
+            .items
+            .into_iter()
+            .find(|i| i.kind == "target_outside_image")
+            .expect("the branch leaves the image");
+        let retire = item
+            .suggested
+            .iter()
+            .position(|s| s.starts_with("disable_platform_address"))
+            .expect("retiring the vector must be offered");
+        let mark = item
+            .suggested
+            .iter()
+            .position(|s| s.starts_with("mark_data"))
+            .expect("classifying the bytes must be offered");
+        assert!(retire < mark, "the retire step has to come first: {:?}", item.suggested);
+    }
+
+    /// Both readings of a flow leak are runnable, so their order decides which
+    /// one gets taken. When the data side does not decode like code, the filler
+    /// reading has to come first: an even-handed list put the code reading on top
+    /// and an overnight run cycled between the two for six sessions, decoding the
+    /// bytes one session and reverting them the next.
+    #[test]
+    fn flow_into_data_puts_the_likelier_reading_first() {
+        use crate::commands::MarkData;
+        use crate::db::DataType;
+
+        // `NOP` at 0x30 falls into 0x31, which decodes to `LJMP 0xFFFD`: a target
+        // past the end of a 0x40-byte image, so those bytes are not code.
+        let mut image = vec![0x00u8; 0x40];
+        image[0x31..0x34].copy_from_slice(&[0x02, 0xFF, 0xFD]);
+        struct Fixture(Vec<u8>);
+        impl crate::commands::Environment for Fixture {
+            fn load_file_bytes(
+                &self,
+                _f: &str,
+                offset: usize,
+                size: AddressValue,
+            ) -> Result<Vec<u8>, std::io::Error> {
+                Ok(self.0[offset..offset + size as usize].to_vec())
+            }
+        }
+        let env = Fixture(image);
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
+        db.apply(boxed(MapBytes::new((CODE, 0), "img", 0usize, 0x40u32)), Some(&env)).unwrap();
+        db.apply(boxed(DisassembleRange::new((CODE, 0x30u32..0x31u32), true)), Some(&env)).unwrap();
+        db.apply(boxed(MarkData::new((CODE, 0x31u32..0x34u32), DataType::Byte)), Some(&env))
+            .unwrap();
+
+        let item = assess_at(&db, Gate::Named)
+            .items
+            .into_iter()
+            .find(|i| i.kind == "flow_into_data")
+            .expect("code at 0x30 runs into data at 0x31");
+        let filler = item
+            .suggested
+            .iter()
+            .position(|s| s.starts_with("mark_data"))
+            .expect("the filler reading must be offered");
+        // The code reading is the clear tagged for it: the filler reading opens
+        // with a clear of its own, since `mark_data` needs undefined bytes.
+        let as_code = item
+            .suggested
+            .iter()
+            .position(|s| s.starts_with("clear_equivalents") && s.contains("is code"))
+            .expect("the code reading must be offered");
+        assert!(
+            filler < as_code,
+            "bytes that branch out of the image should lead with the filler reading: {:?}",
+            item.suggested
+        );
+        assert!(
+            item.detail.contains("filler reading is the likelier one"),
+            "the item should say which the bytes favour: {}",
+            item.detail
+        );
+    }
+
+    /// `mark_data` takes undefined bytes only, so every suggestion that
+    /// reclassifies a decoded run has to clear it first and cover the whole run.
+    /// Offered alone over one instruction, the mark refuses on decoded bytes, and
+    /// where it lands it leaves the predecessor leaking into the new data.
+    #[test]
+    fn reclassifying_a_decoded_run_clears_it_first_and_covers_all_of_it() {
+        // 0x4 is the call target, so the run entered there ends at the `RET`.
+        let db = db_with(vec![boxed(AutoDisassemble::new((CODE, 0u32)))]);
+        let report = assess_at(&db, Gate::Named);
+
+        for item in report.items.iter().filter(|i| {
+            matches!(i.kind, "target_outside_image" | "misaligned_target" | "flow_into_data")
+        }) {
+            let mark = item.suggested.iter().position(|s| s.starts_with("mark_data"));
+            let Some(mark) = mark else { continue };
+            let cleared = item.suggested[..mark]
+                .iter()
+                .any(|s| s.starts_with("clear_equivalents") && !s.contains("is code"));
+            assert!(
+                cleared,
+                "{} marks without clearing first: {:?}",
+                item.kind, item.suggested
+            );
+        }
     }
 }
