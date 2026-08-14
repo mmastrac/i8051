@@ -1026,7 +1026,9 @@ impl Region {
     }
 
     pub fn clear_label(&mut self, offset: AddressValue) {
-        self.labels.remove(&(offset as AddressValue));
+        self.labels.remove(&offset);
+        self.draft_labels.remove(&offset);
+        self.local_labels.remove(&offset);
     }
 
     pub fn get_label(&self, offset: AddressValue) -> Option<&str> {
@@ -1083,7 +1085,11 @@ impl Region {
     ) -> Vec<(AddressValue, String)> {
         let keys: Vec<AddressValue> = self.labels.range(range).map(|(&k, _)| k).collect();
         keys.into_iter()
-            .filter_map(|k| self.labels.remove(&k).map(|v| (k, v)))
+            .filter_map(|k| {
+                self.draft_labels.remove(&k);
+                self.local_labels.remove(&k);
+                self.labels.remove(&k).map(|v| (k, v))
+            })
             .collect()
     }
 
@@ -1356,6 +1362,7 @@ impl Region {
                 }
             };
         }
+        mark_self_misaligned(&mut result);
         result
     }
 
@@ -2543,5 +2550,53 @@ mod tests {
             })
             .collect();
         assert_eq!(data, vec![(0, 2), (2, 2)], "{lines:#?}");
+    }
+
+    #[test]
+    fn clearing_a_label_clears_its_attributes() {
+        let mut region = Region::new(CODE, Some(platform()));
+        region.set_bytes("test.bin", 0, 0, &[0x00, 0x00, 0x00, 0x22]);
+
+        region.set_label(0, "guess", LabelAttrs { provisional: true, local: true });
+        assert!(region.is_draft_label(0) && region.is_local_label(0));
+
+        region.clear_label(0);
+        assert!(!region.is_draft_label(0), "draft flag outlived the label");
+        assert!(!region.is_local_label(0), "local flag outlived the label");
+
+        // A plain name set afterwards must be plain.
+        region.set_label(0, "settled", LabelAttrs::default());
+        assert!(!region.is_draft_label(0) && !region.is_local_label(0));
+
+        // The range form has to do the same.
+        region.set_label(2, "spot", LabelAttrs { provisional: true, local: true });
+        region.clear_labels_in(2..3);
+        assert!(!region.is_draft_label(2) && !region.is_local_label(2));
+    }
+
+    #[test]
+    fn peek_reports_self_misaligned_targets() {
+        struct Img;
+        impl crate::commands::Environment for Img {
+            fn load_file_bytes(
+                &self,
+                _f: &str,
+                offset: usize,
+                size: AddressValue,
+            ) -> Result<Vec<u8>, std::io::Error> {
+                // JNZ 0x3 falls through to the MOV at 0x2, and its target
+                // lands inside that instruction.
+                const BYTES: [u8; 5] = [0x70, 0x01, 0x74, 0x00, 0x22];
+                Ok(BYTES[offset..offset + size as usize].to_vec())
+            }
+        }
+        use crate::commands::MapBytes;
+        use crate::db::Db;
+
+        let mut db = Db::with_platform(platform());
+        db.apply(boxed(MapBytes::new((CODE, 0), "img", 0usize, 5u32)), Some(&Img))
+            .unwrap();
+
+        assert_eq!(db.peek(CODE, 0, 16).self_misaligned_targets, 1);
     }
 }
