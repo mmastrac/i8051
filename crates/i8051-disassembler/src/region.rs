@@ -100,6 +100,9 @@ pub struct ScratchInsn {
     /// Whether `target` lands inside an existing instruction rather than at its
     /// start. Also strong evidence the bytes are not really code.
     pub target_misaligned: bool,
+    /// Whether `target` lands inside another instruction of this same decode (a
+    /// self-misalignment suggests this is not code).
+    pub target_self_misaligned: bool,
 }
 
 /// The result of decoding bytes as code without committing them: a look before
@@ -115,6 +118,33 @@ pub struct ScratchDecode {
     pub out_of_range_targets: usize,
     /// How many decoded targets land inside an existing instruction.
     pub misaligned_targets: usize,
+    /// How many decoded targets land inside another instruction of this same
+    /// decode.
+    pub self_misaligned_targets: usize,
+}
+
+/// Flag every target that lands inside another instruction of the same decode,
+/// and total them into [`ScratchDecode::self_misaligned_targets`].
+///
+/// Run after the decode completes, because a target may point forward at an
+/// instruction not yet decoded when its branch was read.
+fn mark_self_misaligned(decode: &mut ScratchDecode) {
+    let starts: std::collections::BTreeSet<AddressValue> =
+        decode.lines.iter().map(|insn| insn.addr).collect();
+    let (Some(first), Some(last)) = (decode.lines.first(), decode.lines.last()) else {
+        return;
+    };
+    let span = first.addr..last.addr.saturating_add(last.bytes.len() as AddressValue);
+
+    let mut count = 0;
+    for insn in &mut decode.lines {
+        let Some(target) = insn.target else { continue };
+        if span.contains(&target) && !starts.contains(&target) {
+            insn.target_self_misaligned = true;
+            count += 1;
+        }
+    }
+    decode.self_misaligned_targets = count;
 }
 
 pub struct Region {
@@ -970,10 +1000,50 @@ impl Region {
         leaks
     }
 
-    /// Decode bytes as code from `start` without committing anything, following
-    /// fall-through up to `max_lines` instructions and stopping at the first
-    /// return or unconditional jump. Lets a caller judge whether a run is code
-    /// before disassembling it (out-of-range targets flag likely garbage).
+    /// Decode bytes as code from `start` to `end` in a linear fashion without
+    /// committing anything, ignoring control flow, and following fall-through
+    /// up to `max_lines` instructions and stopping at the first return or
+    /// unconditional jump. Lets a caller judge whether a run is code before
+    /// disassembling it (out-of-range targets flag likely garbage).
+    pub(crate) fn scratch_decode_linear(
+        &self,
+        start: AddressValue,
+        end: AddressValue,
+    ) -> ScratchDecode {
+        let mut result = ScratchDecode::default();
+        let mut addr = start;
+        while addr < end {
+            let Some(insn) = self.decode_at(addr) else {
+                result.ran_out = true;
+                break;
+            };
+            let target = branch_target(&insn).map(|t| self.effective(t));
+            let target_mapped = target.is_none_or(|t| self.read_byte(t).is_some());
+            let target_misaligned = target.is_some_and(|t| {
+                matches!(self.get_equivalent_kind(t), Some(EquivalentKind::Code))
+                    && !self.is_code_start(t)
+            });
+            if !target_mapped {
+                result.out_of_range_targets += 1;
+            }
+            if target_misaligned {
+                result.misaligned_targets += 1;
+            }
+            result.lines.push(ScratchInsn {
+                addr,
+                text: insn.as_string().to_string(),
+                bytes: insn.bytes().to_vec(),
+                target,
+                target_mapped,
+                target_misaligned,
+                target_self_misaligned: false,
+            });
+            addr = addr.saturating_add(insn.len() as AddressValue);
+        }
+        mark_self_misaligned(&mut result);
+        result
+    }
+
     pub(crate) fn scratch_decode(&self, start: AddressValue, max_lines: usize) -> ScratchDecode {
         let mut result = ScratchDecode::default();
         let mut addr = start;
@@ -1003,6 +1073,7 @@ impl Region {
                 target,
                 target_mapped,
                 target_misaligned,
+                target_self_misaligned: false,
             });
             addr = match insn.control_flow() {
                 ControlFlow::Continue { next } => next,
@@ -1899,5 +1970,84 @@ mod tests {
         // The completeness `coverage()` derives `undefined` from the spans and
         // must agree.
         assert_eq!(region.coverage().undefined, 4);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::{MapBytes, boxed};
+    use crate::db::Db;
+    use crate::platform::i8051::CODE;
+
+    struct Env(&'static [u8]);
+    impl crate::commands::Environment for Env {
+        fn load_file_bytes(
+            &self,
+            _f: &str,
+            offset: usize,
+            size: AddressValue,
+        ) -> Result<Vec<u8>, std::io::Error> {
+            Ok(self.0[offset..offset + size as usize].to_vec())
+        }
+    }
+
+    fn peek(image: &'static [u8]) -> ScratchDecode {
+        let env = Env(image);
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
+        db.apply(
+            boxed(MapBytes::new((CODE, 0), "img", 0usize, image.len() as u32)),
+            Some(&env),
+        )
+        .unwrap();
+        db.peek_linear(CODE, 0, image.len() as AddressValue)
+    }
+
+    /// One signature of data decoded as code: a branch landing partway through
+    /// a neighbour.
+    #[test]
+    fn a_branch_into_the_middle_of_a_neighbour_is_counted() {
+        // 0: SJMP 0x03 — lands inside the instruction at 0x02.
+        // 2: SJMP 0x04 — lands on a real boundary.
+        // 4: NOP, 5: RET.
+        let decode = peek(&[0x80, 0x01, 0x80, 0x00, 0x00, 0x22]);
+
+        assert_eq!(decode.self_misaligned_targets, 1);
+        assert!(decode.lines[0].target_self_misaligned, "0x00 -> 0x03");
+        assert!(!decode.lines[1].target_self_misaligned, "0x02 -> 0x04 is aligned");
+    }
+
+    /// Real code branches to boundaries.
+    #[test]
+    fn code_that_branches_to_boundaries_is_clean() {
+        // 0: SJMP 0x02, 2: NOP, 3: NOP, 4: NOP, 5: RET.
+        let decode = peek(&[0x80, 0x00, 0x00, 0x00, 0x00, 0x22]);
+
+        assert_eq!(decode.self_misaligned_targets, 0);
+        assert_eq!(decode.out_of_range_targets, 0);
+        assert!(decode.lines.iter().all(|l| !l.target_self_misaligned));
+    }
+
+    /// A target beyond the image counts into `out_of_range_targets`.
+    #[test]
+    fn a_target_outside_the_run_is_not_self_misaligned() {
+        // LJMP 0x4321 — far outside a six-byte image.
+        let decode = peek(&[0x02, 0x43, 0x21, 0x00, 0x00, 0x22]);
+
+        assert_eq!(decode.out_of_range_targets, 1);
+        assert_eq!(decode.self_misaligned_targets, 0);
+    }
+
+    /// The linear decode covers the whole range.
+    #[test]
+    fn linear_decoding_does_not_stop_at_a_return() {
+        let image: &[u8] = &[0x22, 0x00, 0x00, 0x22];
+        let env = Env(image);
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
+        db.apply(boxed(MapBytes::new((CODE, 0), "img", 0usize, 4u32)), Some(&env))
+            .unwrap();
+
+        assert_eq!(db.peek(CODE, 0, 16).lines.len(), 1, "flow stops at the RET");
+        assert_eq!(db.peek_linear(CODE, 0, 4).lines.len(), 4, "linear keeps going");
     }
 }

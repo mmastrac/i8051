@@ -119,6 +119,20 @@ impl Db {
             .unwrap_or_default()
     }
 
+    /// Test-decode `start..end` as one straight run without committing, for a
+    /// caller about to commit the whole range as code (see
+    /// [`Region::scratch_decode_linear`]).
+    pub fn peek_linear(
+        &self,
+        space: AddressSpace,
+        start: AddressValue,
+        end: AddressValue,
+    ) -> ScratchDecode {
+        self.region(space)
+            .map(|region| region.scratch_decode_linear(start, end))
+            .unwrap_or_default()
+    }
+
     /// Follow pure jump thunks from `addr` to the ultimate target. Rendering
     /// stays faithful to the bytes, so this is how a consumer asks where a call
     /// or jump really ends up. Returns `addr` when it is not a thunk.
