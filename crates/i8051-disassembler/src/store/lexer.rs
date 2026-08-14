@@ -103,7 +103,7 @@ impl<'a> Lexer<'a> {
             }
             '"' => {
                 self.bump();
-                self.read_quoted_string(offset, 0)
+                self.read_quoted_string(offset, 0, false)
             }
             'r' if self.raw_string_start() => self.read_raw_string(offset),
             '0'..='9' => self.read_number(offset),
@@ -199,7 +199,12 @@ impl<'a> Lexer<'a> {
         Ok(Token::Int(value))
     }
 
-    fn read_quoted_string(&mut self, offset: usize, hashes: usize) -> Result<Token, DslError> {
+    fn read_quoted_string(
+        &mut self,
+        offset: usize,
+        hashes: usize,
+        raw: bool,
+    ) -> Result<Token, DslError> {
         let mut value = String::new();
         loop {
             let Some(ch) = self.bump() else {
@@ -221,7 +226,7 @@ impl<'a> Lexer<'a> {
                         value.push('#');
                     }
                 }
-                '\\' if hashes == 0 => {
+                '\\' if !raw => {
                     let esc = self
                         .bump()
                         .ok_or_else(|| DslError::at(offset, "unterminated escape in string"))?;
@@ -256,7 +261,7 @@ impl<'a> Lexer<'a> {
         if self.bump() != Some('"') {
             return Err(DslError::at(offset, "expected opening quote after r"));
         }
-        self.read_quoted_string(offset, hashes)
+        self.read_quoted_string(offset, hashes, true)
     }
 
     fn read_hex_digit(&mut self, offset: usize) -> Result<u8, DslError> {

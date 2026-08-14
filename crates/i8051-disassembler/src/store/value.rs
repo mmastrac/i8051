@@ -159,7 +159,7 @@ fn render_string(value: &str) -> String {
     if !value.contains(['\n', '\r', '"', '\\']) {
         return format!("\"{value}\"");
     }
-    if !value.contains('"') {
+    if !value.contains(['"', '\n', '\r']) {
         return format!("r\"{value}\"");
     }
     let mut delim = String::from("#");

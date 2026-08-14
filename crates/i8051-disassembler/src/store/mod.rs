@@ -175,14 +175,73 @@ pub fn to_dsl_many(commands: &[Box<dyn Command>]) -> String {
         .join("\n")
 }
 
-/// Parse a document of newline-separated commands, skipping blank and `#` lines.
+/// Parse a document of commands, skipping blank and `#` lines.
+///
+/// One command per line, except that a raw string may span lines.
 pub fn from_dsl_many(input: &str) -> Result<Vec<Box<dyn Command>>, DslError> {
-    input
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(from_dsl)
-        .collect()
+    split_commands(input).iter().map(|s| from_dsl(s)).collect()
+}
+
+/// Split a document at the newlines that are not inside a string.
+fn split_commands(input: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\n' => {
+                let line = current.trim();
+                if !line.is_empty() && !line.starts_with('#') {
+                    out.push(line.to_string());
+                }
+                current.clear();
+            }
+            // A raw string runs to its matching delimiter, newlines included.
+            'r' if matches!(chars.peek(), Some('"' | '#')) => {
+                current.push(ch);
+                let mut hashes = 0;
+                while chars.peek() == Some(&'#') {
+                    hashes += 1;
+                    current.push(chars.next().unwrap());
+                }
+                if chars.peek() != Some(&'"') {
+                    continue; // not a raw string after all
+                }
+                current.push(chars.next().unwrap());
+                let close = format!("\"{}", "#".repeat(hashes));
+                let mut seen = String::new();
+                for c in chars.by_ref() {
+                    current.push(c);
+                    seen.push(c);
+                    if seen.ends_with(&close) {
+                        break;
+                    }
+                }
+            }
+            '"' => {
+                current.push(ch);
+                while let Some(c) = chars.next() {
+                    current.push(c);
+                    match c {
+                        '\\' => {
+                            if let Some(esc) = chars.next() {
+                                current.push(esc);
+                            }
+                        }
+                        '"' => break,
+                        _ => {}
+                    }
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+    let line = current.trim();
+    if !line.is_empty() && !line.starts_with('#') {
+        out.push(line.to_string());
+    }
+    out
 }
 
 #[cfg(test)]
@@ -230,8 +289,48 @@ mod tests {
             "line one\nline two",
         ));
         let dsl = to_dsl(&*command);
-        assert!(dsl.starts_with("set_comment(address=CODE:0x10, comment=r\""));
+        assert!(dsl.starts_with("set_comment(address=CODE:0x10, comment=r#\""), "{dsl}");
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
+    }
+
+    #[test]
+    fn a_raw_string_may_span_lines() {
+        let doc = "set_cpu(name=\"i8051\")\n\
+                   set_comment(address=CODE:0x0, comment=r#\"first line\n\
+                   second line\n\
+                   # not a comment, it is inside the string\"#)\n\
+                   # a real comment\n\
+                   set_label(address=CODE:0x4, label=\"after\", provisional=False)\n";
+
+        let commands = super::from_dsl_many(doc).expect("a multi-line note parses");
+        assert_eq!(commands.len(), 3, "{:?}", commands.iter().map(|c| c.name()).collect::<Vec<_>>());
+        assert_eq!(commands[1].name(), "set_comment");
+
+        let text = to_dsl(&*commands[1]);
+        assert!(text.contains("second line"), "{text}");
+        assert!(text.contains("# not a comment"), "the `#` line is content: {text}");
+        // And the whole document round-trips.
+        assert_eq!(super::from_dsl_many(&super::to_dsl_many(&commands)).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_string_gets_the_lightest_delimiters_that_hold_it() {
+        let render = |text: &str| {
+            let command = commands::boxed(SetComment::new(
+                (crate::platform::i8051::CODE, 0x10),
+                text,
+            ));
+            let dsl = to_dsl(&*command);
+            // Whatever form was chosen, it has to parse back to the same text.
+            assert_eq!(&*from_dsl(&dsl).unwrap(), &*command, "{dsl}");
+            dsl
+        };
+        assert!(render("plain words").contains("comment=\"plain words\""));
+        // A backslash needs raw, but no padding.
+        assert!(render("a\\\\b").contains("comment=r\"a\\\\b\""));
+        // Multi-line and quoted both take the padded form.
+        assert!(render("two\nlines").contains("comment=r#\""));
+        assert!(render("say \"hi\"").contains("comment=r#\""));
     }
 
     #[test]
