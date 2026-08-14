@@ -533,6 +533,20 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
                      without naming it — read that note first",
                 );
             }
+            let suggested = if draft {
+                vec![format!("set_label(address={addr}, label=\"...\")")]
+            } else if matches!(label_kind, LabelKind::Loc) {
+                // Reached only by jumps.
+                vec![
+                    format!("set_label(address={addr}, label=\".loop\", local=True)"),
+                    format!("set_label(address={addr}, label=\"...\")"),
+                ]
+            } else {
+                vec![
+                    format!("set_label(address={addr}, label=\"...\")"),
+                    format!("set_label(address={addr}, label=\"...\", provisional=True)"),
+                ]
+            };
             let incoming = db.xrefs_to(&PhysicalAddr { space, offset });
             let first_ref = incoming.iter().map(|x| x.from.offset).min().unwrap_or(offset);
             let entry = item(
@@ -544,10 +558,41 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
                 offset,
                 None,
                 detail,
-                vec![format!("set_label(address={addr}, label=\"...\")")],
+                suggested,
             )
             .ranked_by_callers(incoming.len(), first_ref);
             items.push(if draft || noted { entry.deferred() } else { entry });
+        }
+        
+        for (offset, refs, first, inferred) in region.unnamed_pointer_targets() {
+            let addr = fmt_addr(space, offset);
+            let from = fmt_addr(space, first);
+            let plural = if refs == 1 { "site" } else { "sites" };
+            let detail = if inferred {
+                format!(
+                    "{addr}: {refs} {plural} load this address as a pointer (first {from}), but \
+                     it is unnamed. Reading {from} may help decide."
+                )
+            } else {
+                format!(
+                    "{addr}: unnamed data, addressed as a pointer by {refs} {plural} \
+                     (first {from}). Reading {from} may help."
+                )
+            };
+            items.push(
+                item(
+                    Phase::Name,
+                    "unnamed_data",
+                    Severity::Low,
+                    space,
+                    rank,
+                    offset,
+                    None,
+                    detail,
+                    vec![format!("set_label(address={addr}, label=\"...\")")],
+                )
+                .ranked_by_callers(refs, first),
+            );
         }
 
         // A named routine with no note is understood but unrecorded.
@@ -612,6 +657,36 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
                 ),
             ],
         ));
+    }
+
+    // An instruction with an ambiguous operand.
+    for (site, value, spaces) in db.undecided_operands() {
+        let at = fmt_addr(site.space, site.offset);
+        let candidates: Vec<String> = spaces.iter().map(|s| fmt_addr(*s, value)).collect();
+        let detail = format!(
+            "{at} loads 0x{value:x} as an address, but it is uncertain which memory space it \
+             refers to {}.",
+             candidates.join(" or ")
+        );
+        let mut suggested: Vec<String> = spaces
+            .iter()
+            .map(|s| format!("set_operand_pointer(address={at}, space=\"{}\")", s.dsl_name()))
+            .collect();
+        suggested.push(format!("set_operand_value(address={at})"));
+        items.push(
+            item(
+                Phase::Document,
+                "undecided_operand",
+                Severity::Low,
+                site.space,
+                usize::MAX,
+                site.offset,
+                None,
+                detail,
+                suggested,
+            )
+            .deferred(),
+        );
     }
 
     items.sort_by_key(|it| it.sort);
@@ -1204,5 +1279,145 @@ mod tests {
         assert!(item.suggested.iter().any(|c| c.contains("mark_data")), "{:?}", item.suggested);
         assert!(item.suggested.iter().any(|c| c.contains("map_bytes")), "{:?}", item.suggested);
         assert!(item.detail.contains("incomplete"), "{}", item.detail);
+    }
+
+    /// A lookup table stays anonymous until it is referenced.
+    #[test]
+    fn data_addressed_by_pointer_is_asked_about() {
+        struct Img;
+        impl crate::commands::Environment for Img {
+            fn load_file_bytes(
+                &self,
+                _f: &str,
+                offset: usize,
+                size: AddressValue,
+            ) -> Result<Vec<u8>, std::io::Error> {
+                // MOV DPTR,#0x0006 / RET, then a two-byte table.
+                const BYTES: [u8; 8] =
+                    [0x90, 0x00, 0x06, 0x22, 0x00, 0x00, 0xAA, 0xBB];
+                Ok(BYTES[offset..offset + size as usize].to_vec())
+            }
+        }
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
+        db.apply(boxed(MapBytes::new((CODE, 0), "img", 0usize, 8u32)), Some(&Img))
+            .unwrap();
+        db.apply(boxed(AutoDisassemble::new((CODE, 0u32))), Some(&Img))
+            .unwrap();
+
+        let report = assess_at(&db, Gate::Named);
+        let item = report
+            .items
+            .iter()
+            .find(|i| i.kind == "unnamed_data")
+            .expect("a pointer target nothing names must be raised");
+        assert_eq!(item.address, "CODE:0x6");
+        // The reference is inferred, so the item asks rather than asserts.
+        assert!(item.detail.contains("depends on how the pointer is used"), "{}", item.detail);
+
+        // Naming it retires the item.
+        db.apply(
+            boxed(SetLabel::new((CODE, 6u32), "jump_table".to_string(), false, false)),
+            Some(&Img),
+        )
+        .unwrap();
+        assert!(
+            !assess_at(&db, Gate::Named).counts.contains_key("unnamed_data"),
+            "naming it"
+        );
+    }
+
+    #[test]
+    fn an_undecided_operand_is_recorded_with_both_candidates() {
+        struct Img;
+        impl crate::commands::Environment for Img {
+            fn load_file_bytes(
+                &self,
+                _f: &str,
+                offset: usize,
+                size: AddressValue,
+            ) -> Result<Vec<u8>, std::io::Error> {
+                const BYTES: [u8; 4] = [0x90, 0x12, 0x34, 0x22];
+                Ok(BYTES[offset..offset + size as usize].to_vec())
+            }
+        }
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
+        db.apply(boxed(MapBytes::new((CODE, 0), "img", 0usize, 4u32)), Some(&Img))
+            .unwrap();
+        db.apply(boxed(AutoDisassemble::new((CODE, 0u32))), Some(&Img))
+            .unwrap();
+
+        let report = assess_at(&db, Gate::Documented);
+        let item = report
+            .items
+            .iter()
+            .find(|i| i.kind == "undecided_operand")
+            .expect("MOV DPTR,#addr is ambiguous");
+        assert_eq!(item.address, "CODE:0x0", "keyed by the instruction");
+        assert!(
+            item.suggested.iter().any(|c| c.contains("space=\"CODE\"")),
+            "{:?}",
+            item.suggested
+        );
+        assert!(
+            item.suggested.iter().any(|c| c.contains("space=\"XDATA\"")),
+            "{:?}",
+            item.suggested
+        );
+        assert!(
+            item.suggested.iter().any(|c| c.starts_with("set_operand_value(")),
+            "{:?}",
+            item.suggested
+        );
+
+        // Deciding it retires the item.
+        db.apply(
+            boxed(crate::commands::SetOperandValue {
+                address: (CODE, 0u32).into(),
+            }),
+            Some(&Img),
+        )
+        .unwrap();
+        assert!(
+            !assess_at(&db, Gate::Documented)
+                .counts
+                .contains_key("undecided_operand")
+        );
+    }
+
+    /// A jump-only target is a spot inside a routine.
+    #[test]
+    fn a_jump_only_target_is_offered_a_local_name() {
+        struct Img;
+        impl crate::commands::Environment for Img {
+            fn load_file_bytes(
+                &self,
+                _f: &str,
+                offset: usize,
+                size: AddressValue,
+            ) -> Result<Vec<u8>, std::io::Error> {
+                // MOV R0,#5 / NOP / SJMP 0x2 / RET — 0x2 is reached only by jump.
+                const BYTES: [u8; 6] = [0x78, 0x05, 0x00, 0x80, 0xFD, 0x22];
+                Ok(BYTES[offset..offset + size as usize].to_vec())
+            }
+        }
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
+        db.apply(boxed(MapBytes::new((CODE, 0), "img", 0usize, 6u32)), Some(&Img))
+            .unwrap();
+        db.apply(boxed(AutoDisassemble::new((CODE, 0u32))), Some(&Img))
+            .unwrap();
+
+        let report = assess_at(&db, Gate::Named);
+        let item = report
+            .items
+            .iter()
+            .find(|i| i.kind == "provisional_label" && i.address == "CODE:0x2")
+            .expect("the jump target");
+        assert!(item.detail.contains("jump target"), "{}", item.detail);
+        assert_eq!(
+            item.suggested.first().map(String::as_str),
+            Some("set_label(address=CODE:0x2, label=\".loop\", local=True)"),
+            "a scoped name comes first: {:?}",
+            item.suggested
+        );
     }
 }

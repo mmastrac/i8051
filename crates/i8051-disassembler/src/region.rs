@@ -934,6 +934,36 @@ impl Region {
         out
     }
 
+    /// Addresses reached only by pointer references and still unnamed, as
+    /// `(offset, how many, earliest source, every reference inferred)`.
+    pub(crate) fn unnamed_pointer_targets(&self) -> Vec<(AddressValue, usize, AddressValue, bool)> {
+        let mut out = Vec::new();
+        for (target, edges) in self.xref_index().targets() {
+            if target.space != self.space {
+                continue;
+            }
+            let offset = target.offset;
+            let pointers: Vec<&crate::region::xrefs::Edge> =
+                edges.iter().filter(|e| e.kind == XrefType::Pointer).collect();
+            if pointers.is_empty()
+                || self.get_label(offset).is_some()
+                || self.read_byte(offset).is_none()
+                // A pointer into decoded code is a code reference; the naming
+                // worklist already covers those.
+                || matches!(self.get_equivalent_kind(offset), Some(EquivalentKind::Code))
+            {
+                continue;
+            }
+            let first = pointers.iter().map(|e| e.from).min().unwrap_or(offset);
+            let inferred = pointers
+                .iter()
+                .all(|e| e.certainty == crate::platform::Certainty::Inferred);
+            out.push((offset, pointers.len(), first, inferred));
+        }
+        out.sort_unstable();
+        out
+    }
+
     /// The extent of the instruction decoded at `offset`, if one starts there.
     pub fn instruction_range(&self, offset: AddressValue) -> Option<(AddressValue, AddressValue)> {
         match self.get_equivalent(offset) {
