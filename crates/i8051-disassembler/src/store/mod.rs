@@ -37,7 +37,7 @@ pub fn to_dsl(command: &dyn Command) -> String {
 /// Parse a single command from DSL text, dispatching on its name through the
 /// registry.
 pub fn from_dsl(input: &str) -> Result<Box<dyn Command>, DslError> {
-    let Value::Call { name, kwargs } = parser::parse_command(input)? else {
+    let Value::Call { name, mut kwargs } = parser::parse_command(input)? else {
         return Err(DslError::new("expected a command call"));
     };
     let entry = COMMANDS.get(name.as_str()).ok_or_else(|| {
@@ -68,9 +68,44 @@ pub fn from_dsl(input: &str) -> Result<Box<dyn Command>, DslError> {
         }
     }
 
+    qualify_bare_variants(entry, &mut kwargs);
     match (entry.parse)(kwargs.clone()) {
         Ok(command) => Ok(command),
         Err(raw) => Err(diagnose_args(&name, entry, kwargs, raw)),
+    }
+}
+
+/// Accept a bare enum variant.
+fn qualify_bare_variants(
+    entry: &crate::commands::CommandEntry,
+    kwargs: &mut std::collections::BTreeMap<String, Value>,
+) {
+    for arg in entry.args {
+        let Some(value) = kwargs.get(arg.name) else { continue };
+        if (arg.check)(value).is_ok() {
+            continue;
+        }
+        let bare = match value {
+            Value::String(bare) if !bare.contains("::") => bare.clone(),
+            other => {
+                let rendered = other.render();
+                if rendered.contains("::")
+                    || !rendered.chars().all(|c| c.is_alphanumeric() || c == '_')
+                {
+                    continue;
+                }
+                rendered
+            }
+        };
+        let Some(prefix) = arg.example.and_then(|e| e.split_once("::")).map(|(p, _)| p) else {
+            continue;
+        };
+        let Ok(qualified) = parser::parse_value(&format!("{prefix}::{bare}")) else {
+            continue;
+        };
+        if (arg.check)(&qualified).is_ok() {
+            kwargs.insert(arg.name.to_string(), qualified);
+        }
     }
 }
 
@@ -367,5 +402,19 @@ mod tests {
         let err = from_dsl("set_label(address=CODE:0xZZ)").unwrap_err();
         assert!(err.offset.is_some());
         assert!(err.to_string().contains("byte"));
+    }
+
+    #[test]
+    fn a_bare_variant_means_the_qualified_one() {
+        let bare = from_dsl("mark_data(range=CODE:0x10..0x12, data_type=Byte)")
+            .expect("a bare variant is unambiguous here");
+        let qualified = from_dsl("mark_data(range=CODE:0x10..0x12, data_type=DataType::Byte)")
+            .expect("the full form still works");
+        assert_eq!(to_dsl(bare.as_ref()), to_dsl(qualified.as_ref()));
+
+        // Not a variant
+        let err = from_dsl("mark_data(range=CODE:0x10..0x12, data_type=Sandwich)")
+            .expect_err("an unknown variant fails");
+        assert!(err.message.contains("DataType::Byte"), "{}", err.message);
     }
 }
