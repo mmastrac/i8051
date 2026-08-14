@@ -141,7 +141,7 @@ pub use decoding::{ClearAddressBits, SetAddressBits};
 pub use equivalent::ClearEquivalents;
 pub use extent::{DisassembleRange, MarkData, MarkUnknown};
 pub use function::{ClearFunction, SetFunction};
-pub use label::{ClearLabel, SetLabel};
+pub use label::{ClearLabel, SetLabel, normalize_label};
 pub use note::{ClearNote, SetNote};
 pub use operand::OverrideOperand;
 pub use platform_addr::{DisablePlatformAddress, RestorePlatformAddress};
@@ -226,6 +226,8 @@ pub enum ArgKind {
     Byte,
     /// A domain type (`Note`, `Function`, `DataType`, ...).
     Struct,
+    /// A boolean flag: `True` / `False`.
+    Flag,
 }
 
 impl ArgKind {
@@ -288,6 +290,7 @@ dsl_arg!(Note => Struct, "note",
     "a note, e.g. Note(content=\"...\", tags=[\"todo\"]), or bare \"text\"",
     Some("Note(content=\"...\", tags=[\"todo\"])"));
 dsl_arg!(NoteId => Struct, "note_id", "a note id", Some("\"0000000000000YN222X7N2CE7T\""));
+dsl_arg!(bool => Flag, "flag", "True or False", Some("False"));
 
 #[derive(Debug, Clone, Copy)]
 pub struct CommandArg {
@@ -378,6 +381,7 @@ mod tests {
             [
                 ("address", "SpaceAddressValue", super::ArgKind::Address),
                 ("label", "String", super::ArgKind::Text),
+                ("provisional", "bool", super::ArgKind::Flag),
             ]
         );
     }
@@ -397,7 +401,7 @@ mod tests {
         assert_eq!(kinds("map_bytes"), [Address, Text, Offset, Offset]);
         assert_eq!(kinds("set_constant_bytes"), [AddressRange, Byte]);
         assert_eq!(kinds("unmap_bytes"), [AddressSet]);
-        assert_eq!(kinds("disassemble_range"), [AddressRange]);
+        assert_eq!(kinds("disassemble_range"), [AddressRange, Flag]);
         assert_eq!(kinds("mark_data"), [AddressRange, Struct]);
         assert_eq!(kinds("override_operand"), [Address, Byte, Struct]);
         assert_eq!(kinds("set_note"), [AddressRange, Struct]);

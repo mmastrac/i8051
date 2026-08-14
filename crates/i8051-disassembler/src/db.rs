@@ -11,7 +11,9 @@ pub use crate::note::{
     ProximateNote,
 };
 use crate::platform::{Certainty, Platform, PlatformRef};
-pub use crate::region::{Block, ByteRange, OperandType, Region, ScratchDecode, ScratchInsn};
+pub use crate::region::{
+    Block, ByteRange, LabelAttrs, OperandType, Region, ScratchDecode, ScratchInsn,
+};
 use crate::render::Line;
 use crate::render::sdas::SdasWriter;
 
@@ -515,6 +517,11 @@ pub enum Error {
         start: AddressValue,
         end: AddressValue,
     },
+    /// A label was not a legal assembler symbol.
+    InvalidLabel {
+        label: String,
+        reason: &'static str,
+    },
     InvalidArgument {
         value: String,
         reason: &'static str,
@@ -564,6 +571,9 @@ impl std::fmt::Display for Error {
                      past the bytes being unmapped: `clear_equivalents` first, or unmap a \
                      larger range"
                 )
+            }
+            Self::InvalidLabel { label, reason } => {
+                write!(f, "{label:?} is not a usable label: {reason}")
             }
             Self::InvalidArgument { value, reason } => {
                 write!(f, "{value:?} is not usable here: {reason}")
@@ -687,11 +697,11 @@ mod tests {
         let code = db.region_mut(CODE);
         code.set_bytes("test.bin", 0, 0, &TEST_BINARY);
 
-        code.set_label(0, "start");
+        code.set_label(0, "start", LabelAttrs::default());
         code.set_equivalent(0, Equivalent::Code).unwrap();
 
         code.set_comment(3, "Start of loop");
-        code.set_label(3, "loop");
+        code.set_label(3, "loop", LabelAttrs::default());
         code.set_equivalent(3, Equivalent::Code).unwrap();
         code.set_equivalent(5, Equivalent::Code).unwrap();
         code.set_equivalent(6, Equivalent::Code).unwrap();
@@ -970,7 +980,7 @@ loc_0010:
 
         // MOV A,#1 / INC A (a 3-byte code block), then 2 data bytes.
         let (mut db, env) = mapped("m.bin", &[0x74, 0x01, 0x04, 0xAA, 0xBB]);
-        db.apply(boxed(DisassembleRange::new((CODE, 0u32..3u32))), None)
+        db.apply(boxed(DisassembleRange::new((CODE, 0u32..3u32), false)), None)
             .unwrap();
         db.apply(
             boxed(MarkData::new((CODE, 3u32..5u32), DataType::Byte)),
@@ -980,7 +990,7 @@ loc_0010:
 
         let dsl = crate::store::to_dsl_many(&db.to_commands());
         assert!(
-            dsl.contains("disassemble_range(range=CODE:0x0..0x3)"),
+            dsl.contains("disassemble_range(force=False, range=CODE:0x0..0x3)"),
             "code island coalesced: {dsl}"
         );
         assert!(
@@ -1002,7 +1012,7 @@ loc_0010:
 
         // CJNE A,0x20,rel: three operands. We override the third.
         let (mut db, env) = mapped("b.bin", &[0xB5, 0x20, 0x10]);
-        db.apply(boxed(DisassembleRange::new((CODE, 0u32..3u32))), None)
+        db.apply(boxed(DisassembleRange::new((CODE, 0u32..3u32), false)), None)
             .unwrap();
         let undo = db
             .apply(
@@ -1028,9 +1038,9 @@ loc_0010:
     fn clear_label_set_clears_range_and_undo_restores() {
         let mut db = Db::with_platform(crate::platform::i8051::platform());
         let code = db.region_mut(CODE);
-        code.set_label(0x10, "a");
-        code.set_label(0x14, "b");
-        code.set_label(0x20, "c");
+        code.set_label(0x10, "a", LabelAttrs::default());
+        code.set_label(0x14, "b", LabelAttrs::default());
+        code.set_label(0x20, "c", LabelAttrs::default());
 
         // Clear a single range covering the first two labels in one command.
         let mut set = SpaceAddressSet::new(CODE);

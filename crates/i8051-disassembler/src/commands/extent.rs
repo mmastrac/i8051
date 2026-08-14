@@ -7,13 +7,17 @@ use super::{Apply, ClearEquivalents, Command, Environment, boxed};
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DisassembleRange {
     pub range: SpaceAddressRange,
+    /// Commit even when a scratch decode of `range` looks like data.
+    pub force: bool,
 }
 
 register!(DisassembleRange(
     /// Linearly disassemble `range` as an explicit block of code, decoding each
-    /// instruction in turn. Unlike `auto_disassemble` it does not follow control
-    /// flow. Use it for code the recursive sweep can't reach.
+    /// instruction in turn. Unlike `auto_disassemble` it does not follow
+    /// control flow. Use it for code the recursive sweep can't reach. Pass
+    /// `force=True` to commit a range with invalid disassembly.
     range: SpaceAddressRange,
+    force: bool,
 ));
 
 impl Apply for DisassembleRange {

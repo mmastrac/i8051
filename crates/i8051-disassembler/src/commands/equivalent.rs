@@ -11,7 +11,7 @@ pub(super) fn restore_equivalent(
     range: EquivalentRange,
 ) -> Box<dyn Command> {
     match range.equivalent {
-        Equivalent::Code => boxed(DisassembleRange::new((space, start..range.end))),
+        Equivalent::Code => boxed(DisassembleRange::new((space, start..range.end), false)),
         Equivalent::Data(data_type, size) => {
             boxed(MarkData::new((space, start..start + size), data_type))
         }

@@ -61,6 +61,11 @@ pub fn from_dsl(input: &str) -> Result<Box<dyn Command>, DslError> {
     }
     for arg in entry.args {
         if !kwargs.contains_key(arg.name) {
+            // Omitted flags default to false.
+            if arg.kind == commands::ArgKind::Flag {
+                kwargs.insert(arg.name.to_string(), value::Value::Bool(false));
+                continue;
+            }
             return Err(DslError::new(format!(
                 "`{name}` is missing argument `{}` — {}",
                 arg.name, arg.hint
@@ -209,9 +214,12 @@ mod tests {
 
     #[test]
     fn round_trip_set_label() {
-        let command = commands::boxed(SetLabel::new((crate::platform::i8051::CODE, 0x100), "reset_vector"));
+        let command = commands::boxed(SetLabel::new((crate::platform::i8051::CODE, 0x100), "reset_vector", false));
         let dsl = to_dsl(&*command);
-        assert_eq!(dsl, "set_label(address=CODE:0x100, label=\"reset_vector\")");
+        assert_eq!(
+            dsl,
+            "set_label(address=CODE:0x100, label=\"reset_vector\", provisional=False)"
+        );
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
     }
 

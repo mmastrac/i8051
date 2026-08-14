@@ -444,7 +444,7 @@ mod tests {
     fn flags_undefined_bytes_and_unfollowed_call_target() {
         // Disassemble only the reset routine [0x0, 0x4). The LCALL target at 0x4
         // is never followed, and bytes 0x4..0x6 stay undefined.
-        let db = db_with(vec![boxed(DisassembleRange::new((CODE, 0u32..4u32)))]);
+        let db = db_with(vec![boxed(DisassembleRange::new((CODE, 0u32..4u32), false))]);
         let report = assess_at(&db, Gate::Named);
 
         assert!(!report.done);
@@ -467,8 +467,8 @@ mod tests {
         // Auto-disassemble from both roots (follows the call), name the routines.
         let db = db_with(vec![
             boxed(AutoDisassemble::new((CODE, 0u32))),
-            boxed(SetLabel::new((CODE, 0u32), "reset".to_string())),
-            boxed(SetLabel::new((CODE, 4u32), "inc_a".to_string())),
+            boxed(SetLabel::new((CODE, 0u32), "reset".to_string(), false)),
+            boxed(SetLabel::new((CODE, 4u32), "inc_a".to_string(), false)),
         ]);
         let report = assess_at(&db, Gate::Named);
 
@@ -487,8 +487,8 @@ mod tests {
         // `inc_a` (0x4) carries no note, so `documented` still has work.
         let mut db = db_with(vec![
             boxed(AutoDisassemble::new((CODE, 0u32))),
-            boxed(SetLabel::new((CODE, 0u32), "reset".to_string())),
-            boxed(SetLabel::new((CODE, 4u32), "inc_a".to_string())),
+            boxed(SetLabel::new((CODE, 0u32), "reset".to_string(), false)),
+            boxed(SetLabel::new((CODE, 4u32), "inc_a".to_string(), false)),
         ]);
 
         assert!(assess_at(&db, Gate::Named).done);

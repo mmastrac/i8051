@@ -156,6 +156,13 @@ pub enum OperandType {
     Value,
 }
 
+/// How a label behaves beyond its text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LabelAttrs {
+    /// A working guess, left on the naming worklist.
+    pub provisional: bool,
+}
+
 pub struct Region {
     space: AddressSpace,
     /// The driver that decodes this region's bytes. `None` until a CPU is set,
@@ -164,6 +171,8 @@ pub struct Region {
     byte_ranges: BTreeMap<AddressValue, ByteRange>,
     equivalents: BTreeMap<AddressValue, EquivalentRange>,
     labels: BTreeMap<AddressValue, String>,
+    /// Addresses whose label is a working guess.
+    draft_labels: std::collections::BTreeSet<AddressValue>,
     /// What an instruction's ambiguous operand turned out to mean, keyed by the
     /// instruction.
     operand_types: BTreeMap<AddressValue, OperandType>,
@@ -195,6 +204,7 @@ impl Region {
             address_bits: None,
             disabled_platform_addresses: BTreeMap::new(),
             operand_types: BTreeMap::new(),
+            draft_labels: std::collections::BTreeSet::new(),
             comments: BTreeMap::new(),
             functions: BTreeMap::new(),
             overrides: BTreeMap::new(),
@@ -829,9 +839,19 @@ impl Region {
         (offset..end).into()
     }
 
-    pub fn set_label(&mut self, offset: AddressValue, label: &str) {
-        self.labels
-            .insert(offset as AddressValue, label.to_string());
+    /// Name `offset`.
+    pub fn set_label(&mut self, offset: AddressValue, label: &str, attrs: LabelAttrs) {
+        self.labels.insert(offset, label.to_string());
+        if attrs.provisional {
+            self.draft_labels.insert(offset);
+        } else {
+            self.draft_labels.remove(&offset);
+        }
+    }
+
+    /// Whether the label at `offset` is a working guess rather than finalized.
+    pub fn is_draft_label(&self, offset: AddressValue) -> bool {
+        self.draft_labels.contains(&offset)
     }
 
     pub fn clear_label(&mut self, offset: AddressValue) {
@@ -1079,10 +1099,8 @@ impl Region {
     }
 
     /// Decode bytes as code from `start` to `end` in a linear fashion without
-    /// committing anything, ignoring control flow, and following fall-through
-    /// up to `max_lines` instructions and stopping at the first return or
-    /// unconditional jump. Lets a caller judge whether a run is code before
-    /// disassembling it (out-of-range targets flag likely garbage).
+    /// committing anything, ignoring control flow. Detects if a run is code
+    /// before disassembling it (out-of-range targets flags likely garbage).
     pub(crate) fn scratch_decode_linear(
         &self,
         start: AddressValue,
@@ -1184,7 +1202,9 @@ impl Region {
         let index = self.xref_index();
         let mut out = Vec::new();
         for (target, edges) in index.targets() {
-            if target.space != self.space || self.get_label(target.offset).is_some() {
+            let finalized =
+                self.get_label(target.offset).is_some() && !self.is_draft_label(target.offset);
+            if target.space != self.space || finalized {
                 continue;
             }
             let kind = if edges.iter().any(|e| e.kind == XrefType::Call) {
@@ -1390,7 +1410,7 @@ impl Region {
                     run = Some((start, equivalent_range.end));
                 }
                 (Some((start, end)), _) => {
-                    commands.push(boxed(DisassembleRange::new((space, start..end))));
+                    commands.push(boxed(DisassembleRange::new((space, start..end), false)));
                     run = island.then_some((offset, equivalent_range.end));
                 }
                 (None, true) => run = Some((offset, equivalent_range.end)),
@@ -1398,7 +1418,7 @@ impl Region {
             }
         }
         if let Some((start, end)) = run {
-            commands.push(boxed(DisassembleRange::new((space, start..end))));
+            commands.push(boxed(DisassembleRange::new((space, start..end), false)));
         }
 
         for (&(offset, index), value) in &self.overrides {
@@ -1410,7 +1430,11 @@ impl Region {
         }
 
         for (&offset, label) in &self.labels {
-            commands.push(boxed(SetLabel::new((space, offset), label.clone())));
+            commands.push(boxed(SetLabel::new(
+                (space, offset),
+                label.clone(),
+                self.draft_labels.contains(&offset),
+            )));
         }
         for (&offset, comment) in &self.comments {
             commands.push(boxed(SetComment::new((space, offset), comment.clone())));
@@ -1454,8 +1478,10 @@ impl Region {
         let index = self.xref_index();
         for (target, edges) in index.targets() {
             // Implicit code labels only apply to targets in this region's own
-            // (code) space; data references into other spaces are not labelled.
-            if target.space != self.space || self.get_label(target.offset).is_some() {
+            // (code) space, data references into other spaces are not labelled.
+            let finalized =
+                self.get_label(target.offset).is_some() && !self.is_draft_label(target.offset);
+            if target.space != self.space || finalized {
                 continue;
             }
             let kind = if edges.iter().any(|e| e.kind == XrefType::Call) {
@@ -1964,7 +1990,7 @@ mod tests {
     fn operand_override_preserves_other_operands() {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[0xB5, 0x20, 0x10]);
-        region.set_label(0x13, "target");
+        region.set_label(0x13, "target", crate::region::LabelAttrs::default());
         region.set_equivalent(0, Equivalent::Code).unwrap();
         region.set_operand_override(0, 2, Some(OperandOverride::Label("target".into())));
         let implicit_labels = ImplicitLabels::default();
@@ -2004,7 +2030,7 @@ mod tests {
         region.set_bytes("test.bin", 0, 0, &[1, 2, 3, 4]);
         region.set_equivalent(0, Equivalent::Unknown(2)).unwrap();
         region.set_equivalent(2, Equivalent::Unknown(2)).unwrap();
-        region.set_label(2, "mid");
+        region.set_label(2, "mid", crate::region::LabelAttrs::default());
         let raws: Vec<_> = region
             .render(CODE, &ImplicitLabels::default())
             .into_iter()
