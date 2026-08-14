@@ -125,6 +125,7 @@ mod extent;
 mod function;
 mod label;
 mod note;
+mod platform_addr;
 mod operand;
 
 use std::any::Any;
@@ -141,6 +142,7 @@ pub use extent::{DisassembleRange, MarkData, MarkUnknown};
 pub use function::{ClearFunction, SetFunction};
 pub use label::{ClearLabel, SetLabel};
 pub use note::{ClearNote, SetNote};
+pub use platform_addr::{DisablePlatformAddress, RestorePlatformAddress};
 pub use operand::OverrideOperand;
 
 use scattered_collect::{ScatteredMap, gather};

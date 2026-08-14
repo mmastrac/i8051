@@ -195,14 +195,22 @@ impl Db {
             commands.push(boxed(SetCpu::new(platform.name().to_string())));
         }
         for (&space, region) in &self.regions {
-            // Emit SetAddressBits first.
+            // Emit SetAddressBits first ...
             if let Some(bits) = region.address_bits() {
                 commands.push(boxed(crate::commands::SetAddressBits {
                     space: space.dsl_name().to_string(),
                     bits: AddressValue::from(bits),
                 }));
             }
+            // ... then the region's own commands
             commands.extend(region.to_commands(space));
+            // ... then any disabled platform addresses
+            for (offset, reason) in region.disabled_platform_addresses() {
+                commands.push(boxed(crate::commands::DisablePlatformAddress {
+                    address: (space, offset).into(),
+                    reason: reason.to_string(),
+                }));
+            }
         }
         // Notes live outside the regions, so emit them separately or a DB would
         // not round-trip. Iterating by NoteId (Lamport order) is deterministic,

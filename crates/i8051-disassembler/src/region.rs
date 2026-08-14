@@ -125,6 +125,8 @@ pub struct Region {
     byte_ranges: BTreeMap<AddressValue, ByteRange>,
     equivalents: BTreeMap<AddressValue, EquivalentRange>,
     labels: BTreeMap<AddressValue, String>,
+    /// Platform addresses we've chosen to disable (w/ a reason).
+    disabled_platform_addresses: BTreeMap<AddressValue, String>,
     /// How many address lines the board actually decodes for this space, `None`
     /// means every line is decoded.
     address_bits: Option<u8>,
@@ -149,6 +151,7 @@ impl Region {
             equivalents: BTreeMap::new(),
             labels: BTreeMap::new(),
             address_bits: None,
+            disabled_platform_addresses: BTreeMap::new(),
             comments: BTreeMap::new(),
             functions: BTreeMap::new(),
             overrides: BTreeMap::new(),
@@ -162,6 +165,32 @@ impl Region {
         self.platform = platform;
         self.refresh_weak();
         self.invalidate_xrefs();
+    }
+
+    /// Record that a platform address is disabled. Returns the previous reason,
+    /// if it was already disabled.
+    pub fn disable_platform_address(
+        &mut self,
+        offset: AddressValue,
+        reason: String,
+    ) -> Option<String> {
+        self.disabled_platform_addresses.insert(offset, reason)
+    }
+
+    /// Restore the platform's claim about `offset`, returning the reason it had.
+    pub fn enable_platform_address(&mut self, offset: AddressValue) -> Option<String> {
+        self.disabled_platform_addresses.remove(&offset)
+    }
+
+    pub fn platform_address_disabled(&self, offset: AddressValue) -> bool {
+        self.disabled_platform_addresses.contains_key(&offset)
+    }
+
+    /// Every disabled address with its reason, in address order.
+    pub fn disabled_platform_addresses(&self) -> impl Iterator<Item = (AddressValue, &str)> + '_ {
+        self.disabled_platform_addresses
+            .iter()
+            .map(|(&addr, reason)| (addr, reason.as_str()))
     }
 
     /// Narrow this space to the address lines the board decodes. `None` restores
