@@ -59,7 +59,8 @@ pub struct UnmapBytes {
 }
 
 register!(UnmapBytes(
-    /// Unmap the bytes covered by `addresses`. The inverse of `map_bytes`.
+    /// Unmap the bytes covered by `addresses`, along with whatever classified
+    /// them. The inverse of `map_bytes`.
     addresses: SpaceAddressSet,
 ));
 
@@ -72,14 +73,40 @@ impl Apply for UnmapBytes {
         let Self { addresses } = self;
         let space = addresses.space;
         let region = db.region_mut(space);
+
+        // Refuse to cut a classification
+        for range in addresses.ranges() {
+            for (start, equivalent) in region.snapshot_equivalents(range.start, range.end - range.start) {
+                if start < range.start || equivalent.end > range.end {
+                    return Err(Error::PartialEquivalent {
+                        at: (space, range.start).into(),
+                        existing: equivalent.equivalent.kind(),
+                        start,
+                        end: equivalent.end,
+                    });
+                }
+            }
+        }
+
         let mut before = Vec::new();
+        let mut equivalents = Vec::new();
         for range in addresses.ranges() {
             let offset = range.start;
             let size = range.end - range.start;
+            for (start, equivalent) in region.snapshot_equivalents(offset, size) {
+                equivalents.push(super::equivalent::restore_equivalent(
+                    space, start, equivalent,
+                ));
+            }
+            region.clear_equivalents(offset, size);
             before.extend(region.snapshot_byte_ranges(offset, size));
             region.unmap_bytes(offset, size);
         }
-        Ok(undo_byte_ranges(addresses, before))
+
+        // Bytes first, so the classifications land on mapped memory.
+        let mut undo = undo_byte_ranges(addresses, before);
+        undo.extend(equivalents);
+        Ok(undo)
     }
 }
 
@@ -155,3 +182,73 @@ serialize_test!(
         value: 0xFF,
     }
 );
+
+#[cfg(test)]
+mod unmap_bytes_tests {
+    use super::*;
+    use crate::commands::{MarkUnknown, boxed};
+    use crate::db::Db;
+    use crate::platform::i8051::CODE;
+
+    struct Env;
+    impl crate::commands::Environment for Env {
+        fn load_file_bytes(
+            &self,
+            _f: &str,
+            offset: usize,
+            size: AddressValue,
+        ) -> Result<Vec<u8>, std::io::Error> {
+            Ok(vec![0x00; offset + size as usize][offset..].to_vec())
+        }
+    }
+
+    fn mapped() -> Db {
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
+        db.apply(
+            boxed(MapBytes::new((CODE, 0), "img", 0usize, 0x10u32)),
+            Some(&Env),
+        )
+        .unwrap();
+        db
+    }
+
+    #[test]
+    fn unmapping_takes_the_classification_and_undo_puts_both_back() {
+        let mut db = mapped();
+        db.apply(boxed(MarkUnknown::new((CODE, 0x8u32..0x9u32))), Some(&Env))
+            .unwrap();
+
+        let undo = db
+            .apply(boxed(UnmapBytes::new((CODE, 0x8u32..0x9u32))), Some(&Env))
+            .unwrap();
+
+        let dsl = crate::store::to_dsl_many(&db.to_commands());
+        let mut replayed = Db::new();
+        for command in crate::store::from_dsl_many(&dsl).expect("export parses") {
+            replayed
+                .apply(command, Some(&Env))
+                .expect("every exported command must apply to a fresh database");
+        }
+
+        for command in undo {
+            db.apply(command, Some(&Env)).unwrap();
+        }
+        let restored = crate::store::to_dsl_many(&db.to_commands());
+        assert!(restored.contains("mark_unknown"), "{restored}");
+    }
+
+    #[test]
+    fn unmapping_part_of_a_classification_is_refused_and_changes_nothing() {
+        let mut db = mapped();
+        db.apply(boxed(MarkUnknown::new((CODE, 0x4u32..0xCu32))), Some(&Env))
+            .unwrap();
+        let before = crate::store::to_dsl_many(&db.to_commands());
+
+        let err = db
+            .apply(boxed(UnmapBytes::new((CODE, 0x8u32..0x9u32))), Some(&Env))
+            .expect_err("a partial cut must not be obeyed");
+        assert!(matches!(err, Error::PartialEquivalent { .. }), "{err:?}");
+
+        assert_eq!(crate::store::to_dsl_many(&db.to_commands()), before);
+    }
+}

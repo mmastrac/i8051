@@ -5,7 +5,7 @@ use super::{Apply, Command, DisassembleRange, Environment, MarkData, MarkUnknown
 
 /// Rebuild a cleared strong equivalent as its verb command, so an undo
 /// round-trips through the DSL.
-fn restore_equivalent(
+pub(super) fn restore_equivalent(
     space: AddressSpace,
     start: AddressValue,
     range: EquivalentRange,

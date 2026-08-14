@@ -386,6 +386,13 @@ pub enum Error {
         at: SpaceAddressValue,
         existing: EquivalentKind,
     },
+    /// Unmapping would have cut a classification that extends past the range.
+    PartialEquivalent {
+        at: SpaceAddressValue,
+        existing: EquivalentKind,
+        start: AddressValue,
+        end: AddressValue,
+    },
     InvalidAddress(AddressValue),
     InvalidEquivalent,
     NotUndefined(AddressValue),
@@ -406,6 +413,25 @@ impl std::fmt::Display for Error {
                     "range overlaps existing {kind} at {}:0x{:x}",
                     at.space.dsl_name(),
                     at.offset
+                )
+            }
+            Self::PartialEquivalent {
+                at,
+                existing,
+                start,
+                end,
+            } => {
+                let kind = match existing {
+                    EquivalentKind::Code => "code",
+                    EquivalentKind::Data => "data",
+                    EquivalentKind::Unknown => "a barrier",
+                };
+                let space = at.space.dsl_name();
+                write!(
+                    f,
+                    "unmapping would cut {kind} at {space}:0x{start:x}..0x{end:x}, which reaches \
+                     past the bytes being unmapped, `clear_equivalents` first, or unmap the \
+                     a larger range"
                 )
             }
             Self::CpuAlreadySet { current } => {
