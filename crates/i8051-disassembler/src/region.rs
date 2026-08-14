@@ -934,6 +934,41 @@ impl Region {
         out
     }
 
+    /// The extent of the instruction decoded at `offset`, if one starts there.
+    pub fn instruction_range(&self, offset: AddressValue) -> Option<(AddressValue, AddressValue)> {
+        match self.get_equivalent(offset) {
+            EquivalentAt::Defined { range, .. } if matches!(range.equivalent, Equivalent::Code) => {
+                Some((offset, range.end))
+            }
+            _ => None,
+        }
+    }
+
+    /// The instruction `offset` falls inside, if it is not at its start.
+    pub fn covering_instruction(
+        &self,
+        offset: AddressValue,
+    ) -> Option<(AddressValue, AddressValue)> {
+        match self.get_equivalent(offset) {
+            EquivalentAt::Defined { start, range }
+                if matches!(range.equivalent, Equivalent::Code) && start != offset =>
+            {
+                Some((start, range.end))
+            }
+            _ => None,
+        }
+    }
+
+    /// Narrowest address width covering every mapped byte.
+    pub fn covering_address_bits(&self) -> u8 {
+        let end = self.end();
+        let mut bits = 1u8;
+        while bits < 32 && (1u64 << bits) < u64::from(end) {
+            bits += 1;
+        }
+        bits
+    }
+
     /// Unmapped stretches sitting between mapped bytes that should arguably be
     /// mapper or filled.
     pub fn mapping_gaps(&self) -> Vec<(AddressValue, AddressValue)> {

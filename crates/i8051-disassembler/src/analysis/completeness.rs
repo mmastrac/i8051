@@ -226,15 +226,124 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
             };
             let addr = fmt_addr(space, target.target);
             let from = fmt_addr(space, target.from);
-            let (kind, detail) = if target.misaligned {
+            // The whole decoded run.
+            let extent_end = region
+                .instruction_range(target.from)
+                .map(|(_, end)| end)
+                .unwrap_or(target.from + 1);
+            let extent_start = code_run_start(db, space, target.from);
+            let extent = format!("{}:{extent_start:#x}..{extent_end:#x}", space.dsl_name());
+            let retire = retire_vector_first(db, space, extent_start, extent_end);
+            // `mark_data` is for undefined bytes only, so decoded ones have to
+            // be cleared first.
+            let reclassify: Vec<String> =
+                match settle_reference_first(db, space, extent_start, extent_end) {
+                    Some(blocked) => vec![blocked],
+                    None => vec![
+                        format!(
+                            "clear_equivalents(addresses={}:{{{extent_start:#x}..{extent_end:#x}}})",
+                            space.dsl_name()
+                        ),
+                        format!(
+                            "mark_data(range={extent}, data_type=DataType::Byte)  # if these bytes \
+                             are not code"
+                        ),
+                    ],
+                };
+            let (kind, anchor, detail, suggested) = if !region.has_byte(target.target) {
+                {
+                    let space_name = space.dsl_name();
+                    let bits = region.covering_address_bits();
+                    let mut suggested = vec![format!("peek(address={from}, lines=4)")];
+                    suggested.extend(retire.clone());
+                    suggested.extend(reclassify.clone());
+                    if region.address_bits().is_none() {
+                        suggested.push(format!(
+                            "set_address_bits(space=\"{space_name}\", bits={bits})"
+                        ));
+                    }
+                    (
+                        "target_outside_image",
+                        target.from,
+                        format!(
+                            "{verb} from {from} to {addr} is outside the mapped image, so it \
+                             cannot be followed. These bytes may not be code, the image may be \
+                             incomplete, or you may need to limit the address width. `peek`ing the \
+                             source may help decide"
+                        ),
+                        suggested,
+                    )
+                }
+            } else if target.misaligned {
+                let covering = region
+                    .covering_instruction(target.target)
+                    .map(|(start, end)| format!("{start:#x}..{end:#x}"))
+                    .unwrap_or_else(|| format!("{:#x}", target.target));
                 (
                     "misaligned_target",
-                    format!("{verb} from {from} to {addr} lands inside an existing instruction"),
+                    target.from,
+                    format!(
+                        "{verb} from {from} to {addr} lands inside the instruction at {}:{covering}, \
+                         not at its start. Either the bytes at {from} are not code (e.g.: a branch \
+                         decoded out of filler) or that instruction is decoded from the wrong \
+                         offset. `peek`ing from both ends may help decide",
+                        space.dsl_name()
+                    ),
+                    {
+                        let mut suggested = vec![format!("peek(address={from}, lines=4)")];
+                        suggested.extend(retire.clone());
+                        suggested.extend(reclassify.clone());
+                        suggested.push(format!(
+                            "clear_equivalents(addresses={}:{{{covering}}})",
+                            space.dsl_name()
+                        ));
+                        suggested.push(format!("auto_disassemble(address={addr})"));
+                        suggested
+                    },
+                )
+            } else if let crate::db::EquivalentAt::Defined { start, range } =
+                region.get_equivalent(target.target)
+                && range.equivalent.kind() != crate::db::EquivalentKind::Code
+            {
+                let space_name = space.dsl_name();
+                let barrier = format!("{space_name}:{start:#x}..{:#x}", range.end);
+                let what = match range.equivalent.kind() {
+                    crate::db::EquivalentKind::Data => "data",
+                    _ => "unknown",
+                };
+                (
+                    "unfollowed_target",
+                    target.target,
+                    format!(
+                        "{verb} from {from} to {addr} has not been disassembled, and {addr} sits \
+                         inside {barrier}, which is marked {what}. Either those \
+                         bytes are code and the barrier is wrong, or the {verb} at {from} is \
+                         filler that only looks like one. `peek`ing both may help decide"
+                    ),
+                    {
+                        let mut suggested = vec![
+                            format!("peek(address={addr}, lines=4)"),
+                            format!("peek(address={from}, lines=4)"),
+                            format!(
+                                "clear_equivalents(addresses={space_name}:{{{start:#x}..{:#x}}})  \
+                                 # if {addr} is code",
+                                range.end
+                            ),
+                            format!(
+                                "auto_disassemble(address={addr})  # after clearing the barrier"
+                            ),
+                        ];
+                        suggested.extend(retire.clone());
+                        suggested.extend(reclassify.clone());
+                        suggested
+                    },
                 )
             } else {
                 (
                     "unfollowed_target",
+                    target.target,
                     format!("{verb} from {from} to {addr} has not been disassembled"),
+                    vec![format!("auto_disassemble(address={addr})")],
                 )
             };
             items.push(item(
@@ -243,10 +352,10 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
                 Severity::High,
                 space,
                 rank,
-                target.target,
+                anchor,
                 None,
                 detail,
-                vec![format!("auto_disassemble(address={addr})")],
+                suggested,
             ));
         }
 
@@ -494,6 +603,92 @@ fn first_caller(db: &Db, space: AddressSpace, offset: AddressValue) -> Option<St
         Some(name) => Some(format!("{from} ({name})")),
         None => Some(from),
     }
+}
+
+fn is_live_entry_point(db: &Db, space: AddressSpace, offset: AddressValue) -> bool {
+    let Some(platform) = db.platform() else {
+        return false;
+    };
+    platform
+        .entry_points()
+        .iter()
+        .any(|e| e.space == space && e.offset == offset)
+        && !db.region(space).is_some_and(|r| r.platform_address_disabled(offset))
+}
+
+fn code_run_start(db: &Db, space: AddressSpace, from: AddressValue) -> AddressValue {
+    let Some(region) = db.region(space) else {
+        return from;
+    };
+    let mut start = from;
+    // Bounded because a pathological decode could otherwise walk the image.
+    for _ in 0..64 {
+        if start == 0 || region.get_label(start).is_some() {
+            break;
+        }
+        if !db.xrefs_to(&PhysicalAddr { space, offset: start }).is_empty() {
+            break;
+        }
+        match region.get_equivalent(start - 1) {
+            crate::db::EquivalentAt::Defined { start: prev_start, range }
+                if range.equivalent.kind() == crate::db::EquivalentKind::Code
+                    && range.end == start =>
+            {
+                // A live vector's instruction belongs to that vector.
+                if is_live_entry_point(db, space, prev_start) {
+                    break;
+                }
+                start = prev_start
+            }
+            _ => break,
+        }
+    }
+    start
+}
+
+fn settle_reference_first(
+    db: &Db,
+    space: AddressSpace,
+    start: AddressValue,
+    end: AddressValue,
+) -> Option<String> {
+    let bounds = start..end;
+    let (target, from) = (start..end).find_map(|offset| {
+        db.xrefs_to(&PhysicalAddr { space, offset })
+            .into_iter()
+            .find(|x| {
+                matches!(x.xref_type, XrefType::Call | XrefType::Jump)
+                    && !bounds.contains(&x.from.offset)
+            })
+            .map(|x| (offset, x.from.offset))
+    })?;
+    let target = fmt_addr(space, target);
+    let from = fmt_addr(space, from);
+    Some(format!(
+        "peek(address={from}, lines=4)  # {target} cannot be marked data while {from} branches \
+         to it; settle whether {from} is code first"
+    ))
+}
+
+fn retire_vector_first(
+    db: &Db,
+    space: AddressSpace,
+    start: AddressValue,
+    end: AddressValue,
+) -> Option<String> {
+    let platform = db.platform()?;
+    let region = db.region(space);
+    let entry = platform.entry_points().iter().find(|e| {
+        e.space == space
+            && (start..end).contains(&e.offset)
+            && !region.is_some_and(|r| r.platform_address_disabled(e.offset))
+    })?;
+    let at = fmt_addr(space, entry.offset);
+    Some(format!(
+        "disable_platform_address(address={at}, reason=\"...\")  # {at} ({}) is a vector; its \
+         bytes cannot be classified until it is retired",
+        entry.name
+    ))
 }
 
 fn fmt_addr(space: AddressSpace, offset: AddressValue) -> String {
@@ -750,5 +945,109 @@ mod tests {
             .expect("a hole between mapped bytes must be reported");
         assert_eq!(gap.range.as_deref(), Some("CODE:0x2..0x4"));
         assert!(gap.detail.contains("2 byte(s)"), "{}", gap.detail);
+    }
+
+    #[test]
+    fn a_target_outside_the_image_asks_about_the_source() {
+        // LJMP 0xF004 at 0x0, then RET. The target is far outside a 4-byte image.
+        struct Img;
+        impl crate::commands::Environment for Img {
+            fn load_file_bytes(
+                &self,
+                _f: &str,
+                offset: usize,
+                size: AddressValue,
+            ) -> Result<Vec<u8>, std::io::Error> {
+                const BYTES: [u8; 4] = [0x02, 0xF0, 0x04, 0x22];
+                Ok(BYTES[offset..offset + size as usize].to_vec())
+            }
+        }
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
+        db.apply(boxed(MapBytes::new((CODE, 0), "img", 0usize, 4u32)), Some(&Img))
+            .unwrap();
+        db.apply(boxed(AutoDisassemble::new((CODE, 0u32))), Some(&Img))
+            .unwrap();
+
+        let report = assess_at(&db, Gate::Structural);
+        let item = report
+            .items
+            .iter()
+            .find(|i| i.kind == "target_outside_image")
+            .expect("a target outside the image must be raised");
+        assert_eq!(item.address, "CODE:0x0", "anchored on the source, not 0xf004");
+        // All three readings are offered, including the wiring one.
+        assert!(item.suggested.iter().any(|c| c.starts_with("peek(address=CODE:0x0")));
+        assert!(
+            item.suggested.iter().any(|c| c.starts_with("set_address_bits(")),
+            "{:?}",
+            item.suggested
+        );
+    }
+
+    #[test]
+    fn narrowing_the_address_lines_retires_the_item() {
+        struct Img;
+        impl crate::commands::Environment for Img {
+            fn load_file_bytes(
+                &self,
+                _f: &str,
+                offset: usize,
+                size: AddressValue,
+            ) -> Result<Vec<u8>, std::io::Error> {
+                // LJMP 0xF002 — with three lines decoded that is 0x2, in range.
+                const BYTES: [u8; 8] =
+                    [0x02, 0xF0, 0x02, 0x22, 0x00, 0x22, 0x00, 0x22];
+                Ok(BYTES[offset..offset + size as usize].to_vec())
+            }
+        }
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
+        db.apply(boxed(MapBytes::new((CODE, 0), "img", 0usize, 8u32)), Some(&Img))
+            .unwrap();
+        db.apply(boxed(AutoDisassemble::new((CODE, 0u32))), Some(&Img))
+            .unwrap();
+        assert!(
+            assess_at(&db, Gate::Structural)
+                .counts
+                .contains_key("target_outside_image")
+        );
+
+        db.apply(
+            boxed(crate::commands::SetAddressBits {
+                space: "CODE".to_string(),
+                bits: 3,
+            }),
+            Some(&Img),
+        )
+        .unwrap();
+        assert!(
+            !assess_at(&db, Gate::Structural)
+                .counts
+                .contains_key("target_outside_image"),
+            "declaring the wiring answers it"
+        );
+    }
+
+    /// A barrier stops the sweep and `auto_disassemble` reports success anyway.
+    #[test]
+    fn a_target_behind_a_barrier_says_so() {
+        use crate::commands::MarkData;
+        use crate::db::DataType;
+
+        let db = db_with(vec![
+            boxed(DisassembleRange::new((CODE, 0u32..4u32), false)),
+            boxed(MarkData::new((CODE, 4u32..6u32), DataType::Byte)),
+        ]);
+        let report = assess_at(&db, Gate::Structural);
+        let item = report
+            .items
+            .iter()
+            .find(|i| i.kind == "unfollowed_target")
+            .expect("the call target sits behind a data barrier");
+        assert!(item.detail.contains("marked data"), "{}", item.detail);
+        assert!(
+            item.suggested.iter().any(|c| c.starts_with("clear_equivalents(")),
+            "{:?}",
+            item.suggested
+        );
     }
 }
