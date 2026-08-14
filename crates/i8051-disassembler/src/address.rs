@@ -98,6 +98,11 @@ impl<'de> Deserialize<'de> for SpaceAddressRange {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let (space, start, end): (String, u64, u64) =
             deserialize_token(deserializer, ADDRESS_RANGE_TOKEN)?;
+        if end <= start {
+            return Err(serde::de::Error::custom(format!(
+                "address range end must be greater than start (got {start:#x}..{end:#x})"
+            )));
+        }
         Ok(Self {
             space: decode_space::<D>(&space)?,
             range: AddressRange::new(start as AddressValue, end as AddressValue),
@@ -454,5 +459,21 @@ mod tests {
         let json = serde_json::to_string(&set).unwrap();
         assert_eq!(json, r#"["CODE",[[16,19],[32,40],[48,49]]]"#);
         assert_eq!(serde_json::from_str::<SpaceAddressSet>(&json).unwrap(), set);
+    }
+
+    #[test]
+    fn an_inverted_or_empty_range_is_rejected() {
+        for bad in ["CODE:0x20..0x10", "CODE:0x10..0x10"] {
+            let err = crate::store::from_dsl_value::<SpaceAddressRange>(bad)
+                .expect_err("an empty or inverted range is not a range");
+            assert!(
+                err.to_string().contains("end must be greater than start"),
+                "{bad}: {err}"
+            );
+        }
+        // A one-byte range is still fine, at both levels.
+        assert!(crate::store::from_dsl_value::<SpaceAddressRange>("CODE:0x10..0x11").is_ok());
+        assert!(crate::store::from_dsl("mark_unknown(range=CODE:0x10..0x11)").is_ok());
+        assert!(crate::store::from_dsl("mark_unknown(range=CODE:0x20..0x10)").is_err());
     }
 }
