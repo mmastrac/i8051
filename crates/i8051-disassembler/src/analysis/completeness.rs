@@ -120,9 +120,25 @@ pub struct Item {
     pub detail: String,
     /// Command(s) that would resolve the item, usually runnable verbatim.
     pub suggested: Vec<String>,
-    /// Ordering key; not serialized.
+    /// Ordering key, not serialized.
     #[serde(skip)]
-    sort: (u8, u8, usize, AddressValue),
+    sort: (u8, u8, u8, u32, AddressValue, usize, AddressValue),
+}
+
+impl Item {
+    /// Sort behind peers without removing it. Not suppressed, just sinks down
+    /// the worklist.
+    fn deferred(mut self) -> Self {
+        self.sort.2 = 1;
+        self
+    }
+
+    /// Heavily-referenced targets first.
+    fn ranked_by_callers(mut self, callers: usize, first_caller: AddressValue) -> Self {
+        self.sort.3 = u32::MAX - u32::try_from(callers).unwrap_or(u32::MAX);
+        self.sort.4 = first_caller;
+        self
+    }
 }
 
 /// Mapped-byte coverage, summed across spaces.
@@ -280,7 +296,25 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
             if let Some(insn) = region.instruction_text(offset) {
                 detail.push_str(&format!("; starts `{insn}`"));
             }
-            items.push(item(
+            // Either mark means an earlier pass already engaged with this
+            // address and still did not name it.
+            let draft = region.is_draft_label(offset);
+            let noted = !db.get_notes_overlapping(space, offset..offset + 1).is_empty();
+            if draft {
+                let current = region.get_label(offset).unwrap_or_default();
+                detail.push_str(&format!(
+                    "; currently the working name `{current}` — sharpen it, or set it again \
+                     without provisional once you are satisfied"
+                ));
+            } else if noted {
+                detail.push_str(
+                    "; a note already covers this address, so an earlier pass studied it \
+                     without naming it — read that note first",
+                );
+            }
+            let incoming = db.xrefs_to(&PhysicalAddr { space, offset });
+            let first_ref = incoming.iter().map(|x| x.from.offset).min().unwrap_or(offset);
+            let entry = item(
                 Phase::Name,
                 "provisional_label",
                 Severity::Low,
@@ -290,7 +324,9 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
                 None,
                 detail,
                 vec![format!("set_label(address={addr}, label=\"...\")")],
-            ));
+            )
+            .ranked_by_callers(incoming.len(), first_ref);
+            items.push(if draft || noted { entry.deferred() } else { entry });
         }
 
         // A named routine with no note is understood but unrecorded.
@@ -364,6 +400,14 @@ fn item(
     detail: String,
     suggested: Vec<String>,
 ) -> Item {
+    // Validate the suggestion DSL in debug mode so we don't accidentally hand
+    // off a bad one.
+    #[cfg(debug_assertions)]
+    for suggestion in &suggested {
+        if let Err(e) = crate::store::parse_call(suggestion) {
+            panic!("worklist suggestion for `{kind}` does not parse: {suggestion:?}: {e}");
+        }
+    }
     let address = fmt_addr(space, offset);
     Item {
         id: format!("{}/{}/{}", phase.name(), kind, address),
@@ -374,7 +418,7 @@ fn item(
         range,
         detail,
         suggested,
-        sort: (phase.rank(), severity.rank(), space_rank, offset),
+        sort: (phase.rank(), severity.rank(), 0, u32::MAX, 0, space_rank, offset),
     }
 }
 
@@ -526,5 +570,55 @@ mod tests {
         assert!(!named.done);
         assert_eq!(named.phase, Some(Phase::Name));
         assert_eq!(named.blocking, vec![Phase::Name]);
+    }
+
+    /// Noting an address must reorder it, not retire it.
+    #[test]
+    fn a_noted_provisional_label_sorts_last_but_still_blocks_done() {
+        use crate::commands::SetNote;
+
+        let db = db_with(vec![boxed(AutoDisassemble::new((CODE, 0u32)))]);
+        let before = assess_at(&db, Gate::Named);
+        let count = |c: &Completeness| {
+            c.items.iter().filter(|i| i.kind == "provisional_label").count()
+        };
+        assert!(count(&before) >= 1, "expected an unnamed target");
+        assert!(!before.done);
+
+        let mut db = db;
+        let note = crate::note::Note::new(None, "no clue man");
+        db.apply(boxed(SetNote::new((CODE, 4u32..5u32), note)), Some(&Env))
+            .unwrap();
+
+        let after = assess_at(&db, Gate::Named);
+        let noted = after
+            .items
+            .iter()
+            .find(|i| i.kind == "provisional_label" && i.address.contains("0x4"))
+            .expect("the noted address must stay on the worklist");
+        assert_eq!(noted.sort.2, 1, "a studied address sorts late");
+        assert!(noted.detail.contains("read that note first"), "{}", noted.detail);
+
+        // Ordering only: still present, still blocking.
+        assert!(!after.done, "noting an address must not retire it");
+        assert_eq!(count(&after), count(&before));
+    }
+
+    #[test]
+    fn unnamed_targets_are_ranked_by_how_many_reference_them() {
+        let db = db_with(vec![boxed(AutoDisassemble::new((CODE, 0u32)))]);
+        let report = assess_at(&db, Gate::Named);
+        let ranked: Vec<(u32, &str)> = report
+            .items
+            .iter()
+            .filter(|i| i.kind == "provisional_label")
+            .map(|i| (i.sort.3, i.address.as_str()))
+            .collect();
+        assert!(!ranked.is_empty());
+        // sort.3 is inverted, so it must be non-decreasing across the list.
+        assert!(
+            ranked.windows(2).all(|w| w[0].0 <= w[1].0),
+            "worklist not ordered by caller count: {ranked:?}"
+        );
     }
 }

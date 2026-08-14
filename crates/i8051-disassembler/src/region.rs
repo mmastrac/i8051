@@ -1711,8 +1711,7 @@ impl Region {
         Ok(())
     }
 
-    /// The length of the coalesced raw region at `addr`. Nearest address after
-    /// `addr` needing its own line.
+    /// Nearest address after `addr` needing its own line.
     fn next_annotation(
         &self,
         addr: AddressValue,
@@ -1730,6 +1729,7 @@ impl Region {
         .min()
     }
 
+    /// The length of the coalesced raw region at `addr`.
     fn raw_span(&self, addr: AddressValue, implicit_labels: &Labels) -> AddressValue {
         let boundary = self
             .next_annotation(addr, implicit_labels)
