@@ -137,18 +137,31 @@ pub struct RegionDef {
     pub area_header: &'static str,
 }
 
-/// A processor driver: decodes bytes and declares the CPU's address regions and
-/// known entry points.
+/// A known CPU entry point.
 #[derive(Debug, Clone, Copy)]
 pub struct EntryPoint {
     pub space: AddressSpace,
     pub offset: AddressValue,
     /// The architectural name, e.g. `INT_timer0`.
     pub name: &'static str,
-    /// What the hardware does here, for a reader who does not know the CPU.
+    /// What the hardware does here.
     pub reason: &'static str,
 }
 
+/// The canonical address for a location.
+/// 
+/// Some locations may be aliases (e.g.: on the 8051, bit registers are just
+/// subviews of other SFRs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CanonicalAddr {
+    pub space: AddressSpace,
+    pub offset: AddressValue,
+    /// The bit selected within that byte, when the reference was to a bit.
+    pub bit: Option<u8>,
+}
+
+/// A processor driver: decodes bytes and declares the CPU's address regions and
+/// known entry points.
 pub trait Platform: Send + Sync {
     /// A short identifier for the CPU (`"i8051"`, `"mos6502"`, ...).
     fn name(&self) -> &str;
@@ -161,6 +174,11 @@ pub trait Platform: Send + Sync {
     /// can be disabled if unused or not appropriate for a given database.
     fn entry_points(&self) -> &[EntryPoint] {
         &[]
+    }
+
+    /// Resolve an address to the storage it aliases (or itself if it is not an alias).
+    fn canonicalize(&self, space: AddressSpace, offset: AddressValue) -> CanonicalAddr {
+        CanonicalAddr { space, offset, bit: None }
     }
 
     /// The longest instruction in bytes, the fetch window for decoding.

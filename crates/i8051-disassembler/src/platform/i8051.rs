@@ -9,11 +9,11 @@ use std::sync::Arc;
 
 use ::i8051::{Instruction, Mnemonic, Operand};
 
-use crate::address::{AddressSpace, XrefType};
+use crate::address::{AddressSpace, AddressValue, XrefType};
 
 use super::{
-    Certainty, ControlFlow, DataRef, DecodedInsn, EntryPoint, Platform, PlatformRef, RegionDef,
-    RegionKind,
+    CanonicalAddr, Certainty, ControlFlow, DataRef, DecodedInsn, EntryPoint, Platform, PlatformRef,
+    RegionDef, RegionKind,
 };
 
 /// External program memory — where code lives.
@@ -86,6 +86,27 @@ impl Platform for I8051 {
 
     fn entry_points(&self) -> &[EntryPoint] {
         ENTRY_POINTS
+    }
+
+    /// Bit addresses are a second name for certain SFRs.
+    fn canonicalize(&self, space: AddressSpace, offset: AddressValue) -> CanonicalAddr {
+        if space != BIT || offset > 0xFF {
+            return CanonicalAddr { space, offset, bit: None };
+        }
+        let n = offset as u8;
+        if n < 0x80 {
+            CanonicalAddr {
+                space: IDATA,
+                offset: AddressValue::from(0x20 + n / 8),
+                bit: Some(n % 8),
+            }
+        } else {
+            CanonicalAddr {
+                space: SFR,
+                offset: AddressValue::from(n & 0xF8),
+                bit: Some(n & 0x07),
+            }
+        }
     }
 
     fn max_insn_len(&self) -> usize {
@@ -282,5 +303,33 @@ mod tests {
         );
         // JB 0x20,rel (20 20 05) is a branch AND a bit read.
         assert_eq!(e(&[0x20, 0x20, 0x05]), vec![(CODE, 8, Jump), (BIT, 0x20, Read)]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bit_addresses_resolve_to_the_byte_that_holds_them() {
+        let p = I8051;
+        let bit = |n| p.canonicalize(BIT, n);
+
+        // 0x00-0x7F: bits of internal RAM 0x20-0x2F.
+        assert_eq!(bit(0x65), CanonicalAddr { space: IDATA, offset: 0x2C, bit: Some(5) });
+        assert_eq!(bit(0x00), CanonicalAddr { space: IDATA, offset: 0x20, bit: Some(0) });
+        assert_eq!(bit(0x7F), CanonicalAddr { space: IDATA, offset: 0x2F, bit: Some(7) });
+
+        // 0x80-0xFF: bits of the SFRs on eight-byte boundaries.
+        assert_eq!(bit(0x99), CanonicalAddr { space: SFR, offset: 0x98, bit: Some(1) });
+        assert_eq!(bit(0xB3), CanonicalAddr { space: SFR, offset: 0xB0, bit: Some(3) });
+
+        assert_eq!(
+            p.canonicalize(IDATA, 0x2C),
+            CanonicalAddr { space: IDATA, offset: 0x2C, bit: None }
+        );
+        assert_eq!(p.canonicalize(SFR, 0x99), CanonicalAddr { space: SFR, offset: 0x99, bit: None });
+
+        assert_ne!(bit(0x99).offset, p.canonicalize(SFR, 0x99).offset);
     }
 }
