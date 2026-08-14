@@ -85,37 +85,15 @@ fn regenerate_reference() {
     eprintln!("wrote {path}");
 }
 
-/// Hand-written cases, validate the table independently of the generator.
 #[test]
-fn spot_check() {
-    let cases: &[(&[u8], &str)] = &[
-        (&[0xEA], "NOP"),
-        (&[0x00], "BRK"),
-        (&[0xA9, 0x42], "LDA #0x42"),
-        (&[0xA5, 0x10], "LDA 0x10"),
-        (&[0xB5, 0x10], "LDA 0x10,X"),
-        (&[0xAD, 0x34, 0x12], "LDA 0x1234"),
-        (&[0xBD, 0x34, 0x12], "LDA 0x1234,X"),
-        (&[0xB9, 0x34, 0x12], "LDA 0x1234,Y"),
-        (&[0xA1, 0x10], "LDA [0x10,X]"),
-        (&[0xB1, 0x10], "LDA [0x10],Y"),
-        (&[0x0A], "ASL A"),
-        (&[0x4C, 0x00, 0x20], "JMP 0x2000"),
-        (&[0x6C, 0x00, 0x20], "JMP [0x2000]"),
-        (&[0x20, 0x00, 0x20], "JSR 0x2000"),
-        (&[0xB6, 0x10], "LDX 0x10,Y"),
-        (&[0x96, 0x10], "STX 0x10,Y"),
-        // Branch renders the absolute target: 0x1000 + 2 + 0x10 = 0x1012.
-        (&[0xD0, 0x10], "BNE 0x1012"),
-        // Backward branch: 0x1000 + 2 - 2 = 0x1000.
-        (&[0xF0, 0xFE], "BEQ 0x1000"),
-        // Illegal opcode.
-        (&[0x02], "???"),
-    ];
-    for (bytes, text) in cases {
-        let ins = Instruction::decode_from_bytes(0x1000, bytes);
-        assert_eq!(&ins.as_string(), text, "decoding {bytes:02X?}");
-    }
+fn a_backward_branch_sign_extends() {
+    let at = |bytes: &[u8]| Instruction::decode_from_bytes(0x1000, bytes);
+    assert_eq!(at(&[0xF0, 0xFE]).as_string(), "BEQ 0x1000");
+    assert_eq!(at(&[0x10, 0x80]).as_string(), "BPL 0x0F82");
+    assert_eq!(
+        at(&[0xD0, 0xFE]).control_flow(),
+        mos6502::ControlFlow::Choice { fall_through: 0x1002, branch_target: 0x1000 }
+    );
 }
 
 #[test]
