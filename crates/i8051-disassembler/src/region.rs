@@ -1971,14 +1971,9 @@ mod tests {
         // must agree.
         assert_eq!(region.coverage().undefined, 4);
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
     use crate::commands::{MapBytes, boxed};
     use crate::db::Db;
-    use crate::platform::i8051::CODE;
 
     struct Env(&'static [u8]);
     impl crate::commands::Environment for Env {
