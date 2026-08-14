@@ -370,20 +370,104 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
                     format!("code at {from} runs into undefined bytes at {to}"),
                     vec![format!("auto_disassemble(address={to})")],
                 ),
-                LeakKind::IntoData => (
-                    "flow_into_data",
-                    Severity::Low,
-                    leak.to,
-                    format!("code at {from} runs into data at {to}"),
-                    Vec::new(),
-                ),
-                LeakKind::OffEnd => (
-                    "flow_off_end",
-                    Severity::Low,
-                    leak.from,
-                    format!("code at {from} runs past the end of mapped bytes"),
-                    Vec::new(),
-                ),
+                LeakKind::IntoData => {
+                    let code_end = region
+                        .instruction_range(leak.from)
+                        .map(|(_, end)| end)
+                        .unwrap_or(leak.from + 1);
+                    let code_start = code_run_start(db, space, leak.from);
+                    let code_extent = fmt_range(space, code_start, code_end);
+                    let (data_start, data_end) = match region.get_equivalent(leak.to) {
+                        crate::db::EquivalentAt::Defined { start, range } => (start, range.end),
+                        crate::db::EquivalentAt::Undefined(_) => (leak.to, leak.to + 1),
+                    };
+                    let data_extent = format!("{data_start:#x}..{data_end:#x}");
+                    let as_code = format!(
+                        "clear_equivalents(addresses={}:{{{data_extent}}})  # if {to} is code",
+                        space.dsl_name()
+                    );
+                    let then_decode =
+                        format!("auto_disassemble(address={to})  # after clearing the barrier");
+                    let mut as_filler: Vec<String> =
+                        retire_vector_first(db, space, code_start, code_end)
+                            .into_iter()
+                            .collect();
+                    as_filler.push(format!(
+                        "clear_equivalents(addresses={}:{{{code_start:#x}..{code_end:#x}}})",
+                        space.dsl_name()
+                    ));
+                    as_filler.push(format!(
+                        "mark_data(range={code_extent}, data_type=DataType::Byte)  # if {from} is \
+                         filler rather than code"
+                    ));
+                    let decode = db.peek_linear(space, leak.to, data_end);
+                    let decodes_like_code = decode.out_of_range_targets == 0
+                        && decode.misaligned_targets == 0
+                        && decode.self_misaligned_targets == 0;
+
+                    let mut suggested = vec![format!("peek(address={from}, lines=4)")];
+                    let evidence = if decodes_like_code {
+                        suggested.push(as_code);
+                        suggested.push(then_decode);
+                        suggested.extend(as_filler);
+                        format!("The bytes at {to} do decode like code, so try that reading first")
+                    } else {
+                        suggested.extend(as_filler);
+                        suggested.push(as_code);
+                        suggested.push(then_decode);
+                        format!(
+                            "Decoding {to} as code branches outside the image or into the middle \
+                             of an instruction, so the filler reading is the likelier one"
+                        )
+                    };
+                    (
+                        "flow_into_data",
+                        Severity::Low,
+                        leak.to,
+                        format!(
+                            "code at {from} runs into data at {to}, so execution would fall out \
+                             of code and into bytes classified as data. One of the two is wrong: \
+                             either {to} is really code and the barrier over it should go, or \
+                             {from} is filler that decoded as code and belongs with the data. \
+                             {evidence}"
+                        ),
+                        suggested,
+                    )
+                }
+                LeakKind::OffEnd => {
+                    let code_end = region
+                        .instruction_range(leak.from)
+                        .map(|(_, end)| end)
+                        .unwrap_or(leak.from + 1);
+                    let code_start = code_run_start(db, space, leak.from);
+                    let code_extent = fmt_range(space, code_start, code_end);
+                    let mut suggested = vec![format!("peek(address={from}, lines=4)")];
+                    suggested.extend(retire_vector_first(db, space, code_start, code_end));
+                    suggested.push(format!(
+                        "clear_equivalents(addresses={}:{{{code_start:#x}..{code_end:#x}}})",
+                        space.dsl_name()
+                    ));
+                    suggested.push(format!(
+                        "mark_data(range={code_extent}, data_type=DataType::Byte)  # if {from} is \
+                         filler rather than code"
+                    ));
+                    suggested.push(format!(
+                        "map_bytes(address={to}, file=\"...\", file_offset=0x0, size=0x0)  # if \
+                         the image continues past what is loaded"
+                    ));
+                    (
+                        "flow_off_end",
+                        Severity::Low,
+                        leak.from,
+                        format!(
+                            "code at {from} runs past the end of mapped bytes, so the next \
+                             instruction would come from nothing. Either {from} is filler that \
+                             decoded as code, or the image is incomplete and continues past what \
+                             is loaded. `peek` it and decide"
+                        ),
+                        suggested,
+                    )
+                }
             };
             items.push(item(
                 Phase::Decode,
@@ -1049,5 +1133,76 @@ mod tests {
             "{:?}",
             item.suggested
         );
+    }
+
+    #[test]
+    fn flow_into_data_offers_both_readings() {
+        use crate::commands::MarkData;
+        use crate::db::DataType;
+
+        // `INC A` at 0x4 falls through into the `RET` at 0x5, classified data.
+        let db = db_with(vec![
+            boxed(DisassembleRange::new((CODE, 4u32..5u32), false)),
+            boxed(MarkData::new((CODE, 5u32..6u32), DataType::Byte)),
+        ]);
+        let report = assess_at(&db, Gate::Structural);
+        let item = report
+            .items
+            .iter()
+            .find(|i| i.kind == "flow_into_data")
+            .expect("falling out of code");
+
+        assert!(!item.suggested.is_empty(), "an item with no command is a dead end");
+        // Both readings, each runnable.
+        assert!(
+            item.suggested.iter().any(|c| c.contains("clear_equivalents")),
+            "{:?}",
+            item.suggested
+        );
+        assert!(
+            item.suggested.iter().any(|c| c.contains("mark_data")),
+            "{:?}",
+            item.suggested
+        );
+        // And it says which way the bytes actually lean.
+        assert!(
+            item.detail.contains("decode like code") || item.detail.contains("likelier one"),
+            "{}",
+            item.detail
+        );
+    }
+
+    /// Running off the end is either: filler that decoded as code, or an image
+    /// that continues past what is loaded.
+    #[test]
+    fn flow_off_the_end_offers_both_readings() {
+        struct Img;
+        impl crate::commands::Environment for Img {
+            fn load_file_bytes(
+                &self,
+                _f: &str,
+                offset: usize,
+                size: AddressValue,
+            ) -> Result<Vec<u8>, std::io::Error> {
+                // NOP / INC A — the last instruction falls through off the end.
+                const BYTES: [u8; 2] = [0x00, 0x04];
+                Ok(BYTES[offset..offset + size as usize].to_vec())
+            }
+        }
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
+        db.apply(boxed(MapBytes::new((CODE, 0), "img", 0usize, 2u32)), Some(&Img))
+            .unwrap();
+        db.apply(boxed(DisassembleRange::new((CODE, 0u32..2u32), false)), Some(&Img))
+            .unwrap();
+
+        let report = assess_at(&db, Gate::Structural);
+        let item = report
+            .items
+            .iter()
+            .find(|i| i.kind == "flow_off_end")
+            .expect("code running off");
+        assert!(item.suggested.iter().any(|c| c.contains("mark_data")), "{:?}", item.suggested);
+        assert!(item.suggested.iter().any(|c| c.contains("map_bytes")), "{:?}", item.suggested);
+        assert!(item.detail.contains("incomplete"), "{}", item.detail);
     }
 }
