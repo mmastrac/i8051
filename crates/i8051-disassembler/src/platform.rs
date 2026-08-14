@@ -137,10 +137,18 @@ pub struct RegionDef {
     pub area_header: &'static str,
 }
 
-/// A processor driver: decodes bytes and declares the CPU's address regions.
-///
-/// Held behind an `Arc<dyn Platform>` so a [`Db`](crate::db::Db) can be built
-/// for any CPU chosen at runtime without threading a type parameter everywhere.
+/// A processor driver: decodes bytes and declares the CPU's address regions and
+/// known entry points.
+#[derive(Debug, Clone, Copy)]
+pub struct EntryPoint {
+    pub space: AddressSpace,
+    pub offset: AddressValue,
+    /// The architectural name, e.g. `INT_timer0`.
+    pub name: &'static str,
+    /// What the hardware does here, for a reader who does not know the CPU.
+    pub reason: &'static str,
+}
+
 pub trait Platform: Send + Sync {
     /// A short identifier for the CPU (`"i8051"`, `"mos6502"`, ...).
     fn name(&self) -> &str;
@@ -148,6 +156,12 @@ pub trait Platform: Send + Sync {
     /// The address regions this CPU exposes, in emission order. May include
     /// user-defined regions.
     fn regions(&self) -> &[RegionDef];
+
+    /// Where the hardware begins executing: reset and interrupt vectors. These
+    /// can be disabled if unused or not appropriate for a given database.
+    fn entry_points(&self) -> &[EntryPoint] {
+        &[]
+    }
 
     /// The longest instruction in bytes, the fetch window for decoding.
     fn max_insn_len(&self) -> usize;

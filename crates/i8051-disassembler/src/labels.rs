@@ -10,6 +10,17 @@ pub(crate) struct ImplicitLabels {
     labels: BTreeMap<AddressSpace, Labels>,
 }
 
+impl ImplicitLabels {
+    pub fn insert_if_absent(&mut self, space: AddressSpace, offset: AddressValue, name: &str) {
+        self.labels
+            .entry(space)
+            .or_default()
+            .labels
+            .entry(offset)
+            .or_insert_with(|| name.to_string());
+    }
+}
+
 impl ops::Deref for ImplicitLabels {
     type Target = BTreeMap<AddressSpace, Labels>;
 

@@ -12,7 +12,8 @@ use ::i8051::{Instruction, Mnemonic, Operand};
 use crate::address::{AddressSpace, XrefType};
 
 use super::{
-    Certainty, ControlFlow, DataRef, DecodedInsn, Platform, PlatformRef, RegionDef, RegionKind,
+    Certainty, ControlFlow, DataRef, DecodedInsn, EntryPoint, Platform, PlatformRef, RegionDef,
+    RegionKind,
 };
 
 /// External program memory — where code lives.
@@ -55,6 +56,16 @@ static REGIONS: &[RegionDef] = &[
     },
 ];
 
+/// The MCS-51 vectors.
+static ENTRY_POINTS: &[EntryPoint] = &[
+    EntryPoint { space: CODE, offset: 0x00, name: "INT_reset", reason: "power-on reset" },
+    EntryPoint { space: CODE, offset: 0x03, name: "INT_ext0", reason: "external interrupt 0" },
+    EntryPoint { space: CODE, offset: 0x0B, name: "INT_timer0", reason: "timer 0 overflow" },
+    EntryPoint { space: CODE, offset: 0x13, name: "INT_ext1", reason: "external interrupt 1" },
+    EntryPoint { space: CODE, offset: 0x1B, name: "INT_timer1", reason: "timer 1 overflow" },
+    EntryPoint { space: CODE, offset: 0x23, name: "INT_serial", reason: "serial port" },
+];
+
 /// The 8051 driver.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct I8051;
@@ -71,6 +82,10 @@ impl Platform for I8051 {
 
     fn regions(&self) -> &[RegionDef] {
         REGIONS
+    }
+
+    fn entry_points(&self) -> &[EntryPoint] {
+        ENTRY_POINTS
     }
 
     fn max_insn_len(&self) -> usize {

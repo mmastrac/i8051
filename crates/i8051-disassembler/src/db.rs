@@ -132,7 +132,19 @@ impl Db {
         for region in self.regions.values() {
             region.collect_refs(&mut label_collector);
         }
-        label_collector.into_implicit_labels()
+        let mut labels = label_collector.into_implicit_labels();
+        // Prefer platform names
+        if let Some(platform) = &self.platform {
+            for entry in platform.entry_points() {
+                let decoded = self.region(entry.space).is_some_and(|r| {
+                    matches!(r.get_equivalent_kind(entry.offset), Some(EquivalentKind::Code))
+                });
+                if decoded {
+                    labels.insert_if_absent(entry.space, entry.offset, entry.name);
+                }
+            }
+        }
+        labels
     }
 
     pub fn render(&self, space: AddressSpace) -> Vec<Line> {
@@ -523,6 +535,21 @@ mod tests {
         for command in commands {
             db.apply(command, Some(env)).unwrap();
         }
+    }
+
+    #[test]
+    fn decoded_entry_points_are_named_but_undecoded_ones_are_not() {
+        let mut db = Db::with_platform(crate::platform::i8051::platform());
+        let code = db.region_mut(CODE);
+        code.set_bytes("test.bin", 0, 0, &[0x00; 0x30]);
+        code.set_equivalent(0, Equivalent::Code).unwrap();
+        code.set_equivalent(0x0B, Equivalent::Code).unwrap();
+
+        let labels = db.implicit_labels();
+        let named = &labels[&CODE];
+        assert_eq!(named.get(&0).map(String::as_str), Some("INT_reset"));
+        assert_eq!(named.get(&0x0B).map(String::as_str), Some("INT_timer0"));
+        assert_eq!(named.get(&0x03), None, "filler must not be labelled");
     }
 
     fn make_test_db() -> Db {
