@@ -214,11 +214,11 @@ mod tests {
 
     #[test]
     fn round_trip_set_label() {
-        let command = commands::boxed(SetLabel::new((crate::platform::i8051::CODE, 0x100), "reset_vector", false));
+        let command = commands::boxed(SetLabel::new((crate::platform::i8051::CODE, 0x100), "reset_vector", false, false));
         let dsl = to_dsl(&*command);
         assert_eq!(
             dsl,
-            "set_label(address=CODE:0x100, label=\"reset_vector\", provisional=False)"
+            "set_label(address=CODE:0x100, label=\"reset_vector\", local=False, provisional=False)"
         );
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
     }

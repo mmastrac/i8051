@@ -467,8 +467,8 @@ mod tests {
         // Auto-disassemble from both roots (follows the call), name the routines.
         let db = db_with(vec![
             boxed(AutoDisassemble::new((CODE, 0u32))),
-            boxed(SetLabel::new((CODE, 0u32), "reset".to_string(), false)),
-            boxed(SetLabel::new((CODE, 4u32), "inc_a".to_string(), false)),
+            boxed(SetLabel::new((CODE, 0u32), "reset".to_string(), false, false)),
+            boxed(SetLabel::new((CODE, 4u32), "inc_a".to_string(), false, false)),
         ]);
         let report = assess_at(&db, Gate::Named);
 
@@ -483,12 +483,11 @@ mod tests {
     fn named_but_unnoted_routine_blocks_the_documented_gate() {
         use crate::commands::SetNote;
 
-        // Fully decoded and named: done at `named`, but the called routine
-        // `inc_a` (0x4) carries no note, so `documented` still has work.
+        // Fully decoded and named: done at `named`, `inc_a` missing a note.
         let mut db = db_with(vec![
             boxed(AutoDisassemble::new((CODE, 0u32))),
-            boxed(SetLabel::new((CODE, 0u32), "reset".to_string(), false)),
-            boxed(SetLabel::new((CODE, 4u32), "inc_a".to_string(), false)),
+            boxed(SetLabel::new((CODE, 0u32), "reset".to_string(), false, false)),
+            boxed(SetLabel::new((CODE, 4u32), "inc_a".to_string(), false, false)),
         ]);
 
         assert!(assess_at(&db, Gate::Named).done);

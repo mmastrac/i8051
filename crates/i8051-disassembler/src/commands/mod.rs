@@ -382,6 +382,7 @@ mod tests {
                 ("address", "SpaceAddressValue", super::ArgKind::Address),
                 ("label", "String", super::ArgKind::Text),
                 ("provisional", "bool", super::ArgKind::Flag),
+                ("local", "bool", super::ArgKind::Flag),
             ]
         );
     }

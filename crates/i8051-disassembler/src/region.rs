@@ -161,6 +161,16 @@ pub enum OperandType {
 pub struct LabelAttrs {
     /// A working guess, left on the naming worklist.
     pub provisional: bool,
+    /// Scoped to the enclosing routine, so its name need only be unique there.
+    pub local: bool,
+}
+
+/// The nearest scope-delimiting label at or before `offset`.
+fn scope_in(
+    globals: &std::collections::BTreeSet<AddressValue>,
+    offset: AddressValue,
+) -> Option<AddressValue> {
+    globals.range(..=offset).next_back().copied()
 }
 
 pub struct Region {
@@ -173,6 +183,10 @@ pub struct Region {
     labels: BTreeMap<AddressValue, String>,
     /// Addresses whose label is a working guess.
     draft_labels: std::collections::BTreeSet<AddressValue>,
+    /// Addresses whose label is scoped to the routine containing it. Its name
+    /// only has to be unique within that routine, so the same `.loop` may name
+    /// a loop in every routine that has one.
+    local_labels: std::collections::BTreeSet<AddressValue>,
     /// What an instruction's ambiguous operand turned out to mean, keyed by the
     /// instruction.
     operand_types: BTreeMap<AddressValue, OperandType>,
@@ -205,6 +219,7 @@ impl Region {
             disabled_platform_addresses: BTreeMap::new(),
             operand_types: BTreeMap::new(),
             draft_labels: std::collections::BTreeSet::new(),
+            local_labels: std::collections::BTreeSet::new(),
             comments: BTreeMap::new(),
             functions: BTreeMap::new(),
             overrides: BTreeMap::new(),
@@ -847,6 +862,76 @@ impl Region {
         } else {
             self.draft_labels.remove(&offset);
         }
+        if attrs.local {
+            self.local_labels.insert(offset);
+        } else {
+            self.local_labels.remove(&offset);
+        }
+    }
+
+    /// Whether the label at `offset` is scoped to its enclosing routine.
+    pub fn is_local_label(&self, offset: AddressValue) -> bool {
+        self.local_labels.contains(&offset)
+    }
+
+    /// The nearest non-local label at or before `offset`.
+    pub fn scope_of(&self, offset: AddressValue) -> Option<AddressValue> {
+        self.labels
+            .range(..=offset)
+            .rev()
+            .map(|(&at, _)| at)
+            .find(|at| !self.local_labels.contains(at))
+    }
+
+    /// Whether every reference to the local at `offset` comes from inside its
+    /// own scope.
+    fn local_is_self_contained(
+        &self,
+        offset: AddressValue,
+        globals: &std::collections::BTreeSet<AddressValue>,
+    ) -> bool {
+        let scope = scope_in(globals, offset);
+        let target = PhysicalAddr {
+            space: self.space,
+            offset,
+        };
+        self.xref_index()
+            .to(&target)
+            .iter()
+            .all(|edge| scope_in(globals, edge.from) == scope)
+    }
+
+    /// The name to emit for each labelled address as *assembly*.
+    pub(crate) fn export_names(&self, implicit: &Labels) -> BTreeMap<AddressValue, String> {
+        let globals: std::collections::BTreeSet<AddressValue> = self
+            .labels
+            .keys()
+            .copied()
+            .filter(|at| !self.local_labels.contains(at))
+            .chain(implicit.keys().copied())
+            .collect();
+
+        let mut out = BTreeMap::new();
+        let mut per_scope: BTreeMap<Option<AddressValue>, usize> = BTreeMap::new();
+        let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+        for (&offset, name) in &self.labels {
+            if self.local_labels.contains(&offset) && self.local_is_self_contained(offset, &globals)
+            {
+                let n = per_scope.entry(scope_in(&globals, offset)).or_insert(0);
+                *n += 1;
+                out.insert(offset, format!("{n}$"));
+            } else {
+                let count = seen.entry(name.clone()).or_insert(0);
+                *count += 1;
+                let unique = if *count > 1 {
+                    format!("{name}_{}", *count - 1)
+                } else {
+                    name.clone()
+                };
+                out.insert(offset, unique);
+            }
+        }
+        out
     }
 
     /// Whether the label at `offset` is a working guess rather than finalized.
@@ -1252,6 +1337,16 @@ impl Region {
         space: AddressSpace,
         implicit_labels: &ImplicitLabels,
     ) -> Vec<Line> {
+        self.render_named(space, implicit_labels, None)
+    }
+
+    /// `render`, but emitting `names` in place of each address's stored label.
+    pub(crate) fn render_named(
+        &self,
+        space: AddressSpace,
+        implicit_labels: &ImplicitLabels,
+        names: Option<&BTreeMap<AddressValue, String>>,
+    ) -> Vec<Line> {
         let mut lines = Vec::new();
         let start = self.start();
         let end = self.end();
@@ -1286,7 +1381,8 @@ impl Region {
                     text: comment.to_string(),
                 });
             }
-            if let Some(label) = self.get_label(addr) {
+            let exported = names.and_then(|m| m.get(&addr)).map(String::as_str);
+            if let Some(label) = exported.or_else(|| self.get_label(addr)) {
                 lines.push(Line::Label {
                     addr,
                     name: label.to_string(),
@@ -1305,7 +1401,7 @@ impl Region {
                             .decode_at(addr)
                             .expect("validated code equivalent must decode");
                         let overrides = self.operand_overrides_at(addr);
-                        let text = self.format_instruction(addr, &insn, &overrides, labels);
+                        let text = self.format_instruction(addr, &insn, &overrides, labels, names);
                         lines.push(Line::Instruction {
                             addr,
                             direct: insn.direct_addr(),
@@ -1434,6 +1530,7 @@ impl Region {
                 (space, offset),
                 label.clone(),
                 self.draft_labels.contains(&offset),
+                self.local_labels.contains(&offset),
             )));
         }
         for (&offset, comment) in &self.comments {
@@ -1658,6 +1755,7 @@ impl Region {
         insn: &DecodedInsn,
         overrides: &[Option<OperandOverride>],
         implicit_labels: &Labels,
+        names: Option<&BTreeMap<AddressValue, String>>,
     ) -> String {
         let decoded = insn.as_string();
         let mut merged = overrides.to_vec();
@@ -1668,8 +1766,10 @@ impl Region {
                 merged.push(None);
             }
             if merged[idx].is_none() {
-                let label = self
-                    .get_label(target)
+                let label = names
+                    .and_then(|m| m.get(&target))
+                    .map(String::as_str)
+                    .or_else(|| self.get_label(target))
                     .or_else(|| implicit_labels.get(&target).map(String::as_str));
                 if let Some(label) = label {
                     merged[idx] = Some(OperandOverride::Label(label.to_string()));
@@ -1697,8 +1797,10 @@ impl Region {
             if merged[idx].is_some() {
                 continue;
             }
-            if let Some(label) = self
-                .get_label(data_ref.offset)
+            if let Some(label) = names
+                .and_then(|m| m.get(&data_ref.offset))
+                .map(String::as_str)
+                .or_else(|| self.get_label(data_ref.offset))
                 .or_else(|| implicit_labels.get(&data_ref.offset).map(String::as_str))
             {
                 let text = match data_ref.kind {
@@ -2191,5 +2293,128 @@ mod tests {
             4,
             "linear keeps going"
         );
+    }
+
+    /// The same local name in two routines must survive into valid assembly,
+    /// and a global name used twice must be made unique rather than emitted.
+    #[test]
+    fn locals_repeat_across_scopes_and_globals_are_deduplicated() {
+        struct Img;
+        impl crate::commands::Environment for Img {
+            fn load_file_bytes(
+                &self,
+                _f: &str,
+                offset: usize,
+                size: AddressValue,
+            ) -> Result<Vec<u8>, std::io::Error> {
+                // main: MOV R0,#5 / DJNZ R0,-2 / RET; other: the same shape.
+                const IMAGE: [u8; 10] =
+                    [0x78, 0x05, 0xD8, 0xFE, 0x22, 0x78, 0x03, 0xD8, 0xFE, 0x22];
+                Ok(IMAGE[offset..offset + size as usize].to_vec())
+            }
+        }
+        use crate::commands::{AutoDisassemble, MapBytes, SetLabel};
+        use crate::db::Db;
+
+        let mut db = Db::with_platform(platform());
+        db.apply(boxed(MapBytes::new((CODE, 0), "img", 0usize, 10u32)), Some(&Img))
+            .unwrap();
+        for entry in [0u32, 5] {
+            db.apply(boxed(AutoDisassemble::new((CODE, entry))), Some(&Img))
+                .unwrap();
+        }
+        db.apply(
+            boxed(SetLabel::new((CODE, 0u32), "main".to_string(), false, false)),
+            None,
+        )
+        .unwrap();
+        db.apply(
+            boxed(SetLabel::new((CODE, 5u32), "other".to_string(), false, false)),
+            None,
+        )
+        .unwrap();
+        // One name, two routines — legal only because each is scoped to its own.
+        for at in [2u32, 7] {
+            db.apply(
+                boxed(SetLabel::new((CODE, at), ".loop".to_string(), false, true)),
+                None,
+            )
+            .unwrap();
+        }
+
+        let asm = db.to_sdas();
+        assert!(asm.contains("1$:"), "locals export as ASxxxx locals:\n{asm}");
+        assert!(!asm.contains(".loop:"), "not a local to sdas:\n{asm}");
+        // Each scope restarts numbering, so both routines get their own `1$`.
+        assert_eq!(asm.matches("1$:").count(), 2, "one local per scope:\n{asm}");
+        // References must follow the definitions, or the output assembles wrong.
+        assert_eq!(asm.matches("DJNZ").count(), 2, "{asm}");
+        assert!(!asm.contains("DJNZ    R0,.loop"), "reference not rewritten:\n{asm}");
+    }
+
+    /// A global name reused at two addresses is disambiguated, since emitting
+    /// it twice would be a duplicate symbol.
+    #[test]
+    fn a_repeated_global_name_is_made_unique_on_export() {
+        let mut region = Region::new(CODE, Some(platform()));
+        region.set_bytes("test.bin", 0, 0, &[0x00, 0x00, 0x00, 0x22]);
+        region.set_label(0, "handler", LabelAttrs::default());
+        region.set_label(2, "handler", LabelAttrs::default());
+
+        let names = region.export_names(&Labels::default());
+        assert_eq!(names.get(&0).map(String::as_str), Some("handler"));
+        assert_eq!(names.get(&2).map(String::as_str), Some("handler_1"));
+    }
+
+    #[test]
+    fn a_local_referenced_from_outside_its_scope_keeps_its_name() {
+        struct Img;
+        impl crate::commands::Environment for Img {
+            fn load_file_bytes(
+                &self,
+                _f: &str,
+                offset: usize,
+                size: AddressValue,
+            ) -> Result<Vec<u8>, std::io::Error> {
+                // main: MOV R0,#5 / NOP / RET; other: MOV R0,#3 / SJMP 0x2 / RET.
+                // The SJMP reaches back into main's body, across `other`'s label.
+                const IMAGE: [u8; 9] = [0x78, 0x05, 0x00, 0x22, 0x78, 0x03, 0x80, 0xFA, 0x22];
+                Ok(IMAGE[offset..offset + size as usize].to_vec())
+            }
+        }
+        use crate::commands::{AutoDisassemble, MapBytes, SetLabel};
+        use crate::db::Db;
+
+        let mut db = Db::with_platform(platform());
+        db.apply(boxed(MapBytes::new((CODE, 0), "img", 0usize, 9u32)), Some(&Img))
+            .unwrap();
+        for entry in [0u32, 4] {
+            db.apply(boxed(AutoDisassemble::new((CODE, entry))), Some(&Img))
+                .unwrap();
+        }
+        db.apply(
+            boxed(SetLabel::new((CODE, 0u32), "main".to_string(), false, false)),
+            None,
+        )
+        .unwrap();
+        db.apply(
+            boxed(SetLabel::new((CODE, 4u32), "other".to_string(), false, false)),
+            None,
+        )
+        .unwrap();
+        db.apply(
+            boxed(SetLabel::new((CODE, 2u32), "inner".to_string(), false, true)),
+            None,
+        )
+        .unwrap();
+
+        let region = db.region(CODE).unwrap();
+        assert!(region.is_local_label(2));
+        assert_eq!(region.scope_of(2), Some(0), "its routine is `main`");
+
+        let asm = db.to_sdas();
+        assert!(asm.contains("inner:"), "the local falls back to its name:\n{asm}");
+        assert!(!asm.contains("1$:"), "it cannot be an ASxxxx local:\n{asm}");
+        assert!(asm.contains("SJMP    inner"), "the reference matches:\n{asm}");
     }
 }

@@ -264,7 +264,11 @@ impl Db {
                 continue;
             };
             writer.write(&self.area_header(space));
-            for line in region.render(space, &implicit_labels) {
+            // Assembly names, not listing names
+            let names = region.export_names(
+                implicit_labels.get(&space).unwrap_or(&Default::default()),
+            );
+            for line in region.render_named(space, &implicit_labels, Some(&names)) {
                 writer.write_line(&line);
             }
         }

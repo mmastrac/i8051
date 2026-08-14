@@ -11,6 +11,8 @@ pub struct SetLabel {
     /// A working guess rather than a finalized name. If true, stays on the
     /// naming worklist.
     pub provisional: bool,
+    /// Scoped to the routine containing it.
+    pub local: bool,
 }
 
 register!(SetLabel(
@@ -20,6 +22,7 @@ register!(SetLabel(
     address: SpaceAddressValue,
     label: String,
     provisional: bool,
+    local: bool,
 ));
 
 impl Apply for SetLabel {
@@ -32,6 +35,7 @@ impl Apply for SetLabel {
             address,
             label,
             provisional,
+            local,
         } = self;
         let label = normalize_label(&label)?;
         if crate::labels::is_provisional_name(&label) {
@@ -41,12 +45,18 @@ impl Apply for SetLabel {
         let region = db.region_mut(space);
         let before = region.get_label(offset).map(str::to_owned);
         let was_draft = region.is_draft_label(offset);
-        region.set_label(offset, &label, crate::region::LabelAttrs { provisional });
+        let was_local = region.is_local_label(offset);
+        region.set_label(
+            offset,
+            &label,
+            crate::region::LabelAttrs { provisional, local },
+        );
         Ok(match before {
             Some(label) => vec![boxed(SetLabel {
                 address,
                 label,
                 provisional: was_draft,
+                local: was_local,
             })],
             None => vec![boxed(ClearLabel::new((space, offset)))],
         })
@@ -104,7 +114,7 @@ impl Apply for ClearLabel {
         let mut undo = Vec::new();
         for range in addresses.ranges() {
             for (offset, label) in region.clear_labels_in(range) {
-                undo.push(boxed(SetLabel::new((space, offset), label, false)));
+                undo.push(boxed(SetLabel::new((space, offset), label, false, false)));
             }
         }
         Ok(undo)
@@ -158,7 +168,7 @@ mod tests {
         let mut db = Db::with_platform(crate::platform::i8051::platform());
         let undo = db
             .apply(
-                boxed(SetLabel::new((CODE, 0x2C), "sub_002C".to_string(), false)),
+                boxed(SetLabel::new((CODE, 0x2C), "sub_002C".to_string(), false, false)),
                 None,
             )
             .expect("a generated name is ignored, not an error");
@@ -167,7 +177,7 @@ mod tests {
 
         // A real name still lands...
         db.apply(
-            boxed(SetLabel::new((CODE, 0x2C), "uart_init".to_string(), false)),
+            boxed(SetLabel::new((CODE, 0x2C), "uart_init".to_string(), false, false)),
             None,
         )
         .unwrap();
@@ -175,7 +185,7 @@ mod tests {
 
         // ...and a generated one does not overwrite it.
         db.apply(
-            boxed(SetLabel::new((CODE, 0x2C), "sub_002C".to_string(), false)),
+            boxed(SetLabel::new((CODE, 0x2C), "sub_002C".to_string(), false, false)),
             None,
         )
         .unwrap();
@@ -188,7 +198,7 @@ mod tests {
     fn a_provisional_label_stays_a_draft_and_round_trips() {
         let mut db = Db::with_platform(crate::platform::i8051::platform());
         db.apply(
-            boxed(SetLabel::new((CODE, 0x40), "maybe_crc".to_string(), true)),
+            boxed(SetLabel::new((CODE, 0x40), "maybe_crc".to_string(), true, false)),
             None,
         )
         .unwrap();
@@ -204,7 +214,7 @@ mod tests {
 
         // Re-naming it without the flag finalizes it.
         db.apply(
-            boxed(SetLabel::new((CODE, 0x40), "crc16".to_string(), false)),
+            boxed(SetLabel::new((CODE, 0x40), "crc16".to_string(), false, false)),
             None,
         )
         .unwrap();
