@@ -39,7 +39,7 @@ pub mod sfr;
 mod traits;
 
 pub use cpu::{Cpu, Flag, Interrupt, Register};
-pub use op::{ControlFlow, Instruction, Mnemonic, Operand, Operands};
+pub use op::{ControlFlow, Instruction, Mnemonic, Operand, Operands, format_direct};
 pub use traits::{
     CpuContext, CpuView, DefaultPortMapper, MemoryMapper, PortMapper, ReadOnlyMemoryMapper,
 };

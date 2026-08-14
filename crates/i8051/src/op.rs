@@ -485,7 +485,7 @@ impl std::fmt::Display for Instruction {
 }
 
 /// Format a direct address, using SFR names where applicable.
-fn format_direct(value: u8) -> String {
+pub fn format_direct(value: u8) -> String {
     if value < 128 {
         return format!("0x{:02X}", value);
     }

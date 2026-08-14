@@ -4,6 +4,7 @@ members = [
     "crates/i8051",
     "crates/i8051-debug-tui",
     "crates/i8051-disassembler",
+    "crates/i8051-disassembler-service",
     "crates/i8051-proc-macro",
     "crates/i8051-test-runner",
     "crates/m6805",

@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use ::i8051::{Instruction, Mnemonic, Operand};
 
+pub use ::i8051::format_direct;
+
 use crate::address::{AddressSpace, AddressValue, XrefType};
 
 use super::{
