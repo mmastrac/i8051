@@ -305,7 +305,8 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
                 "{addr} ({name}) is named but has no note. Record what it does and how \
                  it works as a `set_note`, the detailed account future passes read"
             );
-            let mut suggested = vec![format!("set_note(address={addr}, note=\"...\")")];
+            let mut suggested =
+                vec![format!("set_note(address={addr}, note=Note(content=\"...\"))")];
             if !has_comment {
                 detail.push_str("; add a one-line `set_comment` too if its purpose is clear");
                 suggested.push(format!("set_comment(address={addr}, comment=\"...\")"));

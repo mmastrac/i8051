@@ -24,6 +24,8 @@ pub enum Line {
         direct: Option<u8>, // not ideal, should use a register list instead
         text: String,
         bytes: Vec<u8>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        target: Option<AddressValue>,
     },
     Data {
         addr: AddressValue,

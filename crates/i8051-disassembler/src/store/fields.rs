@@ -7,8 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::note::{Note, NoteField, NoteId};
 
-/// A [`Note`] whose `id` may be omitted in hand-written DSL, in which case a
-/// fresh id is allocated from the content.
+/// A [`Note`].
 pub mod note {
     use super::*;
 
@@ -29,21 +28,44 @@ pub mod note {
         note.serialize(s)
     }
 
+    struct NoteVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for NoteVisitor {
+        type Value = Note;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a note: Note(content=\"...\", tags=[\"...\"]) or bare \"text\"")
+        }
+
+        // Bare text turns into a note.
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Note, E> {
+            Ok(Note::new(None, v.to_owned()))
+        }
+
+        fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Note, E> {
+            Ok(Note::new(None, v))
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Note, A::Error> {
+            let repr = Repr::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+            let mut note = match repr.id {
+                Some(id) => Note {
+                    id,
+                    content: repr.content,
+                    tags: BTreeSet::new(),
+                    fields: BTreeMap::new(),
+                    links: BTreeSet::new(),
+                },
+                None => Note::new(None, repr.content),
+            };
+            note.tags = repr.tags;
+            note.fields = repr.fields;
+            note.links = repr.links;
+            Ok(note)
+        }
+    }
+
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Note, D::Error> {
-        let repr = Repr::deserialize(d)?;
-        let mut note = match repr.id {
-            Some(id) => Note {
-                id,
-                content: repr.content,
-                tags: BTreeSet::new(),
-                fields: BTreeMap::new(),
-                links: BTreeSet::new(),
-            },
-            None => Note::new(None, repr.content),
-        };
-        note.tags = repr.tags;
-        note.fields = repr.fields;
-        note.links = repr.links;
-        Ok(note)
+        d.deserialize_any(NoteVisitor)
     }
 }

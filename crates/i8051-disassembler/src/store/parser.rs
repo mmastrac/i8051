@@ -124,10 +124,7 @@ impl<'a> Parser<'a> {
                     fields,
                 })
             }
-            _ => Err(DslError::at(
-                self.lexer.offset(),
-                format!("unexpected token after identifier {first}"),
-            )),
+            _ => Ok(Value::String(first)),
         }
     }
 

@@ -1,11 +1,8 @@
 use crate::address::AddressValue;
 
 pub struct DataHeuristics {
-    /// Bytes per `.db` row; also the unit for alignment and row-repeat.
+    /// Bytes per `.db` row. Also the unit for row-repeat.
     pub block_size: usize,
-
-    /// How literal rows break for display; does not affect byte layout.
-    pub row_alignment: RowAlignment,
 
     /// Collapse N+ identical block_size rows into one `.rept` (hexdump `*`).
     /// None disables multi-byte row folding.
@@ -31,15 +28,6 @@ pub struct DataHeuristics {
     /// Emit zero skip runs as multiple `.ds block_size` lines instead of one
     /// `.ds N` for the full run length.
     pub zero_skip_windowed: bool,
-}
-
-pub enum RowAlignment {
-    /// Pack `block_size` bytes from the start of each literal span.
-    Packed,
-    /// Align rows to the mapped chunk start.
-    Block,
-    /// Align rows to absolute address (xxd-style).
-    Global,
 }
 
 #[derive(Clone)]
@@ -71,7 +59,6 @@ impl Default for DataHeuristics {
     fn default() -> Self {
         Self {
             block_size: 16,
-            row_alignment: RowAlignment::Block,
             min_repeat_rows: None,
             interior: vec![
                 RunRule {
@@ -121,31 +108,9 @@ impl DataHeuristics {
         self.segment(address, edge, bytes).into_iter()
     }
 
-    /// Split a literal span into `.db` rows per `block_size` and `row_alignment`.
-    pub fn literal_rows<'a>(&self, address: AddressValue, bytes: &'a [u8]) -> Vec<&'a [u8]> {
-        if bytes.is_empty() {
-            return Vec::new();
-        }
-        let bs = self.block_size.max(1);
-        match self.row_alignment {
-            RowAlignment::Packed | RowAlignment::Block => bytes.chunks(bs).collect(),
-            RowAlignment::Global => {
-                let mut rows = Vec::new();
-                let mut i = 0;
-                let start_mod = (address as usize) % bs;
-                if start_mod != 0 {
-                    let first_len = (bs - start_mod).min(bytes.len());
-                    rows.push(&bytes[0..first_len]);
-                    i = first_len;
-                }
-                while i < bytes.len() {
-                    let end = (i + bs).min(bytes.len());
-                    rows.push(&bytes[i..end]);
-                    i = end;
-                }
-                rows
-            }
-        }
+    /// Split a literal span into `.db` rows of `block_size`.
+    pub fn literal_rows<'a>(&self, bytes: &'a [u8]) -> Vec<&'a [u8]> {
+        bytes.chunks(self.block_size.max(1)).collect()
     }
 
     fn segment<'a>(
@@ -425,24 +390,11 @@ mod tests {
     fn literal_rows_pack_by_block_size() {
         let h = DataHeuristics::default();
         let bytes = (0..40).collect::<Vec<_>>();
-        let rows = h.literal_rows(0, &bytes);
+        let rows = h.literal_rows(&bytes);
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].len(), 16);
         assert_eq!(rows[1].len(), 16);
         assert_eq!(rows[2].len(), 8);
-    }
-
-    #[test]
-    fn literal_rows_global_aligns_to_address() {
-        let h = DataHeuristics {
-            row_alignment: RowAlignment::Global,
-            ..Default::default()
-        };
-        let bytes = (0..20).collect::<Vec<_>>();
-        let rows = h.literal_rows(4, &bytes);
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].len(), 12);
-        assert_eq!(rows[1].len(), 8);
     }
 
     #[test]

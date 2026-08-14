@@ -109,20 +109,12 @@ fn line_to_sdas(writer: &mut SdasWriter, line: &Line) {
 
 fn emit_bytes(address: AddressValue, bytes: &[u8]) -> String {
     let heuristics = DataHeuristics::default();
-    emit_chunks(
-        &heuristics,
-        address,
-        heuristics.iterate(address, None, bytes),
-    )
+    emit_chunks(&heuristics, heuristics.iterate(address, None, bytes))
 }
 
 fn emit_unknown_bytes(base_addr: AddressValue, bytes: &[u8]) -> String {
     let heuristics = DataHeuristics::default();
-    emit_chunks(
-        &heuristics,
-        base_addr,
-        heuristics.iterate(base_addr, None, bytes),
-    )
+    emit_chunks(&heuristics, heuristics.iterate(base_addr, None, bytes))
 }
 
 fn emit_db_line(row: &[u8]) -> String {
@@ -136,27 +128,22 @@ fn emit_db_line(row: &[u8]) -> String {
 
 fn emit_chunks<'a>(
     heuristics: &DataHeuristics,
-    mut addr: AddressValue,
     chunks: impl IntoIterator<Item = DataChunk<'a, u8>>,
 ) -> String {
     let mut out = String::new();
     for chunk in chunks {
         match chunk {
             DataChunk::Literal(row) => {
-                for sub in heuristics.literal_rows(addr, row) {
+                for sub in heuristics.literal_rows(row) {
                     out.push_str(&emit_db_line(sub));
                 }
-                addr += row.len() as AddressValue;
             }
-            DataChunk::Run(value, len) => {
-                match value {
-                    0 => out.push_str(&format!("    .ds {len}\n")),
-                    value => out.push_str(&format!(
-                        "    .rept {len}\n        .db 0x{value:02X}\n    .endm\n"
-                    )),
-                }
-                addr += len as AddressValue;
-            }
+            DataChunk::Run(value, len) => match value {
+                0 => out.push_str(&format!("    .ds {len}\n")),
+                value => out.push_str(&format!(
+                    "    .rept {len}\n        .db 0x{value:02X}\n    .endm\n"
+                )),
+            },
             DataChunk::BlockRun(row, count) => {
                 let db = row
                     .iter()
@@ -164,7 +151,6 @@ fn emit_chunks<'a>(
                     .collect::<Vec<_>>()
                     .join(", ");
                 out.push_str(&format!("    .rept {count}\n        .db {db}\n    .endm\n"));
-                addr += (row.len() * count) as AddressValue;
             }
         }
     }

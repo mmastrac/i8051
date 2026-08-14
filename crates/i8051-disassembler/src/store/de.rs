@@ -66,7 +66,14 @@ impl<'de> de::Deserializer<'de> for ValueDeserializer {
         name: &'static str,
         visitor: V,
     ) -> Result<V::Value, DslError> {
-        match (name, self.value) {
+        // Forgiving address parser
+        let value = match name {
+            ADDRESS_TOKEN | ADDRESS_RANGE_TOKEN | ADDRESS_SET_TOKEN => {
+                coerce_address(name, self.value)
+            }
+            _ => self.value,
+        };
+        match (name, value) {
             (ADDRESS_TOKEN, Value::Address { space, offset }) => {
                 visitor.visit_newtype_struct(ValueDeserializer {
                     value: Value::List(vec![Value::String(space), Value::Int(offset)]),
@@ -98,6 +105,26 @@ impl<'de> de::Deserializer<'de> for ValueDeserializer {
         visitor.visit_enum(EnumDeserializer { value: self.value })
     }
 
+    fn deserialize_struct<V: Visitor<'de>>(
+        self,
+        _name: &'static str,
+        fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, DslError> {
+        // Forgiving (space, offset) parser
+        if let Value::Address { space, offset } = &self.value
+            && fields == ["space", "offset"]
+        {
+            let map: BTreeMap<String, Value> = [
+                ("space".to_string(), Value::String(space.clone())),
+                ("offset".to_string(), Value::Int(*offset)),
+            ]
+            .into();
+            return visitor.visit_map(MapAccess::new(map));
+        }
+        self.deserialize_any(visitor)
+    }
+
     fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, DslError> {
         match self.value {
             Value::Map(map) => visitor.visit_map(MapAccess::new(map)),
@@ -113,8 +140,39 @@ impl<'de> de::Deserializer<'de> for ValueDeserializer {
 
     forward_to_deserialize_any! {
         bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
-        bytes byte_buf unit unit_struct seq tuple tuple_struct struct
+        bytes byte_buf unit unit_struct seq tuple tuple_struct
         identifier ignored_any
+    }
+}
+
+/// Widen addresses.
+fn coerce_address(name: &'static str, value: Value) -> Value {
+    let value = match value {
+        Value::String(s) => match crate::store::parse_value(&s) {
+            Ok(
+                parsed @ (Value::Address { .. }
+                | Value::AddressRange { .. }
+                | Value::AddressSet { .. }),
+            ) => parsed,
+            _ => Value::String(s),
+        },
+        other => other,
+    };
+    match (name, value) {
+        (ADDRESS_RANGE_TOKEN, Value::Address { space, offset }) => Value::AddressRange {
+            space,
+            start: offset,
+            end: offset.saturating_add(1),
+        },
+        (ADDRESS_SET_TOKEN, Value::Address { space, offset }) => Value::AddressSet {
+            space,
+            ranges: vec![(offset, offset.saturating_add(1))],
+        },
+        (ADDRESS_SET_TOKEN, Value::AddressRange { space, start, end }) => Value::AddressSet {
+            space,
+            ranges: vec![(start, end)],
+        },
+        (_, value) => value,
     }
 }
 

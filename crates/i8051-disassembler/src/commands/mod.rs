@@ -1,6 +1,4 @@
-/// Assert a command round-trips through the DSL in both directions: that it
-/// renders to exactly `$dsl`, and that `$dsl` parses back to it. Emits a
-/// `#[test]` named `$name`.
+/// Assert a command round-trips.
 ///
 /// ```ignore
 /// serialize_test!(
@@ -28,17 +26,10 @@ macro_rules! serialize_test {
 
 /// Register a command from its constructor's argument list.
 ///
-/// Each `name: Type` becomes an `impl Into<Type>` parameter of a generated
-/// `pub fn new(..) -> Self` (the struct is built field-by-field via `.into()`,
-/// so argument names must match the payload's field names). This also:
-/// - implements [`Command`] (forwarding `apply` to the [`Apply`] impl), and
-/// - adds a [`CommandEntry`] — the constructor's doc, argument signature, and
-///   DSL parser — to the link-time [`COMMANDS`] registry under the snake_case
-///   form of the type name.
-///
-/// Each argument's `Type` is mapped to a semantic [`ArgKind`] via
-/// [`CommandArgType`], so an MCP layer can enumerate commands and their
-/// argument shapes without parsing raw Rust type strings.
+/// Each `name: Type` becomes an `impl Into<Type>` parameter of a generated `pub
+/// fn new(..) -> Self`. Also implements [`Command`] and adds a [`CommandEntry`]
+/// (doc, argument signature, DSL parser) to the link-time [`COMMANDS`]
+/// registry, keyed by the type name (in `snake_case`).
 ///
 /// ```ignore
 /// register!(SetLabel(
@@ -106,7 +97,16 @@ macro_rules! register {
                     $crate::commands::CommandArg {
                         name: ::core::stringify!($arg),
                         ty: ::core::stringify!($argty),
-                        kind: <$argty as $crate::commands::CommandArgType>::KIND,
+                        kind: <$argty as $crate::commands::DslArg>::KIND,
+                        slug: <$argty as $crate::commands::DslArg>::SLUG,
+                        hint: <$argty as $crate::commands::DslArg>::HINT,
+                        example: <$argty as $crate::commands::DslArg>::EXAMPLE,
+                        check: |value: &$crate::store::value::Value| {
+                            $crate::store::de::from_value::<$argty>(
+                                ::core::clone::Clone::clone(value),
+                            )
+                            .map(|_| ())
+                        },
                     }
                 ),*],
                 parse: $crate::commands::parse::<$type>,
@@ -167,7 +167,7 @@ pub trait Command: std::fmt::Debug {
         env: Option<&dyn Environment>,
     ) -> Result<Vec<Box<dyn Command>>, Error>;
 
-    /// The snake_case name this command is spelled with in the DSL.
+    /// The snake_case DSL name.
     fn name(&self) -> &'static str;
 
     /// The payload as a DSL [`Value`] (always a [`Value::Struct`]).
@@ -191,7 +191,7 @@ pub trait Apply {
     ) -> Result<Vec<Box<dyn Command>>, Error>;
 }
 
-/// Box a command payload as a trait object (handy for building undo vectors).
+/// Box a command payload as a trait object.
 pub fn boxed(command: impl Command + 'static) -> Box<dyn Command> {
     Box::new(command)
 }
@@ -200,9 +200,10 @@ pub fn boxed(command: impl Command + 'static) -> Box<dyn Command> {
 /// stores one monomorphization of this per command.
 pub type CommandParser = fn(BTreeMap<String, Value>) -> Result<Box<dyn Command>, DslError>;
 
-/// The semantic kind of a command-constructor argument, derived from its type
-/// via [`CommandArgType`]. Lets an MCP layer map each argument to a JSON shape
-/// without parsing raw Rust type strings.
+/// Type-checks one DSL value.
+pub type ArgCheck = fn(&Value) -> Result<(), DslError>;
+
+/// The shape axis coercion and JSON typing switch on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArgKind {
     /// A single address, e.g. `CODE:0x10`.
@@ -217,76 +218,84 @@ pub enum ArgKind {
     Offset,
     /// A single byte value.
     Byte,
-    /// A data type for `mark_data`.
-    DataType,
-    /// An optional operand override (text/label for one operand).
-    Operand,
-    /// A function definition.
-    Function,
-    /// A note.
-    Note,
-    /// A note id.
-    NoteId,
+    /// A domain type (`Note`, `Function`, `DataType`, ...).
+    Struct,
 }
 
-/// Maps a constructor argument's target type to its [`ArgKind`]. Implemented
-/// for every type accepted by a [`register!`] constructor; a missing impl is a
-/// compile error, so new argument types must be classified here.
-pub trait CommandArgType {
+impl ArgKind {
+    pub fn numeric(self) -> bool {
+        matches!(self, ArgKind::Offset | ArgKind::Byte)
+    }
+}
+
+/// The candidate closest to `target` by edit distance, if any is close enough
+/// to plausibly be a typo.
+pub fn closest<'a>(target: &str, candidates: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    candidates
+        .into_iter()
+        .map(|c| (crate::strings::levenshtein(target, c), c))
+        .filter(|(d, c)| *d <= 2.max(c.len() / 3))
+        .min_by_key(|(d, _)| *d)
+        .map(|(_, c)| c)
+}
+
+pub trait DslArg {
+    /// How the generic machinery handles this argument's shape.
     const KIND: ArgKind;
+    /// The stable wire slug a schema/UI switches on, finer than the JSON type.
+    const SLUG: &'static str;
+    /// A one-line spelling hint — the single string errors, schema hints, and
+    /// help all share.
+    const HINT: &'static str;
+    /// A canonical example spelling, or `None` for free text (whose example
+    /// depends on the argument's *name*, not its type).
+    const EXAMPLE: Option<&'static str>;
 }
 
-impl CommandArgType for SpaceAddressValue {
-    const KIND: ArgKind = ArgKind::Address;
-}
-impl CommandArgType for SpaceAddressRange {
-    const KIND: ArgKind = ArgKind::AddressRange;
-}
-impl CommandArgType for SpaceAddressSet {
-    const KIND: ArgKind = ArgKind::AddressSet;
-}
-impl CommandArgType for String {
-    const KIND: ArgKind = ArgKind::Text;
-}
-impl CommandArgType for usize {
-    const KIND: ArgKind = ArgKind::Offset;
-}
-impl CommandArgType for AddressValue {
-    const KIND: ArgKind = ArgKind::Offset;
-}
-impl CommandArgType for u8 {
-    const KIND: ArgKind = ArgKind::Byte;
-}
-impl CommandArgType for DataType {
-    const KIND: ArgKind = ArgKind::DataType;
-}
-impl CommandArgType for Option<OperandOverride> {
-    const KIND: ArgKind = ArgKind::Operand;
-}
-impl CommandArgType for Function {
-    const KIND: ArgKind = ArgKind::Function;
-}
-impl CommandArgType for Note {
-    const KIND: ArgKind = ArgKind::Note;
-}
-impl CommandArgType for NoteId {
-    const KIND: ArgKind = ArgKind::NoteId;
+macro_rules! dsl_arg {
+    ($($ty:ty),+ => $kind:ident, $slug:literal, $hint:literal, $example:expr $(,)?) => {
+        $(impl DslArg for $ty {
+            const KIND: ArgKind = ArgKind::$kind;
+            const SLUG: &'static str = $slug;
+            const HINT: &'static str = $hint;
+            const EXAMPLE: Option<&'static str> = $example;
+        })+
+    };
 }
 
-/// One argument of a command's `new` constructor, captured for introspection
-/// (e.g. an MCP server presenting commands to an LLM).
+dsl_arg!(SpaceAddressValue => Address, "address", "a DSL address, e.g. CODE:0x100", Some("CODE:0x100"));
+dsl_arg!(SpaceAddressRange => AddressRange, "address_range",
+    "an address range (end exclusive), e.g. CODE:0x10..0x20, or a bare address for one byte",
+    Some("CODE:0x10..0x20"));
+dsl_arg!(SpaceAddressSet => AddressSet, "address_set",
+    "an address set, e.g. CODE:{0x10..0x20, 0x30}, or a bare address/range", Some("CODE:{0x10..0x20}"));
+dsl_arg!(String => Text, "text", "quoted text, e.g. \"...\"", None);
+dsl_arg!(usize, AddressValue => Offset, "offset", "a byte offset or length", Some("0x0"));
+dsl_arg!(u8 => Byte, "byte", "a byte value, 0-255", Some("0xFF"));
+dsl_arg!(DataType => Struct, "data_type", "a data-type spelling, e.g. DataType::Byte", Some("DataType::Byte"));
+dsl_arg!(Option<OperandOverride> => Struct, "operand",
+    "an operand-override spelling, or None to clear", Some("None"));
+dsl_arg!(Function => Struct, "function",
+    "a function-definition spelling, e.g. Function(addr=..., name=\"...\", length=...)",
+    Some("Function(addr=CODE:0x100, name=\"main\", signature=None, length=0x40, noreturn=False)"));
+dsl_arg!(Note => Struct, "note",
+    "a note, e.g. Note(content=\"...\", tags=[\"todo\"]), or bare \"text\"",
+    Some("Note(content=\"...\", tags=[\"todo\"])"));
+dsl_arg!(NoteId => Struct, "note_id", "a note id", Some("\"0000000000000YN222X7N2CE7T\""));
+
 #[derive(Debug, Clone, Copy)]
 pub struct CommandArg {
     pub name: &'static str,
     /// The raw constructor target type, e.g. `"SpaceAddressValue"`.
     pub ty: &'static str,
-    /// The semantic kind, for schema generation.
     pub kind: ArgKind,
+    pub slug: &'static str,
+    pub hint: &'static str,
+    pub example: Option<&'static str>,
+    pub check: ArgCheck,
 }
 
-/// A command's registry entry: the constructor's doc comment and argument
-/// signature (for introspection) plus the parser that builds it from DSL
-/// kwargs. Built by [`register!`].
+/// A command's registry entry, built by [`register!`].
 #[derive(Debug, Clone, Copy)]
 pub struct CommandEntry {
     pub doc: &'static str,
@@ -383,10 +392,22 @@ mod tests {
         assert_eq!(kinds("set_constant_bytes"), [AddressRange, Byte]);
         assert_eq!(kinds("clear_bytes"), [AddressSet]);
         assert_eq!(kinds("disassemble_range"), [AddressRange]);
-        assert_eq!(kinds("mark_data"), [AddressRange, DataType]);
-        assert_eq!(kinds("mark_unknown"), [AddressRange]);
-        assert_eq!(kinds("override_operand"), [Address, Byte, Operand]);
-        assert_eq!(kinds("set_note"), [AddressRange, Note]);
-        assert_eq!(kinds("clear_note"), [NoteId]);
+        assert_eq!(kinds("mark_data"), [AddressRange, Struct]);
+        assert_eq!(kinds("override_operand"), [Address, Byte, Struct]);
+        assert_eq!(kinds("set_note"), [AddressRange, Struct]);
+        assert_eq!(kinds("clear_note"), [Struct]);
+    }
+
+    #[test]
+    fn struct_args_keep_a_per_type_slug() {
+        // ...but stay distinguishable on the wire via the type's slug
+        let arg = |cmd: &str, arg: &str| {
+            let entry = COMMANDS.get(cmd).unwrap();
+            *entry.args.iter().find(|a| a.name == arg).unwrap()
+        };
+        let note = arg("set_note", "note");
+        assert_eq!(note.kind, super::ArgKind::Struct);
+        assert_eq!(note.slug, "note");
+        assert_eq!(arg("mark_data", "data_type").slug, "data_type");
     }
 }

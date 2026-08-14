@@ -741,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    fn golden_replay_is_deterministic() {
+    fn replay_is_deterministic() {
         let steps = ["map rom", "disassemble reset vector", "label main"];
         let mut tip = None;
         let mut ids = Vec::new();

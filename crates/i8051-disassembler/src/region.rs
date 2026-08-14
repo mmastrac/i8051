@@ -1084,6 +1084,7 @@ impl Region {
                             direct: insn.direct_addr(),
                             text,
                             bytes: insn.bytes().to_vec(),
+                            target: branch_target(&insn),
                         });
                         addr = range.end;
                     }
@@ -1096,14 +1097,15 @@ impl Region {
                         });
                         addr = range.end;
                     }
-                    Equivalent::Unknown(size) => {
-                        let bytes = self.bytes_at(addr, *size);
+                    Equivalent::Unknown(_) => {
+                        let span = self.raw_span(addr, labels);
+                        let bytes = self.bytes_at(addr, span);
                         lines.push(Line::Raw { addr, bytes });
-                        addr = range.end;
+                        addr += span;
                     }
                 },
                 EquivalentAt::Undefined(undefined) => {
-                    let span = self.raw_run_until_next_annotation(addr, undefined.end, labels);
+                    let span = self.raw_span(addr, labels);
                     if span == 0 {
                         if let Some((&next_mapped, _)) =
                             self.byte_ranges.range(addr.saturating_add(1)..).next()
@@ -1373,35 +1375,47 @@ impl Region {
         Ok(())
     }
 
-    fn raw_run_until_next_annotation(
-        &self,
-        addr: AddressValue,
-        limit: AddressValue,
-        implicit_labels: &Labels,
-    ) -> AddressValue {
+    /// The length of the coalesced raw region at `addr`.
+    fn raw_span(&self, addr: AddressValue, implicit_labels: &Labels) -> AddressValue {
         let after = addr.saturating_add(1);
-        let mut boundary = limit;
-        if let Some(start) = self.next_equivalent_boundary(after) {
-            boundary = boundary.min(start);
-        }
-        if let Some((&start, _)) = self.labels.range(after..).next() {
-            boundary = boundary.min(start);
-        }
-        if let Some((&start, _)) = self.comments.range(after..).next() {
-            boundary = boundary.min(start);
-        }
-        if let Some((&start, _)) = implicit_labels.range(after..).next() {
-            boundary = boundary.min(start);
+        // The nearest annotation after `addr`
+        let mut boundary = self.end();
+        for next in [
+            self.labels.range(after..).next().map(|(&k, _)| k),
+            self.comments.range(after..).next().map(|(&k, _)| k),
+            self.functions.range(after..).next().map(|(&k, _)| k),
+            implicit_labels.range(after..).next().map(|(&k, _)| k),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            boundary = boundary.min(next);
         }
 
-        let mut end = addr;
-        while end < boundary {
-            if self.read_byte(end).is_none() {
-                break;
+        let mut cur = addr;
+        while cur < boundary {
+            match self.get_equivalent(cur) {
+                EquivalentAt::Defined { range, .. } => match &range.equivalent {
+                    Equivalent::Unknown(_) => cur = range.end.min(boundary),
+                    Equivalent::Code | Equivalent::Data(..) => break,
+                },
+                EquivalentAt::Undefined(undefined) => {
+                    let limit = boundary.min(undefined.end);
+                    let mut end = cur;
+                    while end < limit && self.read_byte(end).is_some() {
+                        end += 1;
+                    }
+                    if end == cur {
+                        break; // an unmapped byte at the run's edge
+                    }
+                    cur = end;
+                    if cur < undefined.end {
+                        break; // stopped short on an unmapped hole
+                    }
+                }
             }
-            end += 1;
         }
-        end - addr
+        cur - addr
     }
 
     fn format_instruction(
@@ -1726,6 +1740,43 @@ mod tests {
             })
             .unwrap();
         assert!(insn.contains("0x20,target"));
+    }
+
+    #[test]
+    fn adjacent_unknown_barriers_coalesce() {
+        let mut region = Region::new(CODE, Some(platform()));
+        region.set_bytes("test.bin", 0, 0, &[1, 2, 3, 4, 5, 6]);
+        // Undefine the range in three small adjacent chunks.
+        region.set_equivalent(0, Equivalent::Unknown(2)).unwrap();
+        region.set_equivalent(2, Equivalent::Unknown(2)).unwrap();
+        region.set_equivalent(4, Equivalent::Unknown(2)).unwrap();
+        let raws: Vec<_> = region
+            .render(CODE, &ImplicitLabels::default())
+            .into_iter()
+            .filter_map(|line| match line {
+                Line::Raw { addr, bytes } => Some((addr, bytes.len())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(raws, vec![(0, 6)], "adjacent barriers render together");
+    }
+
+    #[test]
+    fn label_splits_a_coalesced_raw_run() {
+        let mut region = Region::new(CODE, Some(platform()));
+        region.set_bytes("test.bin", 0, 0, &[1, 2, 3, 4]);
+        region.set_equivalent(0, Equivalent::Unknown(2)).unwrap();
+        region.set_equivalent(2, Equivalent::Unknown(2)).unwrap();
+        region.set_label(2, "mid");
+        let raws: Vec<_> = region
+            .render(CODE, &ImplicitLabels::default())
+            .into_iter()
+            .filter_map(|line| match line {
+                Line::Raw { addr, bytes } => Some((addr, bytes.len())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(raws, vec![(0, 2), (2, 2)], "label breaks the run");
     }
 
     #[test]
