@@ -1412,13 +1412,18 @@ impl Region {
                         addr = range.end;
                     }
                     Equivalent::Data(data_type, size) => {
-                        let bytes = self.bytes_at(addr, *size);
+                        // Swallowing a label undefines its references.
+                        let end = self
+                            .next_annotation(addr, labels)
+                            .map_or(range.end, |next| range.end.min(next));
+                        let size = end.saturating_sub(addr).min(*size).max(1);
+                        let bytes = self.bytes_at(addr, size);
                         lines.push(Line::Data {
                             addr,
                             data_type: data_type.clone(),
                             bytes,
                         });
-                        addr = range.end;
+                        addr = addr.saturating_add(size);
                     }
                     Equivalent::Unknown(_) => {
                         let span = self.raw_span(addr, labels);
@@ -1706,12 +1711,15 @@ impl Region {
         Ok(())
     }
 
-    /// The length of the coalesced raw region at `addr`.
-    fn raw_span(&self, addr: AddressValue, implicit_labels: &Labels) -> AddressValue {
+    /// The length of the coalesced raw region at `addr`. Nearest address after
+    /// `addr` needing its own line.
+    fn next_annotation(
+        &self,
+        addr: AddressValue,
+        implicit_labels: &Labels,
+    ) -> Option<AddressValue> {
         let after = addr.saturating_add(1);
-        // The nearest annotation after `addr`
-        let mut boundary = self.end();
-        for next in [
+        [
             self.labels.range(after..).next().map(|(&k, _)| k),
             self.comments.range(after..).next().map(|(&k, _)| k),
             self.functions.range(after..).next().map(|(&k, _)| k),
@@ -1719,9 +1727,13 @@ impl Region {
         ]
         .into_iter()
         .flatten()
-        {
-            boundary = boundary.min(next);
-        }
+        .min()
+    }
+
+    fn raw_span(&self, addr: AddressValue, implicit_labels: &Labels) -> AddressValue {
+        let boundary = self
+            .next_annotation(addr, implicit_labels)
+            .map_or(self.end(), |next| self.end().min(next));
 
         let mut cur = addr;
         while cur < boundary {
@@ -2416,5 +2428,34 @@ mod tests {
         assert!(asm.contains("inner:"), "the local falls back to its name:\n{asm}");
         assert!(!asm.contains("1$:"), "it cannot be an ASxxxx local:\n{asm}");
         assert!(asm.contains("SJMP    inner"), "the reference matches:\n{asm}");
+    }
+
+    /// A swallowed label undefines every reference to it.
+    #[test]
+    fn a_data_run_stops_at_a_label_inside_it() {
+        let mut region = Region::new(CODE, Some(platform()));
+        region.set_bytes("test.bin", 0, 0, &[0x11, 0x22, 0x33, 0x44]);
+        region.set_equivalent(0, Equivalent::Data(DataType::Byte, 4)).unwrap();
+        region.set_label(2, "table_hi", LabelAttrs::default());
+
+        let lines = region.render(CODE, &ImplicitLabels::default());
+        let labelled: Vec<AddressValue> = lines
+            .iter()
+            .filter_map(|l| match l {
+                Line::Label { addr, .. } => Some(*addr),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labelled, vec![2], "the label must survive the run: {lines:#?}");
+
+        // The run splits rather than losing bytes.
+        let data: Vec<(AddressValue, usize)> = lines
+            .iter()
+            .filter_map(|l| match l {
+                Line::Data { addr, bytes, .. } => Some((*addr, bytes.len())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(data, vec![(0, 2), (2, 2)], "{lines:#?}");
     }
 }
