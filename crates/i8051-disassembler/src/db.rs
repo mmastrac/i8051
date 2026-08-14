@@ -200,6 +200,26 @@ impl Db {
             .unwrap_or_default()
     }
 
+    /// The CPU's entry points that are not decoded as code, with the name and
+    /// reason for each.
+    pub fn undecoded_entry_points(&self) -> Vec<crate::platform::EntryPoint> {
+        let Some(platform) = &self.platform else {
+            return Vec::new();
+        };
+        platform
+            .entry_points()
+            .iter()
+            .filter(|e| {
+                self.region(e.space).is_some_and(|r| {
+                    r.has_byte(e.offset)
+                        && !r.platform_address_disabled(e.offset)
+                        && !matches!(r.get_equivalent_kind(e.offset), Some(EquivalentKind::Code))
+                })
+            })
+            .copied()
+            .collect()
+    }
+
     /// Follow pure jump thunks from `addr` to the ultimate target. Rendering
     /// stays faithful to the bytes, so this is how a consumer asks where a call
     /// or jump really ends up. Returns `addr` when it is not a thunk.

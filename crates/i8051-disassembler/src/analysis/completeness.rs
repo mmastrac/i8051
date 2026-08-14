@@ -191,6 +191,34 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
         coverage.data += usage.data;
         coverage.undefined += usage.undefined;
 
+        // Coverage shrinks silently when bytes go missing.
+        for (start, end) in region.mapping_gaps() {
+            let from = fmt_addr(space, start);
+            let to = fmt_addr(space, end);
+            items.push(item(
+                Phase::Decode,
+                "unmapped_gap",
+                Severity::Medium,
+                space,
+                rank,
+                start,
+                Some(fmt_range(space, start, end)),
+                format!(
+                    "nothing is mapped at {from}..{to}, but there are bytes on both sides. The \
+                     image has a hole: {} byte(s) that are not mapped. Map them from an image \
+                     file or fill them if they are genuinely absent.",
+                    end - start
+                ),
+                vec![
+                    format!(
+                        "map_bytes(address={from}, file=\"...\", file_offset=0x{start:x}, size=0x{:x})",
+                        end - start
+                    ),
+                    format!("set_constant_bytes(range={}, value=0x0)", fmt_range(space, start, end)),
+                ],
+            ));
+        }
+
         for target in region.unresolved_control_targets() {
             let verb = match target.kind {
                 XrefType::Call => "call",
@@ -361,6 +389,38 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
         }
     }
 
+    // The CPU's own vectors. Entry points whether or not anything references
+    // them.
+    for entry in db.undecoded_entry_points() {
+        let addr = fmt_addr(entry.space, entry.offset);
+        let name = entry.name;
+        let reason = entry.reason;
+        items.push(item(
+            Phase::Decode,
+            "undecoded_entry_point",
+            Severity::Medium,
+            entry.space,
+            0,
+            entry.offset,
+            None,
+            format!(
+                "{addr} ({name}) is a possible vector: the hardware transfers control here on \
+                 {reason}, but the bytes are not decoded as code. `peek` them. A jump or call \
+                 landing inside the image means the vector is in use and those bytes are its \
+                 handler. Bytes that decode to nothing coherent may mean the interrupt is never \
+                 enabled."
+            ),
+            vec![
+                format!("peek(address={addr}, lines=4)"),
+                format!("auto_disassemble(address={addr})  # if the vector is in use"),
+                format!(
+                    "disable_platform_address(address={addr}, reason=\"...\")  # if this \
+                     interrupt is never enabled — what the firmware writes to IE says which"
+                ),
+            ],
+        ));
+    }
+
     items.sort_by_key(|it| it.sort);
 
     let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
@@ -447,7 +507,7 @@ fn fmt_range(space: AddressSpace, start: AddressValue, end: AddressValue) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::{AutoDisassemble, DisassembleRange, MapBytes, SetLabel, boxed};
+    use crate::commands::{AutoDisassemble, DisassembleRange, MapBytes, SetLabel, UnmapBytes, boxed};
     use crate::platform::i8051::CODE;
 
     /// A tiny i8051 image, fully reachable from 0x0: `LCALL 0x4` / `RET`, then
@@ -620,5 +680,75 @@ mod tests {
             ranked.windows(2).all(|w| w[0].0 <= w[1].0),
             "worklist not ordered by caller count: {ranked:?}"
         );
+    }
+
+    #[test]
+    fn undecoded_vectors_are_raised_and_retiring_one_settles_it() {
+        use crate::commands::DisablePlatformAddress;
+
+        let db = db_with(vec![]);
+        let open = |db: &Db| {
+            assess_at(db, Gate::Structural)
+                .items
+                .iter()
+                .filter(|i| i.kind == "undecoded_entry_point")
+                .count()
+        };
+        let before = open(&db);
+        assert!(before > 0, "the CPU's vectors start undecided");
+
+        let mut db = db;
+        let undo = db
+            .apply(
+                boxed(DisablePlatformAddress {
+                    address: (CODE, 0x3u32).into(),
+                    reason: "IE=0x00 never enables EX0".to_string(),
+                }),
+                Some(&Env),
+            )
+            .unwrap();
+        assert_eq!(open(&db), before - 1);
+
+        for command in undo {
+            db.apply(command, Some(&Env)).unwrap();
+        }
+        assert_eq!(open(&db), before, "restoring reopens the question");
+    }
+
+    #[test]
+    fn a_decoded_vector_leaves_the_worklist() {
+        let db = db_with(vec![boxed(AutoDisassemble::new((CODE, 0u32)))]);
+        let report = assess_at(&db, Gate::Structural);
+        let raised: Vec<&str> = report
+            .items
+            .iter()
+            .filter(|i| i.kind == "undecoded_entry_point")
+            .map(|i| i.address.as_str())
+            .collect();
+        assert!(!raised.contains(&"CODE:0x0"), "reset is decoded: {raised:?}");
+    }
+
+    /// A hole with bytes on both sides means something removed them.
+    #[test]
+    fn a_hole_between_mapped_bytes_is_reported_but_the_tail_is_not() {
+        let mut db = db_with(vec![]);
+        assert!(
+            !assess_at(&db, Gate::Structural)
+                .counts
+                .contains_key("unmapped_gap"),
+            "a contiguous image has no gap"
+        );
+
+        // Unmap two bytes from the middle.
+        db.apply(boxed(UnmapBytes::new((CODE, 2u32..4u32))), Some(&Env))
+            .unwrap();
+        let report = assess_at(&db, Gate::Structural);
+        let gap = report
+            .items
+            .iter()
+            .find(|i| i.kind == "unmapped_gap")
+            .expect("a hole between mapped bytes must be reported");
+        assert_eq!(gap.range.as_deref(), Some("CODE:0x2..0x4"));
+        assert!(gap.detail.contains("2 byte(s)"), "{}", gap.detail);
     }
 }

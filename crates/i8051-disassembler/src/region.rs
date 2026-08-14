@@ -934,6 +934,27 @@ impl Region {
         out
     }
 
+    /// Unmapped stretches sitting between mapped bytes that should arguably be
+    /// mapper or filled.
+    pub fn mapping_gaps(&self) -> Vec<(AddressValue, AddressValue)> {
+        let mut gaps = Vec::new();
+        let mut previous_end: Option<AddressValue> = None;
+        for (&start, range) in &self.byte_ranges {
+            if let Some(end) = previous_end
+                && start > end
+            {
+                gaps.push((end, start));
+            }
+            previous_end = Some(start + range.len());
+        }
+        gaps
+    }
+
+    /// Whether `offset` has a mapped byte.
+    pub fn has_byte(&self, offset: AddressValue) -> bool {
+        self.read_byte(offset).is_some()
+    }
+
     /// Whether the label at `offset` is a working guess rather than finalized.
     pub fn is_draft_label(&self, offset: AddressValue) -> bool {
         self.draft_labels.contains(&offset)
