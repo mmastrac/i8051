@@ -6,6 +6,8 @@ use serde::de::value::SeqAccessDeserializer;
 use serde::de::{Error as _, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::platform::Certainty;
+
 pub type AddressValue = u32;
 
 // Signals to the serializer/deserializer to use compact syntax.
@@ -341,6 +343,7 @@ pub struct Xref {
     pub from: PhysicalAddr,
     pub to: PhysicalAddr,
     pub xref_type: XrefType,
+    pub certainty: Certainty,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

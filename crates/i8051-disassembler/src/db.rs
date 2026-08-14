@@ -430,8 +430,8 @@ impl std::fmt::Display for Error {
                 write!(
                     f,
                     "unmapping would cut {kind} at {space}:0x{start:x}..0x{end:x}, which reaches \
-                     past the bytes being unmapped, `clear_equivalents` first, or unmap the \
-                     a larger range"
+                     past the bytes being unmapped: `clear_equivalents` first, or unmap a \
+                     larger range"
                 )
             }
             Self::CpuAlreadySet { current } => {
@@ -466,7 +466,7 @@ mod tests {
     use super::*;
     use crate::address::SpaceAddressSet;
     use crate::address::XrefType;
-    use crate::platform::i8051::CODE;
+    use crate::platform::{i8051::CODE, Certainty};
     use crate::commands::{
         AutoDisassemble, ClearLabel, Command, MapBytes, SetConstantBytes, UnmapBytes, boxed,
     };
@@ -584,6 +584,7 @@ mod tests {
                     space: CODE,
                     offset: 3
                 },
+                certainty: Certainty::Definite,
             }]
         );
 
@@ -602,6 +603,7 @@ mod tests {
                     space: CODE,
                     offset: 3
                 },
+                certainty: Certainty::Definite,
             }]
         );
 

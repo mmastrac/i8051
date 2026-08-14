@@ -1225,6 +1225,7 @@ impl Region {
                 },
                 to: *target,
                 xref_type: edge.kind,
+                certainty: edge.certainty,
             })
             .collect()
     }

@@ -10,7 +10,9 @@ use ::mos6502::{Instruction, Mnemonic, Operand};
 
 use crate::address::{AddressSpace, XrefType};
 
-use super::{ControlFlow, DataRef, DecodedInsn, Platform, PlatformRef, RegionDef, RegionKind};
+use super::{
+    Certainty, ControlFlow, DataRef, DecodedInsn, Platform, PlatformRef, RegionDef, RegionKind,
+};
 
 /// The 6502's single flat address space.
 pub const CODE: AddressSpace = AddressSpace::new("CODE");
@@ -134,6 +136,8 @@ fn data_refs(insn: &Instruction) -> Vec<DataRef> {
         space: CODE,
         offset,
         kind: access.kind(),
+        certainty: Certainty::Definite,
+        operand: Some(0),
     }]
 }
 

@@ -43,6 +43,19 @@ pub struct DataRef {
     pub space: AddressSpace,
     pub offset: AddressValue,
     pub kind: XrefType,
+    pub certainty: Certainty,
+    /// Which operand this is for, if any.
+    pub operand: Option<u8>,
+}
+
+/// Whether a reference is definite (unambiguous) or inferred (one of many
+/// options).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Certainty {
+    /// The instruction names this target unambiguously.
+    Definite,
+    /// The instruction produces a value that may be this target.
+    Inferred,
 }
 
 /// A CPU-neutral decoded instruction: everything the disassembler needs to
@@ -159,25 +172,30 @@ pub trait Platform: Send + Sync {
 /// the driver's pre-classified [`DataRef`]s.
 pub fn xrefs_from_instruction(insn: &DecodedInsn, source: PhysicalAddr) -> Vec<Xref> {
     let mut xrefs = Vec::new();
-    let mut push = |space, offset, xref_type| {
+    let mut push = |space, offset, xref_type, certainty| {
         xrefs.push(Xref {
             from: source,
             to: PhysicalAddr { space, offset },
             xref_type,
+            certainty,
         });
     };
 
     match insn.control_flow {
-        ControlFlow::Jump { target } => push(source.space, target, XrefType::Jump),
-        ControlFlow::Call { target, .. } => push(source.space, target, XrefType::Call),
+        ControlFlow::Jump { target } => {
+            push(source.space, target, XrefType::Jump, Certainty::Definite)
+        }
+        ControlFlow::Call { target, .. } => {
+            push(source.space, target, XrefType::Call, Certainty::Definite)
+        }
         ControlFlow::Choice { branch_target, .. } => {
-            push(source.space, branch_target, XrefType::Jump)
+            push(source.space, branch_target, XrefType::Jump, Certainty::Definite)
         }
         _ => {}
     }
 
     for data_ref in &insn.data_refs {
-        push(data_ref.space, data_ref.offset, data_ref.kind);
+        push(data_ref.space, data_ref.offset, data_ref.kind, data_ref.certainty);
     }
 
     xrefs

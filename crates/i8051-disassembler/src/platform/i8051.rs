@@ -11,7 +11,9 @@ use ::i8051::{Instruction, Mnemonic, Operand};
 
 use crate::address::{AddressSpace, XrefType};
 
-use super::{ControlFlow, DataRef, DecodedInsn, Platform, PlatformRef, RegionDef, RegionKind};
+use super::{
+    Certainty, ControlFlow, DataRef, DecodedInsn, Platform, PlatformRef, RegionDef, RegionKind,
+};
 
 /// External program memory — where code lives.
 pub const CODE: AddressSpace = AddressSpace::new("CODE");
@@ -188,9 +190,10 @@ fn is_dptr_load(insn: &Instruction) -> bool {
         )
 }
 
-/// The static data references an instruction makes. Direct operands split into
-/// `SFR` (`>= 0x80`) or `IDATA`; bit operands land in `BIT`; a `MOV DPTR,#addr`
-/// materializes an `XDATA` pointer. Indirect operands have no static target.
+/// The static data references an instruction makes. 
+/// 
+/// For 8051: Direct operands split into `SFR` (`>= 0x80`) or `IDATA`. Bit
+/// operands land in `BIT`. A `MOV DPTR,#addr` may be either CODE or XDATA.
 fn data_refs(insn: &Instruction) -> Vec<DataRef> {
     let mut refs = Vec::new();
     let dptr_load = is_dptr_load(insn);
@@ -203,6 +206,8 @@ fn data_refs(insn: &Instruction) -> Vec<DataRef> {
                         space,
                         offset: u32::from(*addr),
                         kind: access.kind(),
+                        certainty: Certainty::Definite,
+                        operand: u8::try_from(index).ok(),
                     });
                 }
             }
@@ -212,15 +217,21 @@ fn data_refs(insn: &Instruction) -> Vec<DataRef> {
                         space: BIT,
                         offset: u32::from(*addr),
                         kind: access.kind(),
+                        certainty: Certainty::Definite,
+                        operand: u8::try_from(index).ok(),
                     });
                 }
             }
             Operand::Imm16(value) if dptr_load => {
-                refs.push(DataRef {
-                    space: XDATA,
-                    offset: u32::from(*value),
-                    kind: XrefType::Pointer,
-                });
+                for space in [CODE, XDATA] {
+                    refs.push(DataRef {
+                        space,
+                        offset: u32::from(*value),
+                        kind: XrefType::Pointer,
+                        certainty: Certainty::Inferred,
+                        operand: u8::try_from(index).ok(),
+                    });
+                }
             }
             _ => {}
         }
@@ -244,8 +255,11 @@ mod tests {
         assert_eq!(e(&[0xF5, 0x90]), vec![(SFR, 0x90, Write)]);
         // Low direct addresses land in IDATA. INC direct is read-modify-write.
         assert_eq!(e(&[0x05, 0x30]), vec![(IDATA, 0x30, ReadWrite)]);
-        // MOV DPTR,#0x1234 materializes an address, not a dereference.
-        assert_eq!(e(&[0x90, 0x12, 0x34]), vec![(XDATA, 0x1234, Pointer)]);
+        // MOV DPTR,#0x1234 is ambiguous: it may be either CODE or XDATA.
+        assert_eq!(
+            e(&[0x90, 0x12, 0x34]),
+            vec![(CODE, 0x1234, Pointer), (XDATA, 0x1234, Pointer)]
+        );
         // MOV 0x30,0x40 (85 src dst): a write to the dest, a read of the source.
         assert_eq!(
             e(&[0x85, 0x40, 0x30]),

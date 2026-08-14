@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use crate::address::{AddressValue, PhysicalAddr, XrefType};
-use crate::platform::xrefs_from_instruction;
+use crate::platform::{Certainty, xrefs_from_instruction};
 
 use super::Region;
 
@@ -15,6 +15,7 @@ use super::Region;
 pub(crate) struct Edge {
     pub from: AddressValue,
     pub kind: XrefType,
+    pub certainty: Certainty,
 }
 
 #[derive(Debug)]
@@ -45,6 +46,7 @@ impl Xrefs {
                 reverse.entry(xref.to).or_default().push(Edge {
                     from: offset,
                     kind: xref.xref_type,
+                    certainty: xref.certainty,
                 });
             }
         }
