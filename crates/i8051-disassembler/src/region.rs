@@ -11,10 +11,6 @@ use weak::{CodeSource, Weak};
 use xrefs::Xrefs;
 
 use crate::address::{AddressRange, AddressSpace, AddressValue, PhysicalAddr, Xref, XrefType};
-use crate::platform::{
-    ControlFlow, DecodedInsn, PlatformRef, branch_target, branch_target_operand_index,
-    xrefs_from_instruction,
-};
 use crate::commands::{
     AutoDisassemble, Command, DisassembleRange, MapBytes, MarkData, MarkUnknown, OverrideOperand,
     SetComment, SetConstantBytes, SetFunction, SetLabel, boxed,
@@ -25,6 +21,10 @@ use crate::db::{
 };
 use crate::labels::{ImplicitLabels, LabelCollector, LabelKind, Labels};
 use crate::pattern::BytePattern;
+use crate::platform::{
+    ControlFlow, DecodedInsn, PlatformRef, branch_target, branch_target_operand_index,
+    xrefs_from_instruction,
+};
 use crate::render::Line;
 
 #[derive(Debug, Clone)]
@@ -147,6 +147,15 @@ fn mark_self_misaligned(decode: &mut ScratchDecode) {
     decode.self_misaligned_targets = count;
 }
 
+/// What an instruction's ambiguous operand resolves to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperandType {
+    /// An address in this space.
+    Pointer(AddressSpace),
+    /// A number, e.g.: a count, a mask, a register being cleared.
+    Value,
+}
+
 pub struct Region {
     space: AddressSpace,
     /// The driver that decodes this region's bytes. `None` until a CPU is set,
@@ -155,6 +164,9 @@ pub struct Region {
     byte_ranges: BTreeMap<AddressValue, ByteRange>,
     equivalents: BTreeMap<AddressValue, EquivalentRange>,
     labels: BTreeMap<AddressValue, String>,
+    /// What an instruction's ambiguous operand turned out to mean, keyed by the
+    /// instruction.
+    operand_types: BTreeMap<AddressValue, OperandType>,
     /// Platform addresses we've chosen to disable (w/ a reason).
     disabled_platform_addresses: BTreeMap<AddressValue, String>,
     /// How many address lines the board actually decodes for this space, `None`
@@ -182,6 +194,7 @@ impl Region {
             labels: BTreeMap::new(),
             address_bits: None,
             disabled_platform_addresses: BTreeMap::new(),
+            operand_types: BTreeMap::new(),
             comments: BTreeMap::new(),
             functions: BTreeMap::new(),
             overrides: BTreeMap::new(),
@@ -195,6 +208,63 @@ impl Region {
         self.platform = platform;
         self.refresh_weak();
         self.invalidate_xrefs();
+    }
+
+    /// Record what the ambiguous operand of the instruction at `offset` names.
+    pub fn set_operand_type(
+        &mut self,
+        offset: AddressValue,
+        kind: OperandType,
+    ) -> Option<OperandType> {
+        self.operand_types.insert(offset, kind)
+    }
+
+    /// Forget the decision for the instruction at `offset`.
+    pub fn clear_operand_type(&mut self, offset: AddressValue) -> Option<OperandType> {
+        self.operand_types.remove(&offset)
+    }
+
+    pub fn operand_type(&self, offset: AddressValue) -> Option<OperandType> {
+        self.operand_types.get(&offset).copied()
+    }
+
+    /// Every disambiguated operand, in address order.
+    pub fn operand_types(&self) -> impl Iterator<Item = (AddressValue, OperandType)> + '_ {
+        self.operand_types.iter().map(|(&addr, &kind)| (addr, kind))
+    }
+
+    /// Targets reached only by inferred pointer references, as
+    /// `(target, how many, the earliest source)`.
+    pub(crate) fn inferred_pointer_candidates(&self) -> Vec<(PhysicalAddr, usize, AddressValue)> {
+        let mut out = Vec::new();
+        for (target, edges) in self.xref_index().targets() {
+            let sources: Vec<AddressValue> = edges
+                .iter()
+                .filter(|e| {
+                    e.kind == XrefType::Pointer
+                        && e.certainty == crate::platform::Certainty::Inferred
+                })
+                .map(|e| e.from)
+                .collect();
+            let Some(&first) = sources.iter().min() else {
+                continue;
+            };
+            out.push((*target, sources.len(), first));
+        }
+        out.sort_unstable_by_key(|(t, _, _)| (t.offset, t.space));
+        out
+    }
+
+    /// The instructions that produce an inferred pointer to `target`.
+    pub(crate) fn pointer_sources(&self, target: &PhysicalAddr) -> Vec<AddressValue> {
+        self.xref_index()
+            .to(target)
+            .iter()
+            .filter(|e| {
+                e.kind == XrefType::Pointer && e.certainty == crate::platform::Certainty::Inferred
+            })
+            .map(|e| e.from)
+            .collect()
     }
 
     /// Record that a platform address is disabled. Returns the previous reason,
@@ -800,7 +870,9 @@ impl Region {
 
     /// Every label in this region, in ascending address order.
     pub fn labels(&self) -> impl Iterator<Item = (AddressValue, &str)> {
-        self.labels.iter().map(|(&addr, name)| (addr, name.as_str()))
+        self.labels
+            .iter()
+            .map(|(&addr, name)| (addr, name.as_str()))
     }
 
     /// Every function in this region, in ascending address order.
@@ -957,8 +1029,10 @@ impl Region {
             let Some(edge) = edge else {
                 continue;
             };
-            let misaligned =
-                matches!(self.get_equivalent_kind(target.offset), Some(EquivalentKind::Code));
+            let misaligned = matches!(
+                self.get_equivalent_kind(target.offset),
+                Some(EquivalentKind::Code)
+            );
             out.push(ControlTarget {
                 target: target.offset,
                 kind: edge.kind,
@@ -995,7 +1069,11 @@ impl Region {
             } else {
                 LeakKind::IntoUndefined
             };
-            leaks.push(FlowLeak { from: offset, to, kind });
+            leaks.push(FlowLeak {
+                from: offset,
+                to,
+                kind,
+            });
         }
         leaks
     }
@@ -1044,6 +1122,10 @@ impl Region {
         result
     }
 
+    /// Decode bytes as code from `start` without committing anything, following
+    /// fall-through up to `max_lines` instructions and stopping at the first
+    /// return or unconditional jump. Lets a caller judge whether a run is code
+    /// before disassembling it (out-of-range targets flag likely garbage).
     pub(crate) fn scratch_decode(&self, start: AddressValue, max_lines: usize) -> ScratchDecode {
         let mut result = ScratchDecode::default();
         let mut addr = start;
@@ -1569,6 +1651,38 @@ impl Region {
             }
         }
 
+        // Does this operand have a better name?
+        let decided = self.operand_type(_addr);
+        for data_ref in &insn.data_refs {
+            let Some(idx) = data_ref.operand.map(usize::from) else {
+                continue;
+            };
+            if data_ref.space != self.space {
+                continue;
+            }
+            if data_ref.certainty == crate::platform::Certainty::Inferred
+                && !matches!(decided, Some(OperandType::Pointer(space)) if space == self.space)
+            {
+                continue;
+            }
+            while merged.len() <= idx {
+                merged.push(None);
+            }
+            if merged[idx].is_some() {
+                continue;
+            }
+            if let Some(label) = self
+                .get_label(data_ref.offset)
+                .or_else(|| implicit_labels.get(&data_ref.offset).map(String::as_str))
+            {
+                let text = match data_ref.kind {
+                    XrefType::Pointer => format!("#{label}"),
+                    _ => label.to_string(),
+                };
+                merged[idx] = Some(OperandOverride::Label(text));
+            }
+        }
+
         let text = if merged.iter().all(|o| o.is_none()) {
             decoded.to_string()
         } else {
@@ -1689,8 +1803,8 @@ fn ranges_overlap_inclusive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::i8051::{CODE, platform};
     use crate::db::{DataType, Equivalent, EquivalentKind, OperandOverride, SpaceUsage};
+    use crate::platform::i8051::{CODE, platform};
 
     #[test]
     fn overlap_error_names_space_and_kind() {
@@ -1700,10 +1814,7 @@ mod tests {
         let err = region
             .disassemble_linear(0, 2)
             .expect_err("second instruction overlaps code at 0");
-        assert_eq!(
-            err.to_string(),
-            "range overlaps existing code at CODE:0x0"
-        );
+        assert_eq!(err.to_string(), "range overlaps existing code at CODE:0x0");
     }
 
     #[test]
@@ -2009,7 +2120,10 @@ mod tests {
 
         assert_eq!(decode.self_misaligned_targets, 1);
         assert!(decode.lines[0].target_self_misaligned, "0x00 -> 0x03");
-        assert!(!decode.lines[1].target_self_misaligned, "0x02 -> 0x04 is aligned");
+        assert!(
+            !decode.lines[1].target_self_misaligned,
+            "0x02 -> 0x04 is aligned"
+        );
     }
 
     /// Real code branches to boundaries.
@@ -2039,10 +2153,17 @@ mod tests {
         let image: &[u8] = &[0x22, 0x00, 0x00, 0x22];
         let env = Env(image);
         let mut db = Db::with_platform(crate::platform::i8051::platform());
-        db.apply(boxed(MapBytes::new((CODE, 0), "img", 0usize, 4u32)), Some(&env))
-            .unwrap();
+        db.apply(
+            boxed(MapBytes::new((CODE, 0), "img", 0usize, 4u32)),
+            Some(&env),
+        )
+        .unwrap();
 
         assert_eq!(db.peek(CODE, 0, 16).lines.len(), 1, "flow stops at the RET");
-        assert_eq!(db.peek_linear(CODE, 0, 4).lines.len(), 4, "linear keeps going");
+        assert_eq!(
+            db.peek_linear(CODE, 0, 4).lines.len(),
+            4,
+            "linear keeps going"
+        );
     }
 }

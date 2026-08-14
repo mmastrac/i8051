@@ -1,4 +1,4 @@
-use crate::address::{AddressSpace, AddressValue};
+use crate::address::AddressValue;
 use crate::db::{Db, Error};
 
 use super::{Apply, Command, Environment, boxed};
@@ -25,7 +25,7 @@ impl Apply for SetAddressBits {
         _env: Option<&dyn Environment>,
     ) -> Result<Vec<Box<dyn Command>>, Error> {
         let Self { space, bits } = self;
-        let target = resolve_space(db, &space)?;
+        let target = db.resolve_space(&space)?;
         if bits == 0 || bits > AddressValue::BITS {
             return Err(Error::InvalidArgument {
                 value: bits.to_string(),
@@ -54,27 +54,9 @@ impl Apply for ClearAddressBits {
         _env: Option<&dyn Environment>,
     ) -> Result<Vec<Box<dyn Command>>, Error> {
         let Self { space } = self;
-        let target = resolve_space(db, &space)?;
+        let target = db.resolve_space(&space)?;
         let previous = db.region_mut(target).set_address_bits(None);
         Ok(undo_for(&space, previous))
-    }
-}
-
-/// A space this database actually has. Space names are driver-defined, so
-/// nothing else rejects a typo — and `region_mut` would answer it by creating
-/// an empty region that then gets exported.
-fn resolve_space(db: &Db, name: &str) -> Result<AddressSpace, Error> {
-    let spaces = db.spaces();
-    match AddressSpace::from_dsl_name(name) {
-        Some(space) if spaces.contains(&space) => Ok(space),
-        _ => {
-            let names: Vec<String> = spaces.iter().map(|s| s.dsl_name().to_string()).collect();
-            Err(Error::UnknownSpace {
-                name: name.to_string(),
-                suggestion: super::closest(name, names.iter().map(String::as_str))
-                    .map(str::to_string),
-            })
-        }
     }
 }
 
@@ -117,8 +99,11 @@ mod tests {
     #[test]
     fn narrowing_a_space_resolves_references_to_the_byte_reached() {
         let mut db = Db::with_platform(crate::platform::i8051::platform());
-        db.apply(boxed(MapBytes::new((CODE, 0), "img", 0usize, 8u32)), Some(&Env))
-            .unwrap();
+        db.apply(
+            boxed(MapBytes::new((CODE, 0), "img", 0usize, 8u32)),
+            Some(&Env),
+        )
+        .unwrap();
         db.apply(boxed(AutoDisassemble::new((CODE, 0u32))), Some(&Env))
             .unwrap();
 
@@ -189,6 +174,9 @@ mod tests {
                 None,
             )
             .expect_err("a space this database does not have");
-        assert_eq!(err.to_string(), "unknown address space \"COED\" (did you mean `CODE`?)");
+        assert_eq!(
+            err.to_string(),
+            "unknown address space \"COED\" (did you mean `CODE`?)"
+        );
     }
 }

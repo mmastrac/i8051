@@ -4,14 +4,14 @@ use std::range::Range;
 use serde::{Deserialize, Serialize};
 
 use crate::address::{AddressSpace, AddressValue, PhysicalAddr, SpaceAddressValue, Xref};
-use crate::platform::{Platform, PlatformRef};
 use crate::commands::{Command, Environment, SetCpu, SetNote, boxed};
 use crate::labels::{ImplicitLabels, LabelCollector};
 pub use crate::note::{
     Note, NoteAddressIndex, NoteDb, NoteField, NoteGlobalIndex, NoteId, NotePath, Notes,
     ProximateNote,
 };
-pub use crate::region::{Block, ByteRange, Region, ScratchDecode, ScratchInsn};
+use crate::platform::{Certainty, Platform, PlatformRef};
+pub use crate::region::{Block, ByteRange, OperandType, Region, ScratchDecode, ScratchInsn};
 use crate::render::Line;
 use crate::render::sdas::SdasWriter;
 
@@ -67,6 +67,19 @@ impl Db {
         }
     }
 
+    /// Space names are driver-defined.
+    pub fn resolve_space(&self, name: &str) -> Result<AddressSpace, Error> {
+        let spaces = self.spaces();
+        match AddressSpace::from_dsl_name(name) {
+            Some(space) if spaces.contains(&space) => Ok(space),
+            _ => Err(Error::UnknownSpace {
+                name: name.to_string(),
+                suggestion: crate::commands::closest(name, spaces.iter().map(|s| s.dsl_name()))
+                    .map(str::to_string),
+            }),
+        }
+    }
+
     /// The `.area` header for `space`: the driver's when a CPU is set, else a
     /// plain default built from the space name.
     fn area_header(&self, space: AddressSpace) -> String {
@@ -94,6 +107,49 @@ impl Db {
         self.regions
             .values()
             .flat_map(|region| region.xrefs_to(target))
+            .filter(|x| self.pointer_candidate_survives(x))
+            .collect()
+    }
+
+    /// Whether an inferred pointer candidate is still alive.
+    fn pointer_candidate_survives(&self, xref: &Xref) -> bool {
+        if xref.certainty != Certainty::Inferred {
+            return true;
+        }
+        match self
+            .regions
+            .get(&xref.from.space)
+            .and_then(|r| r.operand_type(xref.from.offset))
+        {
+            Some(OperandType::Pointer(space)) => xref.to.space == space,
+            // A number references nothing, so no candidate survives.
+            Some(OperandType::Value) => false,
+            None => true,
+        }
+    }
+
+    /// Instructions with ambiguous operands, as `(instruction, value, candidate
+    /// spaces)`.
+    pub fn undecided_operands(&self) -> Vec<(SpaceAddressValue, AddressValue, Vec<AddressSpace>)> {
+        let mut by_site: BTreeMap<(AddressSpace, AddressValue, AddressValue), Vec<AddressSpace>> =
+            BTreeMap::new();
+        for (&space, region) in &self.regions {
+            for (target, _, _) in region.inferred_pointer_candidates() {
+                for from in region.pointer_sources(&target) {
+                    if region.operand_type(from).is_some() {
+                        continue;
+                    }
+                    let spaces = by_site.entry((space, from, target.offset)).or_default();
+                    if !spaces.contains(&target.space) {
+                        spaces.push(target.space);
+                    }
+                }
+            }
+        }
+        by_site
+            .into_iter()
+            .filter(|(_, spaces)| spaces.len() > 1)
+            .map(|((space, from, value), spaces)| ((space, from).into(), value, spaces))
             .collect()
     }
 
@@ -101,7 +157,11 @@ impl Db {
         let Some(region) = self.regions.get(&source.space) else {
             return Vec::new();
         };
-        region.xrefs_from(source)
+        region
+            .xrefs_from(source)
+            .into_iter()
+            .filter(|x| self.pointer_candidate_survives(x))
+            .collect()
     }
 
     /// The control-flow graph of the routine rooted at `entry` in `space`.
@@ -113,7 +173,12 @@ impl Db {
 
     /// Decode bytes as code from `start` without committing, for a caller to
     /// judge whether a run is really code (see [`Region::scratch_decode`]).
-    pub fn peek(&self, space: AddressSpace, start: AddressValue, max_lines: usize) -> ScratchDecode {
+    pub fn peek(
+        &self,
+        space: AddressSpace,
+        start: AddressValue,
+        max_lines: usize,
+    ) -> ScratchDecode {
         self.region(space)
             .map(|region| region.scratch_decode(start, max_lines))
             .unwrap_or_default()
@@ -151,7 +216,10 @@ impl Db {
         if let Some(platform) = &self.platform {
             for entry in platform.entry_points() {
                 let decoded = self.region(entry.space).is_some_and(|r| {
-                    matches!(r.get_equivalent_kind(entry.offset), Some(EquivalentKind::Code))
+                    matches!(
+                        r.get_equivalent_kind(entry.offset),
+                        Some(EquivalentKind::Code)
+                    )
                 });
                 if decoded {
                     labels.insert_if_absent(entry.space, entry.offset, entry.name);
@@ -218,6 +286,17 @@ impl Db {
             }
             // ... then the region's own commands
             commands.extend(region.to_commands(space));
+            for (offset, kind) in region.operand_types() {
+                commands.push(match kind {
+                    OperandType::Pointer(target) => boxed(crate::commands::SetOperandPointer {
+                        address: (space, offset).into(),
+                        space: target.dsl_name().to_string(),
+                    }),
+                    OperandType::Value => boxed(crate::commands::SetOperandValue {
+                        address: (space, offset).into(),
+                    }),
+                });
+            }
             // ... then any disabled platform addresses
             for (offset, reason) in region.disabled_platform_addresses() {
                 commands.push(boxed(crate::commands::DisablePlatformAddress {
@@ -417,7 +496,9 @@ pub enum Error {
     /// A disassembly command ran with no CPU selected (`set_cpu` must run first).
     NoCpu,
     /// `set_cpu` ran while a CPU was already selected.
-    CpuAlreadySet { current: String },
+    CpuAlreadySet {
+        current: String,
+    },
     /// `set_cpu` named a CPU with no built-in driver.
     UnknownCpu {
         name: String,
@@ -526,10 +607,10 @@ mod tests {
     use super::*;
     use crate::address::SpaceAddressSet;
     use crate::address::XrefType;
-    use crate::platform::{i8051::CODE, Certainty};
     use crate::commands::{
         AutoDisassemble, ClearLabel, Command, MapBytes, SetConstantBytes, UnmapBytes, boxed,
     };
+    use crate::platform::{Certainty, i8051::CODE};
     use pretty_assertions::assert_eq;
 
     static TEST_BINARY: [u8; 12] = [
@@ -624,8 +705,11 @@ mod tests {
         let env = TestEnvironment::new().with_file(file, bytes.to_vec());
         let mut db = Db::with_platform(crate::platform::i8051::platform());
         let size = bytes.len() as AddressValue;
-        db.apply(boxed(MapBytes::new((CODE, 0), file, 0usize, size)), Some(&env))
-            .unwrap();
+        db.apply(
+            boxed(MapBytes::new((CODE, 0), file, 0usize, size)),
+            Some(&env),
+        )
+        .unwrap();
         (db, env)
     }
 
@@ -729,8 +813,14 @@ loc_0010:
         assert_eq!(reloaded.notes.notes.len(), 2);
         assert_eq!(reloaded.notes.get(&first.id), Some(&first));
         assert_eq!(reloaded.notes.get(&second.id), Some(&second));
-        assert_eq!(reloaded.note_location(&first.id), Some((CODE, AddressRange::new(0x0, 0x3))));
-        assert_eq!(reloaded.note_location(&second.id), Some((CODE, AddressRange::new(0x3, 0x5))));
+        assert_eq!(
+            reloaded.note_location(&first.id),
+            Some((CODE, AddressRange::new(0x0, 0x3)))
+        );
+        assert_eq!(
+            reloaded.note_location(&second.id),
+            Some((CODE, AddressRange::new(0x3, 0x5)))
+        );
 
         // The listing (which excludes notes) is unchanged.
         assert_eq!(reloaded.to_sdas(), db.to_sdas());
@@ -743,11 +833,17 @@ loc_0010:
             .with_file("test.bin", vec![1, 2, 3])
             .with_file("other.bin", vec![4, 5]);
         let mut db = Db::with_platform(crate::platform::i8051::platform());
-        db.apply(boxed(MapBytes::new((CODE, 0), "test.bin", 0usize, 3u32)), Some(&env))
-            .unwrap();
+        db.apply(
+            boxed(MapBytes::new((CODE, 0), "test.bin", 0usize, 3u32)),
+            Some(&env),
+        )
+        .unwrap();
 
         let undo = db
-            .apply(boxed(MapBytes::new((CODE, 0), "other.bin", 0usize, 2u32)), Some(&env))
+            .apply(
+                boxed(MapBytes::new((CODE, 0), "other.bin", 0usize, 2u32)),
+                Some(&env),
+            )
             .unwrap();
         assert_eq!(db.region(CODE).unwrap().bytes_at(0, 2), vec![4, 5]);
 
@@ -758,7 +854,9 @@ loc_0010:
     #[test]
     fn unmap_bytes_command_undo() {
         let (mut db, env) = mapped("t.bin", &[1, 2, 3, 4, 5]);
-        let undo = db.apply(boxed(UnmapBytes::new((CODE, 1..3))), None).unwrap();
+        let undo = db
+            .apply(boxed(UnmapBytes::new((CODE, 1..3))), None)
+            .unwrap();
         assert_eq!(db.region(CODE).unwrap().bytes_at(0, 5), vec![1, 4, 5]);
 
         apply_all(&mut db, undo, &env);
@@ -780,7 +878,9 @@ loc_0010:
     #[test]
     fn auto_disassemble_undo_removes_root_and_derived_code() {
         let (mut db, env) = mapped("t.bin", &TEST_BINARY);
-        let undo = db.apply(boxed(AutoDisassemble::new((CODE, 0))), None).unwrap();
+        let undo = db
+            .apply(boxed(AutoDisassemble::new((CODE, 0))), None)
+            .unwrap();
 
         // Derived code, so the undo is just the root-clear. Nothing to un-set.
         assert!(db.space_usage(CODE).code > 0);
@@ -817,13 +917,17 @@ loc_0010:
         // Barrier at 0x3, set before disassembling.
         db.apply(boxed(MarkUnknown::new((CODE, 0x3u32..0x4u32))), None)
             .unwrap();
-        db.apply(boxed(AutoDisassemble::new((CODE, 0u32))), None).unwrap();
+        db.apply(boxed(AutoDisassemble::new((CODE, 0u32))), None)
+            .unwrap();
 
         // Flow stops at the barrier: 0x3 stays unknown, 0x4 is never reached.
         let region = db.region(CODE).unwrap();
         assert_eq!(region.get_equivalent_kind(0x0), Some(EquivalentKind::Code));
         assert_eq!(region.get_equivalent_kind(0x2), Some(EquivalentKind::Code));
-        assert_eq!(region.get_equivalent_kind(0x3), Some(EquivalentKind::Unknown));
+        assert_eq!(
+            region.get_equivalent_kind(0x3),
+            Some(EquivalentKind::Unknown)
+        );
         assert_eq!(region.get_equivalent_kind(0x4), None);
 
         assert!(
@@ -841,7 +945,8 @@ loc_0010:
         // MOV A,#1 / INC A / NOP / RET: a straight-line run.
         let (mut db, _env) = mapped("b.bin", &[0x74, 0x01, 0x04, 0x00, 0x22]);
         // Disassemble the whole run first.
-        db.apply(boxed(AutoDisassemble::new((CODE, 0u32))), None).unwrap();
+        db.apply(boxed(AutoDisassemble::new((CODE, 0u32))), None)
+            .unwrap();
         let region = db.region(CODE).unwrap();
         assert_eq!(region.get_equivalent_kind(0x3), Some(EquivalentKind::Code));
         assert_eq!(region.get_equivalent_kind(0x4), Some(EquivalentKind::Code));
@@ -852,7 +957,10 @@ loc_0010:
         let region = db.region(CODE).unwrap();
         assert_eq!(region.get_equivalent_kind(0x0), Some(EquivalentKind::Code));
         assert_eq!(region.get_equivalent_kind(0x2), Some(EquivalentKind::Code));
-        assert_eq!(region.get_equivalent_kind(0x3), Some(EquivalentKind::Unknown));
+        assert_eq!(
+            region.get_equivalent_kind(0x3),
+            Some(EquivalentKind::Unknown)
+        );
         assert_eq!(region.get_equivalent_kind(0x4), None);
     }
 
@@ -864,8 +972,11 @@ loc_0010:
         let (mut db, env) = mapped("m.bin", &[0x74, 0x01, 0x04, 0xAA, 0xBB]);
         db.apply(boxed(DisassembleRange::new((CODE, 0u32..3u32))), None)
             .unwrap();
-        db.apply(boxed(MarkData::new((CODE, 3u32..5u32), DataType::Byte)), None)
-            .unwrap();
+        db.apply(
+            boxed(MarkData::new((CODE, 3u32..5u32), DataType::Byte)),
+            None,
+        )
+        .unwrap();
 
         let dsl = crate::store::to_dsl_many(&db.to_commands());
         assert!(
@@ -876,7 +987,10 @@ loc_0010:
             dsl.contains("mark_data(data_type=DataType::Byte, range=CODE:0x3..0x5)"),
             "data as a verb: {dsl}"
         );
-        assert!(!dsl.contains("set_equivalent"), "no low-level command: {dsl}");
+        assert!(
+            !dsl.contains("set_equivalent"),
+            "no low-level command: {dsl}"
+        );
 
         assert_eq!(reload(&db, &env).to_sdas(), db.to_sdas());
     }

@@ -125,8 +125,9 @@ mod extent;
 mod function;
 mod label;
 mod note;
-mod platform_addr;
 mod operand;
+mod platform_addr;
+mod pointer;
 
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -142,8 +143,9 @@ pub use extent::{DisassembleRange, MarkData, MarkUnknown};
 pub use function::{ClearFunction, SetFunction};
 pub use label::{ClearLabel, SetLabel};
 pub use note::{ClearNote, SetNote};
-pub use platform_addr::{DisablePlatformAddress, RestorePlatformAddress};
 pub use operand::OverrideOperand;
+pub use platform_addr::{DisablePlatformAddress, RestorePlatformAddress};
+pub use pointer::{ClearOperandType, SetOperandPointer, SetOperandValue};
 
 use scattered_collect::{ScatteredMap, gather};
 use serde::de::DeserializeOwned;
