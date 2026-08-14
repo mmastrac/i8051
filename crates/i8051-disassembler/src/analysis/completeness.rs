@@ -567,11 +567,11 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
         for (offset, refs, first, inferred) in region.unnamed_pointer_targets() {
             let addr = fmt_addr(space, offset);
             let from = fmt_addr(space, first);
-            let plural = if refs == 1 { "site" } else { "sites" };
+            let (plural, verb) = if refs == 1 { ("site", "loads") } else { ("sites", "load") };
             let detail = if inferred {
                 format!(
-                    "{addr}: {refs} {plural} load this address as a pointer (first {from}), but \
-                     it is unnamed. Reading {from} may help decide."
+                    "{addr}: {refs} {plural} {verb} this address as a pointer (first {from}), \
+                     but it is unnamed. Reading {from} may help decide."
                 )
             } else {
                 format!(
@@ -1312,7 +1312,7 @@ mod tests {
             .expect("a pointer target nothing names must be raised");
         assert_eq!(item.address, "CODE:0x6");
         // The reference is inferred, so the item asks rather than asserts.
-        assert!(item.detail.contains("depends on how the pointer is used"), "{}", item.detail);
+        assert!(item.detail.contains("may help decide"), "{}", item.detail);
 
         // Naming it retires the item.
         db.apply(
