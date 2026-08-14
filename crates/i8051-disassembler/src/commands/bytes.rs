@@ -54,16 +54,16 @@ impl Apply for MapBytes {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ClearBytes {
+pub struct UnmapBytes {
     pub addresses: SpaceAddressSet,
 }
 
-register!(ClearBytes(
-    /// Unmap the bytes covered by `addresses`.
+register!(UnmapBytes(
+    /// Unmap the bytes covered by `addresses`. The inverse of `map_bytes`.
     addresses: SpaceAddressSet,
 ));
 
-impl Apply for ClearBytes {
+impl Apply for UnmapBytes {
     fn apply(
         self,
         db: &mut Db,
@@ -77,7 +77,7 @@ impl Apply for ClearBytes {
             let offset = range.start;
             let size = range.end - range.start;
             before.extend(region.snapshot_byte_ranges(offset, size));
-            region.clear_bytes(offset, size);
+            region.unmap_bytes(offset, size);
         }
         Ok(undo_byte_ranges(addresses, before))
     }
@@ -124,7 +124,7 @@ fn undo_byte_ranges(
     ranges: Vec<(AddressValue, ByteRange)>,
 ) -> Vec<Box<dyn Command>> {
     let space = addresses.space;
-    let mut undo = vec![boxed(ClearBytes::new(addresses))];
+    let mut undo = vec![boxed(UnmapBytes::new(addresses))];
     for (start, range) in ranges {
         match range {
             ByteRange::Mapped(file, file_offset, data) => {

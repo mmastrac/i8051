@@ -439,7 +439,7 @@ mod tests {
 
     #[test]
     fn parse_address_range() {
-        let value = parse_command("clear_bytes(range=CODE:0x10..0x20)").unwrap();
+        let value = parse_command("unmap_bytes(range=CODE:0x10..0x20)").unwrap();
         assert!(matches!(
             value.field("range"),
             Some(Value::AddressRange { .. })

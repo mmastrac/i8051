@@ -131,7 +131,7 @@ use std::collections::BTreeMap;
 use std::io;
 
 pub use auto_disassemble::{AutoDisassemble, ClearAutoDisassembleRoot};
-pub use bytes::{ClearBytes, MapBytes, SetConstantBytes};
+pub use bytes::{MapBytes, SetConstantBytes, UnmapBytes};
 pub use comment::{ClearComment, SetComment};
 pub use cpu::{ClearCpu, SetCpu};
 pub use equivalent::ClearEquivalents;
@@ -390,7 +390,7 @@ mod tests {
         };
         assert_eq!(kinds("map_bytes"), [Address, Text, Offset, Offset]);
         assert_eq!(kinds("set_constant_bytes"), [AddressRange, Byte]);
-        assert_eq!(kinds("clear_bytes"), [AddressSet]);
+        assert_eq!(kinds("unmap_bytes"), [AddressSet]);
         assert_eq!(kinds("disassemble_range"), [AddressRange]);
         assert_eq!(kinds("mark_data"), [AddressRange, Struct]);
         assert_eq!(kinds("override_operand"), [Address, Byte, Struct]);

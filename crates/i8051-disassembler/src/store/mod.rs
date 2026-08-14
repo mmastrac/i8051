@@ -184,7 +184,7 @@ pub fn from_dsl_many(input: &str) -> Result<Vec<Box<dyn Command>>, DslError> {
 mod tests {
     use crate::address::AddressRange;
     use crate::commands::{
-        self, AutoDisassemble, ClearBytes, MapBytes, SetComment, SetFunction, SetLabel, SetNote,
+        self, AutoDisassemble, MapBytes, SetComment, SetFunction, SetLabel, SetNote, UnmapBytes,
     };
     use crate::db::Function;
     use crate::note::Note;
@@ -200,10 +200,10 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_clear_bytes_range() {
-        let command = commands::boxed(ClearBytes::new((crate::platform::i8051::CODE, 0x10..0x20)));
+    fn round_trip_unmap_bytes_range() {
+        let command = commands::boxed(UnmapBytes::new((crate::platform::i8051::CODE, 0x10..0x20)));
         let dsl = to_dsl(&*command);
-        assert_eq!(dsl, "clear_bytes(addresses=CODE:{0x10..0x20})");
+        assert_eq!(dsl, "unmap_bytes(addresses=CODE:{0x10..0x20})");
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
     }
 
@@ -301,10 +301,10 @@ mod tests {
 
     #[test]
     fn address_and_range_coerce_to_a_set() {
-        let range = from_dsl("clear_bytes(addresses=CODE:0x10..0x20)").unwrap();
-        assert_eq!(to_dsl(&*range), "clear_bytes(addresses=CODE:{0x10..0x20})");
-        let single = from_dsl("clear_bytes(addresses=CODE:0x10)").unwrap();
-        assert_eq!(to_dsl(&*single), "clear_bytes(addresses=CODE:{0x10})");
+        let range = from_dsl("unmap_bytes(addresses=CODE:0x10..0x20)").unwrap();
+        assert_eq!(to_dsl(&*range), "unmap_bytes(addresses=CODE:{0x10..0x20})");
+        let single = from_dsl("unmap_bytes(addresses=CODE:0x10)").unwrap();
+        assert_eq!(to_dsl(&*single), "unmap_bytes(addresses=CODE:{0x10})");
     }
 
     #[test]

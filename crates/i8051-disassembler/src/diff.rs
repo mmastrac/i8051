@@ -9,9 +9,9 @@
 use std::collections::HashSet;
 
 use crate::commands::{
-    AutoDisassemble, ClearAutoDisassembleRoot, ClearBytes, ClearComment, ClearEquivalents,
-    ClearFunction, ClearLabel, ClearNote, Command, DisassembleRange, MapBytes, MarkData,
-    MarkUnknown, OverrideOperand, SetComment, SetConstantBytes, SetFunction, SetLabel, SetNote,
+    AutoDisassemble, ClearAutoDisassembleRoot, ClearComment, ClearEquivalents, ClearFunction,
+    ClearLabel, ClearNote, Command, DisassembleRange, MapBytes, MarkData, MarkUnknown,
+    OverrideOperand, SetComment, SetConstantBytes, SetFunction, SetLabel, SetNote, UnmapBytes,
     boxed,
 };
 use crate::db::Db;
@@ -78,10 +78,10 @@ fn clear_for(cmd: &dyn Command) -> Option<Box<dyn Command>> {
     }
     if let Some(c) = any.downcast_ref::<MapBytes>() {
         let range = c.address.offset..c.address.offset + c.size;
-        return Some(boxed(ClearBytes::new((c.address.space, range))));
+        return Some(boxed(UnmapBytes::new((c.address.space, range))));
     }
     if let Some(c) = any.downcast_ref::<SetConstantBytes>() {
-        return Some(boxed(ClearBytes::new((c.range.space, c.range.range))));
+        return Some(boxed(UnmapBytes::new((c.range.space, c.range.range))));
     }
     if let Some(c) = any.downcast_ref::<MarkData>() {
         return Some(boxed(ClearEquivalents::new((

@@ -442,7 +442,7 @@ mod tests {
     use crate::address::XrefType;
     use crate::platform::i8051::CODE;
     use crate::commands::{
-        AutoDisassemble, ClearBytes, ClearLabel, Command, MapBytes, SetConstantBytes, boxed,
+        AutoDisassemble, ClearLabel, Command, MapBytes, SetConstantBytes, UnmapBytes, boxed,
     };
     use pretty_assertions::assert_eq;
 
@@ -653,9 +653,9 @@ loc_0010:
     }
 
     #[test]
-    fn clear_bytes_command_undo() {
+    fn unmap_bytes_command_undo() {
         let (mut db, env) = mapped("t.bin", &[1, 2, 3, 4, 5]);
-        let undo = db.apply(boxed(ClearBytes::new((CODE, 1..3))), None).unwrap();
+        let undo = db.apply(boxed(UnmapBytes::new((CODE, 1..3))), None).unwrap();
         assert_eq!(db.region(CODE).unwrap().bytes_at(0, 5), vec![1, 4, 5]);
 
         apply_all(&mut db, undo, &env);

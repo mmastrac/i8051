@@ -386,7 +386,7 @@ impl Region {
         bytes: &[u8],
     ) {
         if !bytes.is_empty() {
-            self.clear_bytes(offset, bytes.len() as AddressValue);
+            self.unmap_bytes(offset, bytes.len() as AddressValue);
         }
         self.byte_ranges.insert(
             offset,
@@ -400,7 +400,7 @@ impl Region {
         if size == 0 {
             return;
         }
-        self.clear_bytes(offset, size);
+        self.unmap_bytes(offset, size);
         self.byte_ranges
             .insert(offset, ByteRange::Constant(size, value));
         self.refresh_weak();
@@ -479,7 +479,7 @@ impl Region {
             .collect()
     }
 
-    pub fn clear_bytes(&mut self, offset: AddressValue, size: AddressValue) {
+    pub fn unmap_bytes(&mut self, offset: AddressValue, size: AddressValue) {
         if size == 0 {
             return;
         }
@@ -1605,10 +1605,10 @@ mod tests {
     }
 
     #[test]
-    fn clear_bytes_splits_straddling_range() {
+    fn unmap_bytes_splits_straddling_range() {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[1, 2, 3, 4, 5]);
-        region.clear_bytes(1, 2);
+        region.unmap_bytes(1, 2);
         assert_eq!(region.bytes_at(0, 5), vec![1, 4, 5]);
     }
 
