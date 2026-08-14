@@ -112,9 +112,18 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Skip whitespace and `#` comments.
     fn skip_whitespace(&mut self) {
-        while matches!(self.peek_char(), Some(' ' | '\t' | '\n' | '\r')) {
-            self.bump();
+        loop {
+            while matches!(self.peek_char(), Some(' ' | '\t' | '\n' | '\r')) {
+                self.bump();
+            }
+            if self.peek_char() != Some('#') {
+                return;
+            }
+            while !matches!(self.peek_char(), None | Some('\n')) {
+                self.bump();
+            }
         }
     }
 
@@ -257,5 +266,24 @@ impl<'a> Lexer<'a> {
         ch.to_digit(16)
             .map(|d| d as u8)
             .ok_or_else(|| DslError::at(offset, "expected hex digit"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::store::{from_dsl, parse_call};
+
+    #[test]
+    fn trailing_comments_are_skipped_but_raw_strings_are_not() {
+        let (name, args) =
+            parse_call("set_label(address=CODE:0x8, label=\"x\")  # why").expect("trailing comment");
+        assert_eq!(name, "set_label");
+        assert_eq!(args.len(), 2, "the comment must not become an argument");
+        let command = from_dsl(
+            "set_note(address=CODE:0x8..0x9, note=Note(content=r#\"a # b\"#))  # trailing",
+        )
+        .expect("raw string with a hash");
+        assert!(crate::store::to_dsl(command.as_ref()).contains("a # b"));
+        assert!(parse_call("# just a comment").is_err());
     }
 }
