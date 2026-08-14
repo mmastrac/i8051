@@ -195,6 +195,13 @@ impl Db {
             commands.push(boxed(SetCpu::new(platform.name().to_string())));
         }
         for (&space, region) in &self.regions {
+            // Emit SetAddressBits first.
+            if let Some(bits) = region.address_bits() {
+                commands.push(boxed(crate::commands::SetAddressBits {
+                    space: space.dsl_name().to_string(),
+                    bits: AddressValue::from(bits),
+                }));
+            }
             commands.extend(region.to_commands(space));
         }
         // Notes live outside the regions, so emit them separately or a DB would
@@ -405,6 +412,15 @@ pub enum Error {
         start: AddressValue,
         end: AddressValue,
     },
+    InvalidArgument {
+        value: String,
+        reason: &'static str,
+    },
+    /// An address space this database does not have.
+    UnknownSpace {
+        name: String,
+        suggestion: Option<String>,
+    },
     InvalidAddress(AddressValue),
     InvalidEquivalent,
     NotUndefined(AddressValue),
@@ -445,6 +461,16 @@ impl std::fmt::Display for Error {
                      past the bytes being unmapped: `clear_equivalents` first, or unmap a \
                      larger range"
                 )
+            }
+            Self::InvalidArgument { value, reason } => {
+                write!(f, "{value:?} is not usable here: {reason}")
+            }
+            Self::UnknownSpace { name, suggestion } => {
+                write!(f, "unknown address space {name:?}")?;
+                match suggestion {
+                    Some(hint) => write!(f, " (did you mean `{hint}`?)"),
+                    None => Ok(()),
+                }
             }
             Self::CpuAlreadySet { current } => {
                 write!(

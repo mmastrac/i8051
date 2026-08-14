@@ -42,7 +42,10 @@ impl Xrefs {
                 space: region.space,
                 offset,
             };
-            for xref in xrefs_from_instruction(&insn, source) {
+            for mut xref in xrefs_from_instruction(&insn, source) {
+                if xref.to.space == region.space {
+                    xref.to.offset = region.effective(xref.to.offset);
+                }
                 reverse.entry(xref.to).or_default().push(Edge {
                     from: offset,
                     kind: xref.xref_type,

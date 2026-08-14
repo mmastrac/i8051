@@ -125,6 +125,9 @@ pub struct Region {
     byte_ranges: BTreeMap<AddressValue, ByteRange>,
     equivalents: BTreeMap<AddressValue, EquivalentRange>,
     labels: BTreeMap<AddressValue, String>,
+    /// How many address lines the board actually decodes for this space, `None`
+    /// means every line is decoded.
+    address_bits: Option<u8>,
     comments: BTreeMap<AddressValue, String>,
     functions: BTreeMap<AddressValue, Function>,
     /// Operand overrides, keyed by `(instruction address, operand index)`.
@@ -145,6 +148,7 @@ impl Region {
             byte_ranges: BTreeMap::new(),
             equivalents: BTreeMap::new(),
             labels: BTreeMap::new(),
+            address_bits: None,
             comments: BTreeMap::new(),
             functions: BTreeMap::new(),
             overrides: BTreeMap::new(),
@@ -158,6 +162,27 @@ impl Region {
         self.platform = platform;
         self.refresh_weak();
         self.invalidate_xrefs();
+    }
+
+    /// Narrow this space to the address lines the board decodes. `None` restores
+    /// the full width. Returns the previous setting.
+    pub fn set_address_bits(&mut self, bits: Option<u8>) -> Option<u8> {
+        let previous = self.address_bits;
+        self.address_bits = bits;
+        self.invalidate_xrefs();
+        previous
+    }
+
+    pub fn address_bits(&self) -> Option<u8> {
+        self.address_bits
+    }
+
+    /// The byte an address actually reaches after `set_address_bits` is applied.
+    pub fn effective(&self, offset: AddressValue) -> AddressValue {
+        match self.address_bits {
+            Some(bits) if (bits as u32) < AddressValue::BITS => offset & ((1u32 << bits) - 1),
+            _ => offset,
+        }
     }
 
     /// Set or clear the override at `(addr, index)`, returning the prior value.
@@ -928,7 +953,7 @@ impl Region {
                 result.ran_out = true;
                 break;
             };
-            let target = branch_target(&insn);
+            let target = branch_target(&insn).map(|t| self.effective(t));
             let target_mapped = target.is_none_or(|t| self.read_byte(t).is_some());
             // Misaligned only makes sense for a mapped target already decoded as
             // code.
