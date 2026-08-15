@@ -8,6 +8,12 @@ use i8051_disassembler::store::{from_dsl, from_dsl_value, to_dsl};
 
 pub use i8051_disassembler::commands::Environment;
 
+mod bridge;
+pub(crate) use bridge::{build_command_dsl, command_focus};
+
+mod controller;
+pub use controller::{Controller, EditResult, Location};
+
 mod db;
 pub use db::{DbFileError, SaveReport};
 

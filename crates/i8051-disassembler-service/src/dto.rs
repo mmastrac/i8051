@@ -1,9 +1,10 @@
 use serde::Serialize;
 
+use crate::{EditResult, Location, Session};
+
 use i8051_disassembler::address::AddressValue;
 use i8051_disassembler::analysis::completeness::{Coverage, Gate, Item, Phase};
 use i8051_disassembler::render::Line;
-
 
 /// A window of rendered listing lines.
 #[derive(Serialize)]
@@ -284,4 +285,42 @@ pub struct WorklistPage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
     pub items: Vec<Item>,
+}
+#[derive(Serialize)]
+/// An edit's outcome and where it landed.
+pub struct EditResponse {
+    #[serde(flatten)]
+    pub edit: EditResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<AddressContext>,
+}
+
+impl EditResponse {
+    /// Bundle an edit with its context.
+    pub fn new(session: &Session, edit: EditResult) -> Self {
+        let context = focus_context(session, edit.address.as_deref());
+        Self { edit, context }
+    }
+}
+
+#[derive(Serialize)]
+/// A move and what is there now.
+pub struct NavResponse {
+    #[serde(flatten)]
+    pub location: Location,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<AddressContext>,
+}
+
+impl NavResponse {
+    /// Bundle a move with its context.
+    pub fn new(session: &Session, location: Location) -> Self {
+        let context = focus_context(session, location.address.as_deref());
+        Self { location, context }
+    }
+}
+
+/// Best-effort context at an optional focus address.
+fn focus_context(session: &Session, address: Option<&str>) -> Option<AddressContext> {
+    session.context(address?).ok()
 }

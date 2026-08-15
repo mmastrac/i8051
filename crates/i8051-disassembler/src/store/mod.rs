@@ -81,7 +81,7 @@ pub fn from_dsl(input: &str) -> Result<Box<dyn Command>, DslError> {
 }
 
 /// Accept a bare enum variant.
-fn qualify_bare_variants(
+pub fn qualify_bare_variants(
     entry: &crate::commands::CommandEntry,
     kwargs: &mut std::collections::BTreeMap<String, Value>,
 ) {
@@ -123,7 +123,8 @@ fn arg_names(entry: &crate::commands::CommandEntry) -> String {
     names.join(", ")
 }
 
-fn diagnose_args(
+/// Explain which argument failed to deserialize.
+pub fn diagnose_args(
     name: &str,
     entry: &crate::commands::CommandEntry,
     kwargs: std::collections::BTreeMap<String, Value>,
