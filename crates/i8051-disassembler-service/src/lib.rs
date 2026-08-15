@@ -8,6 +8,9 @@ use i8051_disassembler::store::{from_dsl, from_dsl_value, to_dsl};
 
 pub use i8051_disassembler::commands::Environment;
 
+mod verbs;
+pub use verbs::{ArgType, Category, VerbArg, VerbInfo};
+
 mod bridge;
 pub(crate) use bridge::{build_command_dsl, command_focus};
 

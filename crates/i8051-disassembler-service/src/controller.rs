@@ -386,7 +386,38 @@ impl Controller {
         )))
     }
 
-    /// Apply one DSL command, undoably.
+    /// Every verb a frontend can invoke.
+    pub fn catalog(&self) -> Vec<crate::VerbInfo> {
+        crate::verbs::catalog()
+    }
+
+    /// Run one verb from JSON arguments.
+    pub fn invoke(
+        &mut self,
+        name: &str,
+        args: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<serde_json::Value, ServiceError> {
+        if crate::verbs::is_edit(name) {
+            let edit = self.apply_named(name, args)?;
+            return crate::verbs::json(crate::EditResponse::new(self.session(), edit));
+        }
+        crate::verbs::dispatch(self, name, args)
+            .unwrap_or_else(|| Err(crate::verbs::unknown_verb(name)))
+    }
+
+    /// Run one verb from a typed line.
+    pub fn exec(&mut self, line: &str) -> Result<serde_json::Value, ServiceError> {
+        let (name, kwargs) =
+            i8051_disassembler::store::parse_call(line).map_err(|e| ServiceError::Parse(e.to_string()))?;
+        if crate::verbs::is_edit(&name) {
+            let edit = self.apply(line)?;
+            return crate::verbs::json(crate::EditResponse::new(self.session(), edit));
+        }
+        let args = crate::verbs::kwargs_to_json(kwargs);
+        crate::verbs::dispatch(self, &name, &args)
+            .unwrap_or_else(|| Err(crate::verbs::unknown_verb(&name)))
+    }
+
     pub fn apply(&mut self, dsl: &str) -> Result<EditResult, ServiceError> {
         self.check_cpu_still_needed(dsl)?;
         self.check_covers_entry_points(dsl)?;
@@ -805,8 +836,6 @@ mod tests {
         assert!(!c.session().disassembly().contains("\nreset:"));
     }
 
-
-
     #[test]
     fn apply_named_reports_errors() {
         let mut c = controller();
@@ -817,5 +846,28 @@ mod tests {
             c.apply_named("set_label", partial.as_object().unwrap()),
             Err(ServiceError::Parse(_))
         ));
+    }
+
+    #[test]
+    fn exec_routes_all_categories() {
+        let mut c = controller();
+
+        let edit = c.exec(r#"set_label(address=CODE:0x0, label="reset")"#).unwrap();
+        assert_eq!(edit["address"], "CODE:0x0");
+        assert!(c.session().disassembly().contains("\nreset:"));
+
+        let listing = c.exec(r#"listing(space="CODE")"#).unwrap();
+        assert_eq!(listing["space"], "CODE");
+        assert!(listing["lines"].is_array());
+
+        let nav = c.exec("navigate(address=CODE:0x2)").unwrap();
+        assert_eq!(nav["address"], "CODE:0x2");
+        assert_eq!(nav["can_back"], false);
+    }
+
+    #[test]
+    fn exec_rejects_unknown_verb() {
+        let mut c = controller();
+        assert!(matches!(c.exec("frobnicate(x=1)"), Err(ServiceError::Parse(_))));
     }
 }
