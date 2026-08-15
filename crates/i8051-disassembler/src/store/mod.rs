@@ -183,8 +183,8 @@ pub fn from_dsl_many(input: &str) -> Result<Vec<Box<dyn Command>>, DslError> {
     split_commands(input).iter().map(|s| from_dsl(s)).collect()
 }
 
-/// Split a document at the newlines that are not inside a string.
-fn split_commands(input: &str) -> Vec<String> {
+/// Split a document at the newlines outside strings.
+pub fn split_commands(input: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut current = String::new();
     let mut chars = input.chars().peekable();

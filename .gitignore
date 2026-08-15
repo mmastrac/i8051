@@ -1,2 +1,3 @@
 target/
 .env
+.i8051-repl-history

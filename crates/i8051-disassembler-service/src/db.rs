@@ -97,12 +97,7 @@ fn read_records(path: &Path) -> Result<Vec<String>, DbFileError> {
         let records: Vec<DbRecord> = serde_json::from_str(&text).map_err(|e| err(e.to_string()))?;
         Ok(records.into_iter().map(|r| r.command).collect())
     } else {
-        Ok(text
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            .map(str::to_string)
-            .collect())
+        Ok(i8051_disassembler::store::split_commands(&text))
     }
 }
 
