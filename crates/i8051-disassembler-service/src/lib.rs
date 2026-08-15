@@ -20,6 +20,12 @@ pub use controller::{Controller, EditResult, Location};
 mod db;
 pub use db::{DbFileError, SaveReport};
 
+mod complete;
+pub use complete::{Candidate, Completion, ValueSource, complete};
+
+mod human;
+pub use human::{caret_diagnostic, render_human};
+
 mod dto;
 pub use dto::*;
 
