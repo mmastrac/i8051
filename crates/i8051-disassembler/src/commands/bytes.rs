@@ -213,7 +213,7 @@ mod unmap_bytes_tests {
     }
 
     #[test]
-    fn unmapping_takes_the_classification_and_undo_puts_both_back() {
+    fn unmap_takes_classification() {
         let mut db = mapped();
         db.apply(boxed(MarkUnknown::new((CODE, 0x8u32..0x9u32))), Some(&Env))
             .unwrap();
@@ -238,7 +238,7 @@ mod unmap_bytes_tests {
     }
 
     #[test]
-    fn unmapping_part_of_a_classification_is_refused_and_changes_nothing() {
+    fn partial_unmap_refused() {
         let mut db = mapped();
         db.apply(boxed(MarkUnknown::new((CODE, 0x4u32..0xCu32))), Some(&Env))
             .unwrap();

@@ -296,13 +296,13 @@ mod tests {
     }
 
     #[test]
-    fn all_literal_is_one_maximal_span() {
+    fn all_literal_one_span() {
         let h = heur(vec![rule(Some(0x00), 4)], None, None);
         assert_eq!(run(&h, &[1, 2, 3, 4, 5]), vec![Literal(&[1, 2, 3, 4, 5])]);
     }
 
     #[test]
-    fn interior_run_compresses_and_splits_literals() {
+    fn interior_run_splits_literals() {
         let h = heur(vec![rule(Some(0x00), 4)], None, None);
         assert_eq!(
             run(&h, &[1, 2, 0, 0, 0, 0, 0, 3]),
@@ -311,13 +311,13 @@ mod tests {
     }
 
     #[test]
-    fn run_below_min_stays_literal() {
+    fn short_run_stays_literal() {
         let h = heur(vec![rule(Some(0x00), 4)], None, None);
         assert_eq!(run(&h, &[1, 0, 0, 2]), vec![Literal(&[1, 0, 0, 2])]);
     }
 
     #[test]
-    fn min_run_boundary_for_repeat() {
+    fn min_run_boundary() {
         let h = heur(vec![rule(Some(0xFF), 8)], None, None);
         // 7 bytes: below min, whole thing literal
         assert_eq!(
@@ -332,13 +332,13 @@ mod tests {
     }
 
     #[test]
-    fn catch_all_matches_any_value() {
+    fn catch_all_matches_any() {
         let h = heur(vec![rule(None, 4)], None, None);
         assert_eq!(run(&h, &[0x42, 0x42, 0x42, 0x42, 0x42]), vec![Run(0x42, 5)]);
     }
 
     #[test]
-    fn literal_rule_short_circuits_catch_all() {
+    fn literal_rule_short_circuits() {
         let h = heur(vec![rule_literal(Some(0x20)), rule(None, 1)], None, None);
         assert_eq!(run(&h, &[0x20; 6]), vec![Literal(&[0x20; 6])]);
     }
@@ -372,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn edge_rule_relaxes_interior_threshold() {
+    fn edge_rule_relaxes_threshold() {
         let interior = vec![rule(Some(0xFF), 64)];
         let trailing = EdgeTrim {
             rules: vec![rule(Some(0xFF), 4)],
@@ -387,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn literal_rows_pack_by_block_size() {
+    fn literal_rows_pack() {
         let h = DataHeuristics::default();
         let bytes = (0..40).collect::<Vec<_>>();
         let rows = h.literal_rows(&bytes);
@@ -398,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn block_run_folds_repeated_unit() {
+    fn block_run_folds() {
         let mut h = heur(vec![], None, None);
         h.block_size = 2;
         h.min_repeat_rows = Some(3);
@@ -409,7 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn single_value_run_wins_over_block_run() {
+    fn single_value_run_wins() {
         let mut h = heur(vec![rule(Some(0xFF), 4)], None, None);
         h.block_size = 2;
         h.min_repeat_rows = Some(2);

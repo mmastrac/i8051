@@ -379,7 +379,7 @@ mod tests {
     // newtype name and (de)serializes the inner `(space, offset)` tuple. So the
     // address types still round-trip through stock serde formats like JSON.
     #[test]
-    fn space_address_value_json_round_trip() {
+    fn address_value_round_trip() {
         let addr = SpaceAddressValue {
             space: XDATA,
             offset: 0x1234,
@@ -393,7 +393,7 @@ mod tests {
     }
 
     #[test]
-    fn space_address_range_json_round_trip() {
+    fn address_range_round_trip() {
         let range = SpaceAddressRange {
             space: CODE,
             range: AddressRange::new(0x10, 0x20),
@@ -407,7 +407,7 @@ mod tests {
     }
 
     #[test]
-    fn space_names_are_free_form() {
+    fn space_names_free_form() {
         // Regions are driver-defined, so any name up to `CAP` bytes is a valid
         // space and round-trips verbatim.
         let addr: SpaceAddressValue = serde_json::from_str(r#"["MYSPACE",0]"#).unwrap();
@@ -439,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn space_address_set_optimal_and_round_trips() {
+    fn address_set_round_trips() {
         let mut set = SpaceAddressSet::new(CODE);
         for addr in [0x10, 0x11, 0x12, 0x30] {
             set.insert_address(addr);
@@ -462,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn an_inverted_or_empty_range_is_rejected() {
+    fn inverted_range_rejected() {
         for bad in ["CODE:0x20..0x10", "CODE:0x10..0x10"] {
             let err = crate::store::from_dsl_value::<SpaceAddressRange>(bad)
                 .expect_err("an empty or inverted range is not a range");

@@ -86,7 +86,7 @@ fn regenerate_reference() {
 }
 
 #[test]
-fn a_backward_branch_sign_extends() {
+fn backward_branch_sign_extends() {
     let at = |bytes: &[u8]| Instruction::decode_from_bytes(0x1000, bytes);
     assert_eq!(at(&[0xF0, 0xFE]).as_string(), "BEQ 0x1000");
     assert_eq!(at(&[0x10, 0x80]).as_string(), "BPL 0x0F82");

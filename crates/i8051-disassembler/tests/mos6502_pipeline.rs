@@ -31,7 +31,7 @@ fn loaded_db() -> Db {
 }
 
 #[test]
-fn auto_disassembles_and_labels_branches() {
+fn sweeps_and_labels_branches() {
     let db = loaded_db();
     let sdas = db.to_sdas();
 
@@ -54,7 +54,7 @@ fn auto_disassembles_and_labels_branches() {
 }
 
 #[test]
-fn recovers_control_and_data_xrefs() {
+fn recovers_control_data_xrefs() {
     let db = loaded_db();
 
     // The loop label at 0x1002 has an inbound jump from the BNE at 0x100B.
@@ -77,7 +77,7 @@ fn recovers_control_and_data_xrefs() {
 }
 
 #[test]
-fn equivalents_cover_the_whole_program() {
+fn equivalents_cover_program() {
     let db = loaded_db();
     let region = db.region(CODE).unwrap();
     // Every instruction start is derived code, no gaps, no data.

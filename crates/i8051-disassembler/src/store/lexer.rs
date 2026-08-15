@@ -279,7 +279,7 @@ mod tests {
     use crate::store::{from_dsl, parse_call};
 
     #[test]
-    fn trailing_comments_are_skipped_but_raw_strings_are_not() {
+    fn comments_skipped_raw_kept() {
         let (name, args) =
             parse_call("set_label(address=CODE:0x8, label=\"x\")  # why").expect("trailing comment");
         assert_eq!(name, "set_label");

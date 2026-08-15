@@ -202,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_line_completes_all_verbs() {
+    fn empty_line_lists_verbs() {
         let cat = catalog();
         let c = complete(&cat, "", 0, None);
         assert_eq!(c.start, 0);
@@ -212,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn verb_prefix_narrows_and_anchors_at_token_start() {
+    fn verb_prefix_narrows() {
         let cat = catalog();
         let c = complete(&cat, "  set_l", 7, None);
         assert_eq!(c.start, 2, "replacement begins after the leading spaces");
@@ -220,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn inside_parens_completes_argument_names() {
+    fn parens_complete_args() {
         let cat = catalog();
         let c = complete(&cat, "set_label(", 10, None);
         assert_eq!(c.start, 10);
@@ -229,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn present_arguments_are_not_offered_again() {
+    fn present_args_skipped() {
         let cat = catalog();
         let line = r#"set_label(address=CODE:0x0, "#;
         let c = complete(&cat, line, line.len(), None);
@@ -239,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn a_partial_argument_name_narrows() {
+    fn partial_arg_narrows() {
         let cat = catalog();
         let line = "listing(sp";
         let c = complete(&cat, line, line.len(), None);
@@ -248,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn no_completion_partway_through_a_value() {
+    fn no_completion_inside_value() {
         let cat = catalog();
         let line = "navigate(address=CODE:0x1";
         let c = complete(&cat, line, line.len(), None);
@@ -256,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_value_commas_do_not_leak_verb_args() {
+    fn nested_commas_dont_leak() {
         let cat = catalog();
         let line = r#"set_note(address=CODE:0x0..0x10, note=Note(content="a, "#;
         let c = complete(&cat, line, line.len(), None);
@@ -281,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn data_type_values_complete_and_all_parse() {
+    fn data_type_values_parse() {
         let cat = catalog();
         let line = "mark_data(range=CODE:0x0..0x4, data_type=DataType::B";
         let c = complete(&cat, line, line.len(), None);
@@ -293,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn gate_and_boolean_values_complete() {
+    fn gate_and_bool_values() {
         let cat = catalog();
         let line = "status(gate=str";
         let c = complete(&cat, line, line.len(), None);
@@ -304,7 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn spaces_and_symbols_come_from_the_value_source() {
+    fn values_from_source() {
         let cat = catalog();
         let line = r#"listing(space="X"#;
         let c = complete(&cat, line, line.len(), Some(&FakeValues));
@@ -318,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn note_value_offers_the_template() {
+    fn note_offers_template() {
         let cat = catalog();
         let line = "set_note(address=CODE:0x0..0x1, note=";
         let c = complete(&cat, line, line.len(), None);

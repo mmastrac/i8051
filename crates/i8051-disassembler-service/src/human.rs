@@ -229,7 +229,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn listing_renders_as_assembly_text() {
+    fn listing_renders_assembly() {
         let value = json!({
             "space": "CODE", "total": 3, "start": 0,
             "lines": [
@@ -245,19 +245,19 @@ mod tests {
     }
 
     #[test]
-    fn xrefs_render_one_edge_per_row() {
+    fn xrefs_render_per_row() {
         let value = json!([{ "from": "CODE:0x2", "to": "CODE:0x10", "kind": "call" }]);
         let text = render_human("xrefs_to", &value).expect("renders");
         assert_eq!(text, "call     CODE:0x2 -> CODE:0x10");
     }
 
     #[test]
-    fn unknown_verbs_fall_back_to_json() {
+    fn unknown_verb_falls_back() {
         assert!(render_human("status", &json!({})).is_none());
     }
 
     #[test]
-    fn caret_lands_under_the_named_byte() {
+    fn caret_lands_on_byte() {
         let line = "listing(space=CODE)";
         let err = "dsl parse error at byte 18: unexpected token after identifier CODE";
         let out = caret_diagnostic(line, err).expect("has offset");

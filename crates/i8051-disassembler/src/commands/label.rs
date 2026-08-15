@@ -142,7 +142,7 @@ mod tests {
     use crate::platform::i8051::CODE;
 
     #[test]
-    fn strips_a_callers_extra_quotes() {
+    fn strips_extra_quotes() {
         assert_eq!(normalize_label("\"uart_init\"").unwrap(), "uart_init");
         assert_eq!(normalize_label("uart_init").unwrap(), "uart_init");
         assert_eq!(normalize_label("  spaced_out  ").unwrap(), "spaced_out");
@@ -164,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn setting_a_generated_name_is_a_silent_no_op() {
+    fn generated_name_is_noop() {
         let mut db = Db::with_platform(crate::platform::i8051::platform());
         let undo = db
             .apply(
@@ -195,7 +195,7 @@ mod tests {
     /// A provisional name is shown like any other, but the address stays on the
     /// naming worklist.
     #[test]
-    fn a_provisional_label_stays_a_draft_and_round_trips() {
+    fn provisional_stays_draft() {
         let mut db = Db::with_platform(crate::platform::i8051::platform());
         db.apply(
             boxed(SetLabel::new((CODE, 0x40), "maybe_crc".to_string(), true, false)),

@@ -155,7 +155,7 @@ mod tests {
 
     /// Deciding at the instruction picks one candidate and drops the rest.
     #[test]
-    fn deciding_an_operand_collapses_its_candidates() {
+    fn deciding_collapses_candidates() {
         let mut db = fixture();
         assert_eq!(db.xrefs_to(&CODE_8).len(), 1, "both candidates start open");
         assert_eq!(db.xrefs_to(&XDATA_8).len(), 1);
@@ -194,7 +194,7 @@ mod tests {
 
     /// `MOV DPTR,#0x0008` may just be loading a number.
     #[test]
-    fn an_operand_decided_to_be_a_number_references_nothing() {
+    fn number_references_nothing() {
         let mut db = fixture();
         db.apply(
             boxed(SetOperandValue {

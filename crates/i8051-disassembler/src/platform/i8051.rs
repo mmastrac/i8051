@@ -284,7 +284,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn data_xrefs_classify_direction_and_space() {
+    fn data_xrefs_classify_space() {
         use XrefType::{Jump, Pointer, Read, ReadWrite, Write};
         let e = |bytes: &[u8]| edges(&I8051, bytes);
 
@@ -308,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn bit_addresses_resolve_to_the_byte_that_holds_them() {
+    fn bit_addresses_resolve() {
         let p = I8051;
         let bit = |n| p.canonicalize(BIT, n);
 

@@ -2,7 +2,7 @@ use m6805::{ControlFlow, Instruction, Mnemonic, OPCODES};
 use pretty_assertions::assert_eq;
 
 #[test]
-fn a_backward_branch_sign_extends() {
+fn backward_branch_sign_extends() {
     let at = |bytes: &[u8]| Instruction::decode_from_bytes(0x1000, bytes);
     // 0x1000 + 2 - 2, and the largest step back.
     assert_eq!(at(&[0x27, 0xFE]).as_string(), "BEQ 0x1000");
@@ -44,7 +44,7 @@ fn control_flow_is_classified() {
 }
 
 #[test]
-fn full_table_sweep_never_panics() {
+fn table_sweep_never_panics() {
     // Decoding every opcode with filler operand bytes must yield a length that
     // matches the table and consumes exactly that many bytes.
     let mut legal = 0;

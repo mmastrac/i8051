@@ -97,7 +97,7 @@ mod tests {
     /// With the high lines undecoded, a jump "outside" the image reaches the
     /// byte it actually selects, and the reference lands there.
     #[test]
-    fn narrowing_a_space_resolves_references_to_the_byte_reached() {
+    fn narrowing_resolves_references() {
         let mut db = Db::with_platform(crate::platform::i8051::platform());
         db.apply(
             boxed(MapBytes::new((CODE, 0), "img", 0usize, 8u32)),
@@ -150,7 +150,7 @@ mod tests {
 
     /// A width the hardware cannot have is refused rather than stored.
     #[test]
-    fn an_impossible_width_is_refused() {
+    fn impossible_width_refused() {
         let mut db = Db::with_platform(crate::platform::i8051::platform());
         for bits in [0u32, 33] {
             let err = db

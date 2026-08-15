@@ -675,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn ids_sort_in_lamport_order() {
+    fn ids_sort_lamport() {
         let first = Note::new(None, "alpha");
         let second = Note::new(Some(&first.id), "beta");
         let third = Note::new(Some(&second.id), "gamma");
@@ -689,7 +689,7 @@ mod tests {
     }
 
     #[test]
-    fn ids_sort_lexicographically_as_strings() {
+    fn ids_sort_lexicographically() {
         let first = Note::new(None, "alpha");
         let second = Note::new(Some(&first.id), "beta");
         let third = Note::new(Some(&second.id), "gamma");
@@ -712,7 +712,7 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_notes_from_same_tip_differ_by_hash() {
+    fn concurrent_notes_differ() {
         let first = Note::new(None, "shared tip");
         let left = Note::new(Some(&first.id), "branch a");
         let right = Note::new(Some(&first.id), "branch b");
@@ -732,7 +732,7 @@ mod tests {
     }
 
     #[test]
-    fn editing_content_does_not_change_id() {
+    fn editing_keeps_id() {
         let mut note = Note::new(None, "original");
         let id = note.id.clone();
         note.set_content("edited body");
@@ -799,7 +799,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_range_overlap_query_finds_a_single_byte_note() {
+    fn overlap_finds_byte_note() {
         let mut db = NoteDb::default();
         let note = db.create("one byte");
         db.set_address(crate::platform::i8051::CODE, AddressRange::from(4..5), note.clone());
@@ -811,7 +811,7 @@ mod tests {
     }
 
     #[test]
-    fn two_notes_at_same_address_are_both_retrievable() {
+    fn two_notes_both_retrievable() {
         let mut db = NoteDb::default();
         let range = AddressRange::from(0..4);
         let human = db.create("human note on ISR");
@@ -827,7 +827,7 @@ mod tests {
     }
 
     #[test]
-    fn notes_near_orders_by_distance_and_reports_zero_inside() {
+    fn notes_near_orders_distance() {
         let mut db = NoteDb::default();
         let a = db.create("note at 0x10");
         let b = db.create("note at 0x40");
@@ -861,7 +861,7 @@ mod tests {
     }
 
     #[test]
-    fn search_matches_content_tags_and_is_case_insensitive() {
+    fn search_matches_case_insensitive() {
         let mut db = NoteDb::default();
         let mut isr = db.create("Reset Vector handler");
         isr.tags.insert("isr".into());
@@ -876,7 +876,7 @@ mod tests {
     }
 
     #[test]
-    fn note_db_shares_namespace_between_indexes() {
+    fn note_db_shares_namespace() {
         let mut db = NoteDb::default();
         let note = db.create("global and local");
         let id = note.id.clone();

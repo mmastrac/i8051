@@ -2054,7 +2054,7 @@ mod tests {
     use crate::platform::i8051::{CODE, platform};
 
     #[test]
-    fn overlap_error_names_space_and_kind() {
+    fn overlap_names_space_kind() {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[0x00, 0x00, 0x22]);
         region.set_equivalent(0, Equivalent::Code).unwrap();
@@ -2089,7 +2089,7 @@ mod tests {
     }
 
     #[test]
-    fn unmap_bytes_splits_straddling_range() {
+    fn unmap_splits_straddling_range() {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[1, 2, 3, 4, 5]);
         region.unmap_bytes(1, 2);
@@ -2097,7 +2097,7 @@ mod tests {
     }
 
     #[test]
-    fn decode_at_does_not_require_bytes_at_zero() {
+    fn decode_without_zero_bytes() {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0x100, &[0x74, 0x42]);
         let insn = region.decode_at(0x100).unwrap();
@@ -2106,7 +2106,7 @@ mod tests {
     }
 
     #[test]
-    fn decode_at_requires_full_instruction_length() {
+    fn decode_requires_full_length() {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[0x02, 0x00]);
         assert!(
@@ -2117,7 +2117,7 @@ mod tests {
     }
 
     #[test]
-    fn branch_target_uses_implicit_label() {
+    fn branch_uses_implicit_label() {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[0x12, 0x01, 0x6D, 0x02, 0x03, 0x04]);
         region.set_equivalent(0, Equivalent::Code).unwrap();
@@ -2142,7 +2142,7 @@ mod tests {
     }
 
     #[test]
-    fn xref_index_reflects_weak_and_chop() {
+    fn xref_index_reflects_chop() {
         let mut region = Region::new(CODE, Some(platform()));
         // LJMP 0x0006 / NOP x4. Auto-disassembly flows through the jump.
         region.set_bytes("t.bin", 0, 0, &[0x02, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00]);
@@ -2163,7 +2163,7 @@ mod tests {
     }
 
     #[test]
-    fn basic_blocks_split_at_branch_targets() {
+    fn blocks_split_at_targets() {
         let mut region = Region::new(CODE, Some(platform()));
         // 0: JZ 0x03 / 2: NOP / 3: RET
         region.set_bytes("t.bin", 0, 0, &[0x60, 0x01, 0x00, 0x22]);
@@ -2180,7 +2180,7 @@ mod tests {
     }
 
     #[test]
-    fn thunk_resolves_but_render_stays_faithful() {
+    fn thunk_render_stays_faithful() {
         let mut region = Region::new(CODE, Some(platform()));
         // 0: LCALL 0x0003 / 3: LJMP 0x0006 (a pure thunk) / 6: RET
         region.set_bytes("t.bin", 0, 0, &[0x12, 0x00, 0x03, 0x02, 0x00, 0x06, 0x22]);
@@ -2208,7 +2208,7 @@ mod tests {
     }
 
     #[test]
-    fn operand_override_preserves_other_operands() {
+    fn override_preserves_operands() {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[0xB5, 0x20, 0x10]);
         region.set_label(0x13, "target", crate::region::LabelAttrs::default());
@@ -2246,7 +2246,7 @@ mod tests {
     }
 
     #[test]
-    fn label_splits_a_coalesced_raw_run() {
+    fn label_splits_raw_run() {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[1, 2, 3, 4]);
         region.set_equivalent(0, Equivalent::Unknown(2)).unwrap();
@@ -2264,7 +2264,7 @@ mod tests {
     }
 
     #[test]
-    fn render_emits_org_after_unmapped_gap() {
+    fn render_emits_org() {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[1, 2, 3]);
         region.set_bytes("test.bin", 3, 0x10, &[4, 5]);
@@ -2281,7 +2281,7 @@ mod tests {
     }
 
     #[test]
-    fn space_usage_counts_code_data_and_undefined() {
+    fn usage_counts_each_kind() {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes(
             "test.bin",
@@ -2316,7 +2316,7 @@ mod tests {
     }
 
     #[test]
-    fn space_usage_counts_bytes_mapped_at_a_nonzero_base() {
+    fn usage_counts_nonzero_base() {
         // A byte range based at a nonzero offset must still count in full.
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0x1000, &[0xAA, 0xBB, 0xCC, 0xDD]);
@@ -2359,7 +2359,7 @@ mod tests {
     /// One signature of data decoded as code: a branch landing partway through
     /// a neighbour.
     #[test]
-    fn a_branch_into_the_middle_of_a_neighbour_is_counted() {
+    fn branch_into_neighbour_counted() {
         // 0: SJMP 0x03 — lands inside the instruction at 0x02.
         // 2: SJMP 0x04 — lands on a real boundary.
         // 4: NOP, 5: RET.
@@ -2375,7 +2375,7 @@ mod tests {
 
     /// Real code branches to boundaries.
     #[test]
-    fn code_that_branches_to_boundaries_is_clean() {
+    fn boundary_branches_clean() {
         // 0: SJMP 0x02, 2: NOP, 3: NOP, 4: NOP, 5: RET.
         let decode = peek(&[0x80, 0x00, 0x00, 0x00, 0x00, 0x22]);
 
@@ -2386,7 +2386,7 @@ mod tests {
 
     /// A target beyond the image counts into `out_of_range_targets`.
     #[test]
-    fn a_target_outside_the_run_is_not_self_misaligned() {
+    fn outside_target_not_misaligned() {
         // LJMP 0x4321 — far outside a six-byte image.
         let decode = peek(&[0x02, 0x43, 0x21, 0x00, 0x00, 0x22]);
 
@@ -2396,7 +2396,7 @@ mod tests {
 
     /// The linear decode covers the whole range.
     #[test]
-    fn linear_decoding_does_not_stop_at_a_return() {
+    fn linear_ignores_return() {
         let image: &[u8] = &[0x22, 0x00, 0x00, 0x22];
         let env = Env(image);
         let mut db = Db::with_platform(crate::platform::i8051::platform());
@@ -2417,7 +2417,7 @@ mod tests {
     /// The same local name in two routines must survive into valid assembly,
     /// and a global name used twice must be made unique rather than emitted.
     #[test]
-    fn locals_repeat_across_scopes_and_globals_are_deduplicated() {
+    fn locals_repeat_globals_unique() {
         struct Img;
         impl crate::commands::Environment for Img {
             fn load_file_bytes(
@@ -2474,7 +2474,7 @@ mod tests {
     /// A global name reused at two addresses is disambiguated, since emitting
     /// it twice would be a duplicate symbol.
     #[test]
-    fn a_repeated_global_name_is_made_unique_on_export() {
+    fn repeated_global_made_unique() {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[0x00, 0x00, 0x00, 0x22]);
         region.set_label(0, "handler", LabelAttrs::default());
@@ -2486,7 +2486,7 @@ mod tests {
     }
 
     #[test]
-    fn a_local_referenced_from_outside_its_scope_keeps_its_name() {
+    fn cross_scope_local_named() {
         struct Img;
         impl crate::commands::Environment for Img {
             fn load_file_bytes(
@@ -2539,7 +2539,7 @@ mod tests {
 
     /// A swallowed label undefines every reference to it.
     #[test]
-    fn a_data_run_stops_at_a_label_inside_it() {
+    fn data_run_stops_early() {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[0x11, 0x22, 0x33, 0x44]);
         region.set_equivalent(0, Equivalent::Data(DataType::Byte, 4)).unwrap();
@@ -2567,7 +2567,7 @@ mod tests {
     }
 
     #[test]
-    fn clearing_a_label_clears_its_attributes() {
+    fn clearing_label_clears_attributes() {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[0x00, 0x00, 0x00, 0x22]);
 
@@ -2589,7 +2589,7 @@ mod tests {
     }
 
     #[test]
-    fn peek_reports_self_misaligned_targets() {
+    fn peek_reports_self_misaligned() {
         struct Img;
         impl crate::commands::Environment for Img {
             fn load_file_bytes(
@@ -2615,7 +2615,7 @@ mod tests {
     }
 
     #[test]
-    fn retyping_inside_a_large_run_says_what_clearing_costs() {
+    fn retyping_says_clearing_cost() {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[0x00; 0x40]);
         region.set_equivalent(0, Equivalent::Data(DataType::Byte, 0x40)).unwrap();
@@ -2635,7 +2635,7 @@ mod tests {
     }
 
     #[test]
-    fn classifying_an_unmapped_address_names_the_space() {
+    fn unmapped_address_names_space() {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[0x00, 0x00]);
 

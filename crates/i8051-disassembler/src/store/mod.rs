@@ -265,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_unmap_bytes_range() {
+    fn round_trip_unmap_range() {
         let command = commands::boxed(UnmapBytes::new((crate::platform::i8051::CODE, 0x10..0x20)));
         let dsl = to_dsl(&*command);
         assert_eq!(dsl, "unmap_bytes(addresses=CODE:{0x10..0x20})");
@@ -295,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn a_raw_string_may_span_lines() {
+    fn raw_string_spans_lines() {
         let doc = "set_cpu(name=\"i8051\")\n\
                    set_comment(address=CODE:0x0, comment=r#\"first line\n\
                    second line\n\
@@ -315,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn a_string_gets_the_lightest_delimiters_that_hold_it() {
+    fn lightest_delimiters_chosen() {
         let render = |text: &str| {
             let command = commands::boxed(SetComment::new(
                 (crate::platform::i8051::CODE, 0x10),
@@ -335,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_raw_string_with_quotes() {
+    fn round_trip_quoted_raw() {
         let command = commands::boxed(SetComment::new((crate::platform::i8051::CODE, 0x10), "say \"hello\""));
         let dsl = to_dsl(&*command);
         assert!(dsl.contains("r#\""));
@@ -367,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_set_note_minimal() {
+    fn round_trip_note_minimal() {
         let note = Note::new(None, "interesting spot");
         let command = commands::boxed(SetNote::new(
             (crate::platform::i8051::CODE, AddressRange::new(0x100, 0x120)),
@@ -386,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_note_without_id_allocates() {
+    fn note_without_id_allocates() {
         let decoded =
             from_dsl("set_note(address=CODE:0x100..0x120, note=Note(content=\"hello\", tags={}))")
                 .unwrap();
@@ -400,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn bare_address_coerces_to_a_one_byte_range() {
+    fn bare_address_coerces_range() {
         let decoded = from_dsl("set_note(address=CODE:0x26, note=Note(content=\"hi\"))").unwrap();
         let cmd = decoded.as_any().downcast_ref::<SetNote>().expect("SetNote");
         assert_eq!(cmd.address.range, AddressRange::new(0x26, 0x27));
@@ -408,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn address_and_range_coerce_to_a_set() {
+    fn address_coerces_to_set() {
         let range = from_dsl("unmap_bytes(addresses=CODE:0x10..0x20)").unwrap();
         assert_eq!(to_dsl(&*range), "unmap_bytes(addresses=CODE:{0x10..0x20})");
         let single = from_dsl("unmap_bytes(addresses=CODE:0x10)").unwrap();
@@ -416,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn quoted_address_spellings_are_accepted() {
+    fn quoted_addresses_accepted() {
         let quoted = from_dsl(r#"set_label(address="CODE:0x100", label="reset_vector")"#).unwrap();
         let bare = from_dsl(r#"set_label(address=CODE:0x100, label="reset_vector")"#).unwrap();
         assert_eq!(&*quoted, &*bare);
@@ -426,14 +426,14 @@ mod tests {
     }
 
     #[test]
-    fn bare_identifiers_read_as_strings() {
+    fn bare_identifiers_are_strings() {
         let bare = from_dsl("set_label(address=CODE:0x100, label=reset_vector)").unwrap();
         let quoted = from_dsl(r#"set_label(address=CODE:0x100, label="reset_vector")"#).unwrap();
         assert_eq!(&*bare, &*quoted);
     }
 
     #[test]
-    fn bare_string_note_is_content_shorthand() {
+    fn bare_note_is_content() {
         let decoded =
             from_dsl(r#"set_note(address=CODE:0x26..0x29, note="tighten this loop")"#).unwrap();
         let cmd = decoded.as_any().downcast_ref::<SetNote>().expect("SetNote");
@@ -462,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn stray_and_missing_arguments_are_named() {
+    fn stray_arguments_named() {
         let typo = from_dsl(r#"set_label(adress=CODE:0x0, label="x")"#).unwrap_err();
         assert!(typo.message.contains("unknown argument `adress`"), "{}", typo.message);
         assert!(typo.message.contains("did you mean `address`?"), "{}", typo.message);
@@ -472,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn shape_mismatches_name_the_argument_and_expected_spelling() {
+    fn shape_mismatch_names_argument() {
         let err = from_dsl(r#"set_label(address=CODE:0x0..0x10, label="x")"#).unwrap_err();
         assert!(err.message.contains("argument `address` of `set_label`"), "{}", err.message);
         assert!(err.message.contains("a DSL address, e.g. CODE:0x100"), "{}", err.message);
@@ -483,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn from_dsl_value_parses_bare_address() {
+    fn value_parses_bare_address() {
         use super::from_dsl_value;
         use crate::address::{SpaceAddressRange, SpaceAddressValue};
 
@@ -497,7 +497,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_field_error_is_not_positional() {
+    fn missing_field_not_positional() {
         let err = from_dsl("set_label(address=CODE:0x0)").unwrap_err();
         assert_eq!(err.offset, None);
         let shown = err.to_string();
@@ -506,14 +506,14 @@ mod tests {
     }
 
     #[test]
-    fn positional_error_keeps_its_offset() {
+    fn positional_error_keeps_offset() {
         let err = from_dsl("set_label(address=CODE:0xZZ)").unwrap_err();
         assert!(err.offset.is_some());
         assert!(err.to_string().contains("byte"));
     }
 
     #[test]
-    fn a_bare_variant_means_the_qualified_one() {
+    fn bare_variant_qualifies() {
         let bare = from_dsl("mark_data(range=CODE:0x10..0x12, data_type=Byte)")
             .expect("a bare variant is unambiguous here");
         let qualified = from_dsl("mark_data(range=CODE:0x10..0x12, data_type=DataType::Byte)")

@@ -754,7 +754,7 @@ mod tests {
     }
 
     #[test]
-    fn decoded_entry_points_are_named_but_undecoded_ones_are_not() {
+    fn decoded_vectors_named() {
         let mut db = Db::with_platform(crate::platform::i8051::platform());
         let code = db.region_mut(CODE);
         code.set_bytes("test.bin", 0, 0, &[0x00; 0x30]);
@@ -874,7 +874,7 @@ loc_0010:
     // Also the general round-trip test: the full `make_test_db` listing (labels,
     // comments, strong code) survives export to DSL and reload.
     #[test]
-    fn round_trips_through_dsl_including_notes() {
+    fn round_trips_with_notes() {
         use crate::address::AddressRange;
         use crate::commands::SetNote;
 
@@ -951,7 +951,7 @@ loc_0010:
     }
 
     #[test]
-    fn set_constant_bytes_command_undo() {
+    fn constant_bytes_undo() {
         let (mut db, env) = mapped("t.bin", &[1, 2, 3]);
         let undo = db
             .apply(boxed(SetConstantBytes::new((CODE, 0..2), 0xFF)), None)
@@ -963,7 +963,7 @@ loc_0010:
     }
 
     #[test]
-    fn auto_disassemble_undo_removes_root_and_derived_code() {
+    fn sweep_undo_removes_code() {
         let (mut db, env) = mapped("t.bin", &TEST_BINARY);
         let undo = db
             .apply(boxed(AutoDisassemble::new((CODE, 0))), None)
@@ -981,7 +981,7 @@ loc_0010:
     }
 
     #[test]
-    fn auto_disassemble_exports_as_root_and_round_trips() {
+    fn sweep_exports_as_root() {
         // MOV A,#1 / INC A / SJMP back: a self-contained loop.
         let (mut db, env) = mapped("loop.bin", &[0x74, 0x01, 0x04, 0x80, 0xFB]);
         // The region method (which library callers use) must record a root.
@@ -996,7 +996,7 @@ loc_0010:
     }
 
     #[test]
-    fn unknown_equivalent_chops_auto_disassembly_and_round_trips() {
+    fn barrier_chops_sweep() {
         use crate::commands::MarkUnknown;
 
         // MOV A,#1 / INC A / NOP / RET: a straight-line run.
@@ -1026,7 +1026,7 @@ loc_0010:
     }
 
     #[test]
-    fn unknown_barrier_retroactively_chops_weak_code() {
+    fn barrier_chops_retroactively() {
         use crate::commands::MarkUnknown;
 
         // MOV A,#1 / INC A / NOP / RET: a straight-line run.
@@ -1052,7 +1052,7 @@ loc_0010:
     }
 
     #[test]
-    fn extent_commands_round_trip_and_coalesce_on_export() {
+    fn extents_coalesce_on_export() {
         use crate::commands::{DisassembleRange, MarkData};
 
         // MOV A,#1 / INC A (a 3-byte code block), then 2 data bytes.
@@ -1083,7 +1083,7 @@ loc_0010:
     }
 
     #[test]
-    fn override_operand_round_trips_and_undoes() {
+    fn override_operand_undoes() {
         use crate::commands::{DisassembleRange, OverrideOperand};
         use crate::db::OperandOverride;
 
@@ -1112,7 +1112,7 @@ loc_0010:
     }
 
     #[test]
-    fn clear_label_set_clears_range_and_undo_restores() {
+    fn clear_labels_undo_restores() {
         let mut db = Db::with_platform(crate::platform::i8051::platform());
         let code = db.region_mut(CODE);
         code.set_label(0x10, "a", LabelAttrs::default());
@@ -1137,7 +1137,7 @@ loc_0010:
     }
 
     #[test]
-    fn a_refusal_over_a_larger_equivalent_names_the_bytes_to_restore() {
+    fn refusal_names_restore_bytes() {
         let text = Error::NotUndefined {
             at: (CODE, 0xb6eu32).into(),
             existing: EquivalentKind::Data,
@@ -1163,7 +1163,7 @@ loc_0010:
     }
 
     #[test]
-    fn classification_refusals_name_the_command_that_unblocks_them() {
+    fn refusals_name_unblocking_command() {
         let occupied = Error::NotUndefined {
             at: (CODE, 0x8u32).into(),
             existing: EquivalentKind::Code,

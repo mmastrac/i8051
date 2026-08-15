@@ -899,7 +899,7 @@ mod tests {
     }
 
     #[test]
-    fn flags_undefined_bytes_and_unfollowed_call_target() {
+    fn flags_undefined_and_unfollowed() {
         // Disassemble only the reset routine [0x0, 0x4). The LCALL target at 0x4
         // is never followed, and bytes 0x4..0x6 stay undefined.
         let db = db_with(vec![boxed(DisassembleRange::new((CODE, 0u32..4u32), false))]);
@@ -921,7 +921,7 @@ mod tests {
     }
 
     #[test]
-    fn fully_decoded_and_named_is_done() {
+    fn decoded_and_named_done() {
         // Auto-disassemble from both roots (follows the call), name the routines.
         let db = db_with(vec![
             boxed(AutoDisassemble::new((CODE, 0u32))),
@@ -938,7 +938,7 @@ mod tests {
     }
 
     #[test]
-    fn named_but_unnoted_routine_blocks_the_documented_gate() {
+    fn unnoted_routine_blocks_gate() {
         use crate::commands::SetNote;
 
         // Fully decoded and named: done at `named`, `inc_a` missing a note.
@@ -973,7 +973,7 @@ mod tests {
     }
 
     #[test]
-    fn structural_gate_ignores_provisional_labels() {
+    fn structural_ignores_provisional() {
         // Everything decoded and classified, but routines keep auto names.
         let db = db_with(vec![boxed(AutoDisassemble::new((CODE, 0u32)))]);
 
@@ -988,7 +988,7 @@ mod tests {
 
     /// Noting an address must reorder it, not retire it.
     #[test]
-    fn a_noted_provisional_label_sorts_last_but_still_blocks_done() {
+    fn noted_label_sorts_last() {
         use crate::commands::SetNote;
 
         let db = db_with(vec![boxed(AutoDisassemble::new((CODE, 0u32)))]);
@@ -1019,7 +1019,7 @@ mod tests {
     }
 
     #[test]
-    fn unnamed_targets_are_ranked_by_how_many_reference_them() {
+    fn targets_ranked_by_callers() {
         let db = db_with(vec![boxed(AutoDisassemble::new((CODE, 0u32)))]);
         let report = assess_at(&db, Gate::Named);
         let ranked: Vec<(u32, &str)> = report
@@ -1037,7 +1037,7 @@ mod tests {
     }
 
     #[test]
-    fn undecoded_vectors_are_raised_and_retiring_one_settles_it() {
+    fn undecoded_vectors_raised() {
         use crate::commands::DisablePlatformAddress;
 
         let db = db_with(vec![]);
@@ -1070,7 +1070,7 @@ mod tests {
     }
 
     #[test]
-    fn a_decoded_vector_leaves_the_worklist() {
+    fn decoded_vector_leaves_worklist() {
         let db = db_with(vec![boxed(AutoDisassemble::new((CODE, 0u32)))]);
         let report = assess_at(&db, Gate::Structural);
         let raised: Vec<&str> = report
@@ -1084,7 +1084,7 @@ mod tests {
 
     /// A hole with bytes on both sides means something removed them.
     #[test]
-    fn a_hole_between_mapped_bytes_is_reported_but_the_tail_is_not() {
+    fn hole_reported_tail_not() {
         let mut db = db_with(vec![]);
         assert!(
             !assess_at(&db, Gate::Structural)
@@ -1107,7 +1107,7 @@ mod tests {
     }
 
     #[test]
-    fn a_target_outside_the_image_asks_about_the_source() {
+    fn outside_target_asks_source() {
         // LJMP 0xF004 at 0x0, then RET. The target is far outside a 4-byte image.
         struct Img;
         impl crate::commands::Environment for Img {
@@ -1144,7 +1144,7 @@ mod tests {
     }
 
     #[test]
-    fn narrowing_the_address_lines_retires_the_item() {
+    fn narrowing_lines_retires_item() {
         struct Img;
         impl crate::commands::Environment for Img {
             fn load_file_bytes(
@@ -1187,7 +1187,7 @@ mod tests {
     }
 
     #[test]
-    fn flow_into_data_offers_both_readings() {
+    fn flow_data_offers_readings() {
         use crate::commands::MarkData;
         use crate::db::DataType;
 
@@ -1226,7 +1226,7 @@ mod tests {
     /// Running off the end is either: filler that decoded as code, or an image
     /// that continues past what is loaded.
     #[test]
-    fn flow_off_the_end_offers_both_readings() {
+    fn flow_off_end_readings() {
         struct Img;
         impl crate::commands::Environment for Img {
             fn load_file_bytes(
@@ -1259,7 +1259,7 @@ mod tests {
 
     /// A lookup table stays anonymous until it is referenced.
     #[test]
-    fn data_addressed_by_pointer_is_asked_about() {
+    fn pointer_data_asked_about() {
         struct Img;
         impl crate::commands::Environment for Img {
             fn load_file_bytes(
@@ -1303,7 +1303,7 @@ mod tests {
     }
 
     #[test]
-    fn an_undecided_operand_is_recorded_with_both_candidates() {
+    fn undecided_operand_recorded() {
         struct Img;
         impl crate::commands::Environment for Img {
             fn load_file_bytes(
@@ -1362,7 +1362,7 @@ mod tests {
 
     /// A jump-only target is a spot inside a routine.
     #[test]
-    fn a_jump_only_target_is_offered_a_local_name() {
+    fn jump_target_offered_local() {
         struct Img;
         impl crate::commands::Environment for Img {
             fn load_file_bytes(
@@ -1401,7 +1401,7 @@ mod tests {
     /// filler reading that retires the handler and marks it data, and the vector
     /// guard permits exactly that, so following the advice buries a live handler.
     #[test]
-    fn a_filler_run_stops_at_a_live_vector() {
+    fn filler_run_stops_vector() {
         // 0xb (INT_timer0) holds `LJMP 0x0100`; 0xe..0x10 is filler after it that
         // falls into data at 0x10.
         let mut image = vec![0x00u8; 0x110];
@@ -1438,7 +1438,7 @@ mod tests {
     /// the naming worklist, deferred behind untouched ones, until a later pass
     /// commits a real name.
     #[test]
-    fn a_provisional_label_stays_on_the_worklist_until_settled() {
+    fn provisional_stays_until_settled() {
         use crate::commands::{AutoDisassemble, SetLabel, boxed};
 
         let mut db = db_with(vec![boxed(AutoDisassemble::new((CODE, 0u32)))]);
@@ -1467,7 +1467,7 @@ mod tests {
     /// suggest it. The clear in front of the mark runs first, which leaves the
     /// caller half applied with the item still standing.
     #[test]
-    fn a_run_that_is_branched_to_is_never_suggested_for_marking() {
+    fn branched_run_not_marked() {
         // 0x4 is the `LCALL` target, so the run entered there carries a branch.
         let db = db_with(vec![
             boxed(DisassembleRange::new((CODE, 0u32..4u32), false)),
@@ -1498,7 +1498,7 @@ mod tests {
     /// call target inside a data range. `auto_disassemble` cannot clear that on
     /// its own, so the item has to name the barrier and the verb that drops it.
     #[test]
-    fn an_unfollowed_target_behind_a_barrier_says_to_clear_the_barrier() {
+    fn barrier_target_says_clear() {
         use crate::commands::MarkData;
         use crate::db::DataType;
 
@@ -1526,7 +1526,7 @@ mod tests {
     /// live, so the item has to say to retire it first or it suggests a command
     /// the caller cannot run.
     #[test]
-    fn classifying_a_vector_slot_is_suggested_with_the_retire_step_first() {
+    fn vector_slot_retire_first() {
         // 0x13 (INT_ext1) holds `LJMP 0x1FD1`, past the end of a 0x26-byte image.
         let mut image = vec![0x00u8; 0x26];
         image[0x13..0x16].copy_from_slice(&[0x02, 0x1F, 0xD1]);
@@ -1570,7 +1570,7 @@ mod tests {
     /// and an overnight run cycled between the two for six sessions, decoding the
     /// bytes one session and reverting them the next.
     #[test]
-    fn flow_into_data_puts_the_likelier_reading_first() {
+    fn flow_data_orders_readings() {
         use crate::commands::MarkData;
         use crate::db::DataType;
 
@@ -1630,7 +1630,7 @@ mod tests {
     /// Offered alone over one instruction, the mark refuses on decoded bytes, and
     /// where it lands it leaves the predecessor leaking into the new data.
     #[test]
-    fn reclassifying_a_decoded_run_clears_it_first_and_covers_all_of_it() {
+    fn reclassify_clears_whole_run() {
         // 0x4 is the call target, so the run entered there ends at the `RET`.
         let db = db_with(vec![boxed(AutoDisassemble::new((CODE, 0u32)))]);
         let report = assess_at(&db, Gate::Named);

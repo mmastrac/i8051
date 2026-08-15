@@ -147,7 +147,7 @@ mod tests {
     }
 
     #[test]
-    fn open_builds_a_session_and_contextualizes_errors() {
+    fn open_builds_session() {
         let path = tmp("open");
         std::fs::write(&path, r#"[{"command": "set_cpu(name=\"i8051\")"}]"#).unwrap();
         let session = Session::open(&path).expect("open");
@@ -163,7 +163,7 @@ mod tests {
     }
 
     #[test]
-    fn layered_save_writes_only_the_diff() {
+    fn layered_save_writes_diff() {
         let base = tmp("base");
         let diff = tmp("diff");
         std::fs::write(
@@ -193,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn dsl_document_loads_comments_and_round_trips_as_dsl() {
+    fn dsl_document_round_trips() {
         let path =
             std::env::temp_dir().join(format!("i8051-doc-{}.dsl", std::process::id()));
         std::fs::write(
@@ -222,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn in_memory_session_is_not_saveable() {
+    fn memory_session_not_saveable() {
         let env = Box::new(crate::MemoryEnvironment::new());
         let session = Session::from_commands([r#"set_cpu(name="i8051")"#], env).unwrap();
         assert!(!session.is_saveable());

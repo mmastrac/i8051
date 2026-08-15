@@ -41,7 +41,7 @@ impl Environment for SamplesEnv {
 }
 
 #[test]
-fn committed_scripts_reconstruct_clean_disassembly() {
+fn committed_scripts_reconstruct() {
     let mut ran = 0;
     for (script, rom) in SAMPLES {
         // The script is committed and must parse.

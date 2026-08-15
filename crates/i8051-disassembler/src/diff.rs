@@ -145,7 +145,7 @@ mod tests {
     }
 
     #[test]
-    fn identical_states_have_an_empty_diff() {
+    fn identical_states_empty_diff() {
         let base = db(r#"set_label(address=CODE:0x0, label="reset")"#);
         assert!(base.diff_from(&base).is_empty());
     }
@@ -160,7 +160,7 @@ mod tests {
     }
 
     #[test]
-    fn changed_facts_reset_over_base() {
+    fn changed_facts_reset() {
         assert_roundtrip(
             r#"set_label(address=CODE:0x0, label="old")"#,
             r#"set_label(address=CODE:0x0, label="new")"#,
@@ -168,7 +168,7 @@ mod tests {
     }
 
     #[test]
-    fn removed_facts_emit_a_clear() {
+    fn removed_facts_emit_clear() {
         let base = db(r#"set_label(address=CODE:0x0, label="reset")
 set_comment(address=CODE:0x2, comment="hi")"#);
         // Working state kept the comment but dropped the label.

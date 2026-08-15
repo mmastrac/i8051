@@ -816,7 +816,7 @@ mod tests {
     }
 
     #[test]
-    fn long_raw_spans_chunk_into_rows_and_fills() {
+    fn raw_spans_chunk() {
         let mut bytes: Vec<u8> = (1..=8).collect();
         bytes.extend(std::iter::repeat_n(0u8, 64));
         bytes.extend(9..=16u8);
@@ -856,7 +856,7 @@ mod tests {
     }
 
     #[test]
-    fn listing_overview_bands_tile_the_line_axis() {
+    fn overview_bands_tile() {
         let env = Box::new(MemoryEnvironment::new().with_file("fw.bin", vec![0x00, 0x22, 0xAB, 0xCD]));
         let session = Session::from_commands(
             [
@@ -881,7 +881,7 @@ mod tests {
     }
 
     #[test]
-    fn disassembly_overview_reports_sizes_without_dumping() {
+    fn overview_reports_sizes() {
         let session = sample();
         let overview = session.disassembly_overview().expect("overview");
         assert!(overview.spaces.iter().any(|s| s.space == "CODE" && s.lines > 0));
@@ -890,7 +890,7 @@ mod tests {
     }
 
     #[test]
-    fn listing_windows_and_carries_addresses() {
+    fn listing_carries_addresses() {
         let session = sample();
         let listing = session.listing("CODE", 0, 100).expect("listing");
         assert_eq!(listing.space, "CODE");
@@ -909,7 +909,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_map_counts_code_bytes() {
+    fn memory_map_counts_bytes() {
         let map = sample().memory_map();
         let code = map.iter().find(|u| u.space == "CODE").expect("CODE usage");
         assert_eq!(code.total, 3);
@@ -929,7 +929,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_space_is_a_parse_error() {
+    fn unknown_space_rejected() {
         let session = sample();
         assert!(matches!(
             session.listing("NOPE", 0, 1),
@@ -938,7 +938,7 @@ mod tests {
     }
 
     #[test]
-    fn context_summarizes_the_instruction_and_label() {
+    fn context_summarizes_address() {
         let cx = sample().context("CODE:0x0").expect("context");
         assert_eq!(cx.address, "CODE:0x0");
         assert_eq!(cx.label.as_deref(), Some("reset"));
@@ -947,7 +947,7 @@ mod tests {
     }
 
     #[test]
-    fn peek_judges_code_versus_filler() {
+    fn peek_judges_code() {
         let good = sample().peek("CODE:0x0", None).expect("peek");
         assert_eq!(good.verdict, "likely_code");
         assert!(good.terminates);
@@ -972,7 +972,7 @@ mod tests {
     }
 
     #[test]
-    fn status_carries_the_next_action_while_work_remains() {
+    fn status_carries_next_action() {
         let env = Box::new(MemoryEnvironment::new().with_file("fw.bin", vec![0x00, 0x00, 0x22]));
         let session = Session::from_commands(
             [
@@ -998,7 +998,7 @@ mod tests {
     }
 
     #[test]
-    fn status_reports_done_for_a_complete_session() {
+    fn status_reports_done() {
         let status = sample().status(None).expect("status");
         assert!(status.done);
         assert!(status.phase.is_none());
@@ -1007,7 +1007,7 @@ mod tests {
     }
 
     #[test]
-    fn worklist_without_limit_caps_at_default_page_size() {
+    fn worklist_caps_at_default() {
         let env = Box::new(MemoryEnvironment::new().with_file("fw.bin", vec![0x00]));
         let maps: Vec<String> = (0..25u32)
             .map(|i| {
@@ -1028,7 +1028,7 @@ mod tests {
     }
 
     #[test]
-    fn worklist_pages_and_filters_undefined_bytes() {
+    fn worklist_pages_and_filters() {
         let env =
             Box::new(MemoryEnvironment::new().with_file("fw.bin", vec![0x00, 0x22, 0xAA, 0xBB]));
         let session = Session::from_commands(

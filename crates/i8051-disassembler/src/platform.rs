@@ -291,13 +291,13 @@ mod suggest_tests {
     use super::*;
 
     #[test]
-    fn suggest_names_prefers_substring_match() {
+    fn suggest_prefers_substring() {
         assert_eq!(suggest_names("8051")[0], "i8051");
         assert_eq!(suggest_names("6502")[0], "mos6502");
     }
 
     #[test]
-    fn suggest_names_orders_by_levenshtein() {
+    fn suggest_orders_by_distance() {
         let ranked = suggest_names("z80");
         assert_eq!(ranked.len(), 3);
         assert!(ranked.contains(&"i8051".to_string()));

@@ -114,7 +114,7 @@ mod tests {
     }
 
     #[test]
-    fn disabling_a_vector_round_trips_with_its_reason() {
+    fn disabling_vector_round_trips() {
         let mut db = mapped();
         assert!(!disabled(&db, 0x13));
 

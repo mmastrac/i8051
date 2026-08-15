@@ -85,7 +85,7 @@ mod tests {
     }
 
     #[test]
-    fn set_cpu_selects_and_undo_clears() {
+    fn set_cpu_undo_clears() {
         let mut db = Db::new();
         assert!(db.platform().is_none());
 
@@ -100,7 +100,7 @@ mod tests {
     }
 
     #[test]
-    fn set_cpu_over_existing_undo_restores_previous() {
+    fn set_cpu_undo_restores() {
         let mut db = Db::with_platform(i8051::platform());
         let undo = db.apply(boxed(SetCpu::new("m6805")), None).unwrap();
         assert_eq!(db.platform().unwrap().name(), "m6805");
@@ -109,7 +109,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_cpu_is_rejected_with_suggestions() {
+    fn unknown_cpu_suggests() {
         let mut db = Db::new();
         let err = db.apply(boxed(SetCpu::new("z80")), None).unwrap_err();
         match err {
@@ -122,13 +122,13 @@ mod tests {
     }
 
     #[test]
-    fn unknown_cpu_substring_match_ranks_first() {
+    fn unknown_cpu_substring_first() {
         let suggestions = platform::suggest_names("8051");
         assert_eq!(suggestions[0], "i8051");
     }
 
     #[test]
-    fn unknown_cpu_when_already_set_reports_cpu_already_set() {
+    fn unknown_cpu_when_set() {
         let mut db = Db::with_platform(i8051::platform());
         assert!(matches!(
             db.apply(boxed(SetCpu::new("z80")), None),

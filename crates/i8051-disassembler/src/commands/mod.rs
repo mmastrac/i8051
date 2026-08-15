@@ -388,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn arg_kinds_are_derived_from_types() {
+    fn arg_kinds_from_types() {
         use super::ArgKind::*;
         let kinds = |name: &str| -> Vec<super::ArgKind> {
             COMMANDS
@@ -410,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn struct_args_keep_a_per_type_slug() {
+    fn struct_args_keep_slug() {
         // ...but stay distinguishable on the wire via the type's slug
         let arg = |cmd: &str, arg: &str| {
             let entry = COMMANDS.get(cmd).unwrap();
