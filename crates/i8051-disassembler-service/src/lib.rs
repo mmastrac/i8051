@@ -8,6 +8,9 @@ use i8051_disassembler::store::{from_dsl, from_dsl_value, to_dsl};
 
 pub use i8051_disassembler::commands::Environment;
 
+mod db;
+pub use db::{DbFileError, SaveReport};
+
 mod dto;
 pub use dto::*;
 
@@ -42,12 +45,13 @@ impl std::error::Error for ServiceError {}
 pub struct Session {
     db: Db,
     env: Box<dyn Environment + Send + Sync>,
+    source: Option<db::Source>,
 }
 
 impl Session {
     /// Wrap an existing database.
     pub fn new(db: Db, env: Box<dyn Environment + Send + Sync>) -> Self {
-        Self { db, env }
+        Self { db, env, source: None }
     }
 
     /// Build by applying DSL commands in order.
@@ -62,7 +66,7 @@ impl Session {
             db.apply(command, Some(env.as_ref()))
                 .map_err(|e| ServiceError::Apply(format!("record {i}: {e}")))?;
         }
-        Ok(Self { db, env })
+        Ok(Self { db, env, source: None })
     }
 
     /// Apply one command, returning its undo DSL.
