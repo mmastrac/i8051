@@ -20,6 +20,9 @@ pub use controller::{Controller, EditResult, Location};
 mod db;
 pub use db::{DbFileError, SaveReport};
 
+#[cfg(feature = "autosave")]
+pub mod autosave;
+
 mod complete;
 pub use complete::{Candidate, Completion, ValueSource, complete};
 
