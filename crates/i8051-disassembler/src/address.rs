@@ -431,7 +431,8 @@ mod tests {
 
         // A name longer than `CAP` bytes is rejected.
         let long = "X".repeat(AddressSpace::CAP + 1);
-        let err = serde_json::from_str::<SpaceAddressValue>(&format!(r#"["{long}",0]"#)).unwrap_err();
+        let err =
+            serde_json::from_str::<SpaceAddressValue>(&format!(r#"["{long}",0]"#)).unwrap_err();
         assert!(err.to_string().contains("too long"), "{err}");
     }
 

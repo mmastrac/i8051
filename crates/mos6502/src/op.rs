@@ -374,19 +374,45 @@ pub fn decode(bytes: &[u8], pc: u32) -> Option<Instruction> {
 
 /// Map an ISA-table addressing-mode shorthand to an [`AddrMode`].
 macro_rules! mode {
-    (imp) => { AddrMode::Implied };
-    (acc) => { AddrMode::Accumulator };
-    (imm) => { AddrMode::Immediate };
-    (zp)  => { AddrMode::ZeroPage };
-    (zpx) => { AddrMode::ZeroPageX };
-    (zpy) => { AddrMode::ZeroPageY };
-    (rel) => { AddrMode::Relative };
-    (abs) => { AddrMode::Absolute };
-    (abx) => { AddrMode::AbsoluteX };
-    (aby) => { AddrMode::AbsoluteY };
-    (ind) => { AddrMode::Indirect };
-    (izx) => { AddrMode::IndexedIndirect };
-    (izy) => { AddrMode::IndirectIndexed };
+    (imp) => {
+        AddrMode::Implied
+    };
+    (acc) => {
+        AddrMode::Accumulator
+    };
+    (imm) => {
+        AddrMode::Immediate
+    };
+    (zp) => {
+        AddrMode::ZeroPage
+    };
+    (zpx) => {
+        AddrMode::ZeroPageX
+    };
+    (zpy) => {
+        AddrMode::ZeroPageY
+    };
+    (rel) => {
+        AddrMode::Relative
+    };
+    (abs) => {
+        AddrMode::Absolute
+    };
+    (abx) => {
+        AddrMode::AbsoluteX
+    };
+    (aby) => {
+        AddrMode::AbsoluteY
+    };
+    (ind) => {
+        AddrMode::Indirect
+    };
+    (izx) => {
+        AddrMode::IndexedIndirect
+    };
+    (izy) => {
+        AddrMode::IndirectIndexed
+    };
 }
 
 /// The 6502 ISA, grouped by mnemonic. Each `0xNN mode` line binds one opcode

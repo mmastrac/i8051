@@ -84,7 +84,11 @@ pub fn from_dsl(input: &str) -> Result<Box<dyn Command>, DslError> {
 /// Accept a bare enum variant.
 pub fn qualify_bare_variants(entry: &crate::commands::CommandEntry, kwargs: &mut value::Fields) {
     for arg in entry.args {
-        let Some(value) = kwargs.iter().find(|(key, _)| key == arg.name).map(|(_, v)| v) else {
+        let Some(value) = kwargs
+            .iter()
+            .find(|(key, _)| key == arg.name)
+            .map(|(_, v)| v)
+        else {
             continue;
         };
         if (arg.check)(value).is_ok() {
@@ -133,7 +137,11 @@ pub fn diagnose_args(
     raw: DslError,
 ) -> DslError {
     for arg in entry.args {
-        let Some(value) = kwargs.iter().find(|(key, _)| key == arg.name).map(|(_, v)| v) else {
+        let Some(value) = kwargs
+            .iter()
+            .find(|(key, _)| key == arg.name)
+            .map(|(_, v)| v)
+        else {
             continue;
         };
         if let Err(inner) = (arg.check)(value) {
@@ -236,13 +244,19 @@ mod tests {
         let space = "CODE";
         let len = 2u32;
         let cases = [
-            (dsl!(peek(address = {at}, lines = 4)), "peek(address=CODE:0x4, lines=4)"),
             (
-                dsl!(set_label(address = {at}, label = ".loop", local = True)),
+                dsl!(peek(address = { at }, lines = 4)),
+                "peek(address=CODE:0x4, lines=4)",
+            ),
+            (
+                dsl!(set_label(address = { at }, label = ".loop", local = True)),
                 "set_label(address=CODE:0x4, label=\".loop\", local=True)",
             ),
             (
-                dsl!(mark_data(range = {format!("{at}..0x6")}, data_type = DataType::Byte)),
+                dsl!(mark_data(
+                    range = { format!("{at}..0x6") },
+                    data_type = DataType::Byte
+                )),
                 "mark_data(range=CODE:0x4..0x6, data_type=DataType::Byte)",
             ),
             (
@@ -250,11 +264,11 @@ mod tests {
                 "map_bytes(address=CODE:0x4, file=\"...\", file_offset=0x2, size=0x0)",
             ),
             (
-                dsl!(set_note(address = {at}, note = Note(content = "..."))),
+                dsl!(set_note(address = { at }, note = Note(content = "..."))),
                 "set_note(address=CODE:0x4, note=Note(content=\"...\"))",
             ),
             (
-                dsl!(set_operand_pointer(address = {at}, space = "{space}")),
+                dsl!(set_operand_pointer(address = { at }, space = "{space}")),
                 "set_operand_pointer(address=CODE:0x4, space=\"CODE\")",
             ),
             (
@@ -286,7 +300,12 @@ mod tests {
 
     #[test]
     fn round_trip_set_label() {
-        let command = commands::boxed(SetLabel::new((crate::platform::i8051::CODE, 0x100), "reset_vector", false, false));
+        let command = commands::boxed(SetLabel::new(
+            (crate::platform::i8051::CODE, 0x100),
+            "reset_vector",
+            false,
+            false,
+        ));
         let dsl = to_dsl(&*command);
         assert_eq!(
             dsl,
@@ -302,7 +321,10 @@ mod tests {
             "line one\nline two",
         ));
         let dsl = to_dsl(&*command);
-        assert!(dsl.starts_with("set_comment(address=CODE:0x10, comment=r#\""), "{dsl}");
+        assert!(
+            dsl.starts_with("set_comment(address=CODE:0x10, comment=r#\""),
+            "{dsl}"
+        );
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
     }
 
@@ -316,23 +338,34 @@ mod tests {
                    set_label(address=CODE:0x4, label=\"after\", provisional=False)\n";
 
         let commands = super::from_dsl_many(doc).expect("a multi-line note parses");
-        assert_eq!(commands.len(), 3, "{:?}", commands.iter().map(|c| c.name()).collect::<Vec<_>>());
+        assert_eq!(
+            commands.len(),
+            3,
+            "{:?}",
+            commands.iter().map(|c| c.name()).collect::<Vec<_>>()
+        );
         assert_eq!(commands[1].name(), "set_comment");
 
         let text = to_dsl(&*commands[1]);
         assert!(text.contains("second line"), "{text}");
-        assert!(text.contains("# not a comment"), "the `#` line is content: {text}");
+        assert!(
+            text.contains("# not a comment"),
+            "the `#` line is content: {text}"
+        );
         // And the whole document round-trips.
-        assert_eq!(super::from_dsl_many(&super::to_dsl_many(&commands)).unwrap().len(), 3);
+        assert_eq!(
+            super::from_dsl_many(&super::to_dsl_many(&commands))
+                .unwrap()
+                .len(),
+            3
+        );
     }
 
     #[test]
     fn lightest_delimiters_chosen() {
         let render = |text: &str| {
-            let command = commands::boxed(SetComment::new(
-                (crate::platform::i8051::CODE, 0x10),
-                text,
-            ));
+            let command =
+                commands::boxed(SetComment::new((crate::platform::i8051::CODE, 0x10), text));
             let dsl = to_dsl(&*command);
             // Whatever form was chosen, it has to parse back to the same text.
             assert_eq!(&*from_dsl(&dsl).unwrap(), &*command, "{dsl}");
@@ -348,7 +381,10 @@ mod tests {
 
     #[test]
     fn round_trip_quoted_raw() {
-        let command = commands::boxed(SetComment::new((crate::platform::i8051::CODE, 0x10), "say \"hello\""));
+        let command = commands::boxed(SetComment::new(
+            (crate::platform::i8051::CODE, 0x10),
+            "say \"hello\"",
+        ));
         let dsl = to_dsl(&*command);
         assert!(dsl.contains("r#\""));
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
@@ -383,7 +419,10 @@ mod tests {
     fn round_trip_note_minimal() {
         let note = Note::new(None, "interesting spot");
         let command = commands::boxed(SetNote::new(
-            (crate::platform::i8051::CODE, AddressRange::new(0x100, 0x120)),
+            (
+                crate::platform::i8051::CODE,
+                AddressRange::new(0x100, 0x120),
+            ),
             note.clone(),
         ));
         let dsl = to_dsl(&*command);
@@ -433,7 +472,8 @@ mod tests {
         let quoted = from_dsl(r#"set_label(address="CODE:0x100", label="reset_vector")"#).unwrap();
         let bare = from_dsl(r#"set_label(address=CODE:0x100, label="reset_vector")"#).unwrap();
         assert_eq!(&*quoted, &*bare);
-        let range = from_dsl(r#"set_note(address="CODE:0x10..0x12", note=Note(content="x"))"#).unwrap();
+        let range =
+            from_dsl(r#"set_note(address="CODE:0x10..0x12", note=Note(content="x"))"#).unwrap();
         let cmd = range.as_any().downcast_ref::<SetNote>().expect("SetNote");
         assert_eq!(cmd.address.range, AddressRange::new(0x10, 0x12));
     }
@@ -451,7 +491,10 @@ mod tests {
             from_dsl(r#"set_note(address=CODE:0x26..0x29, note="tighten this loop")"#).unwrap();
         let cmd = decoded.as_any().downcast_ref::<SetNote>().expect("SetNote");
         assert_eq!(cmd.note.content, "tighten this loop");
-        assert!(!cmd.note.id.as_str().is_empty(), "id is allocated from content");
+        assert!(
+            !cmd.note.id.as_str().is_empty(),
+            "id is allocated from content"
+        );
     }
 
     #[test]
@@ -469,30 +512,74 @@ mod tests {
     #[test]
     fn unknown_command_is_rejected() {
         let err = from_dsl("frobnicate(address=CODE:0x0)").unwrap_err();
-        assert!(err.message.contains("unknown command `frobnicate`"), "{}", err.message);
+        assert!(
+            err.message.contains("unknown command `frobnicate`"),
+            "{}",
+            err.message
+        );
         let typo = from_dsl(r#"set_lable(address=CODE:0x0, label="x")"#).unwrap_err();
-        assert!(typo.message.contains("did you mean `set_label`?"), "{}", typo.message);
+        assert!(
+            typo.message.contains("did you mean `set_label`?"),
+            "{}",
+            typo.message
+        );
     }
 
     #[test]
     fn stray_arguments_named() {
         let typo = from_dsl(r#"set_label(adress=CODE:0x0, label="x")"#).unwrap_err();
-        assert!(typo.message.contains("unknown argument `adress`"), "{}", typo.message);
-        assert!(typo.message.contains("did you mean `address`?"), "{}", typo.message);
+        assert!(
+            typo.message.contains("unknown argument `adress`"),
+            "{}",
+            typo.message
+        );
+        assert!(
+            typo.message.contains("did you mean `address`?"),
+            "{}",
+            typo.message
+        );
         let missing = from_dsl(r#"set_note(address=CODE:0x0..0x1)"#).unwrap_err();
-        assert!(missing.message.contains("missing argument `note`"), "{}", missing.message);
-        assert!(missing.message.contains("Note(content="), "{}", missing.message);
+        assert!(
+            missing.message.contains("missing argument `note`"),
+            "{}",
+            missing.message
+        );
+        assert!(
+            missing.message.contains("Note(content="),
+            "{}",
+            missing.message
+        );
     }
 
     #[test]
     fn shape_mismatch_names_argument() {
         let err = from_dsl(r#"set_label(address=CODE:0x0..0x10, label="x")"#).unwrap_err();
-        assert!(err.message.contains("argument `address` of `set_label`"), "{}", err.message);
-        assert!(err.message.contains("a DSL address, e.g. CODE:0x100"), "{}", err.message);
-        assert!(err.message.contains("got CODE:0x0..0x10"), "{}", err.message);
+        assert!(
+            err.message.contains("argument `address` of `set_label`"),
+            "{}",
+            err.message
+        );
+        assert!(
+            err.message.contains("a DSL address, e.g. CODE:0x100"),
+            "{}",
+            err.message
+        );
+        assert!(
+            err.message.contains("got CODE:0x0..0x10"),
+            "{}",
+            err.message
+        );
         let e = from_dsl("mark_data(range=CODE:0x0..0x4, data_type=DataType::Bogus)").unwrap_err();
-        assert!(e.message.contains("argument `data_type` of `mark_data`"), "{}", e.message);
-        assert!(e.message.contains("unknown variant `Bogus`"), "{}", e.message);
+        assert!(
+            e.message.contains("argument `data_type` of `mark_data`"),
+            "{}",
+            e.message
+        );
+        assert!(
+            e.message.contains("unknown variant `Bogus`"),
+            "{}",
+            e.message
+        );
     }
 
     #[test]

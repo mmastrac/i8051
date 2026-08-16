@@ -145,8 +145,14 @@ fn value_candidates(
         replacement,
     };
     let mut out: Vec<Candidate> = match arg.kind.as_str() {
-        "data_type" => DATA_TYPES.iter().map(|v| plain(v.to_string(), "")).collect(),
-        "boolean" => ["True", "False"].iter().map(|v| plain(v.to_string(), "")).collect(),
+        "data_type" => DATA_TYPES
+            .iter()
+            .map(|v| plain(v.to_string(), ""))
+            .collect(),
+        "boolean" => ["True", "False"]
+            .iter()
+            .map(|v| plain(v.to_string(), ""))
+            .collect(),
         "gate" => ["structural", "named", "documented"]
             .iter()
             .map(|v| plain(format!("\"{v}\""), "gate"))
@@ -184,7 +190,9 @@ fn value_candidates(
     out.retain(|c| {
         c.replacement.starts_with(partial)
             || c.display.starts_with(partial)
-            || c.replacement.strip_prefix('"').is_some_and(|r| r.starts_with(partial))
+            || c.replacement
+                .strip_prefix('"')
+                .is_some_and(|r| r.starts_with(partial))
     });
     out
 }
@@ -260,7 +268,10 @@ mod tests {
         let cat = catalog();
         let line = r#"set_note(address=CODE:0x0..0x10, note=Note(content="a, "#;
         let c = complete(&cat, line, line.len(), None);
-        assert!(c.candidates.is_empty(), "no verb-arg names inside a nested value");
+        assert!(
+            c.candidates.is_empty(),
+            "no verb-arg names inside a nested value"
+        );
     }
 
     #[test]
@@ -276,7 +287,10 @@ mod tests {
             vec!["CODE".into(), "XDATA".into()]
         }
         fn symbols(&self) -> Vec<(String, String)> {
-            vec![("reset".into(), "CODE:0x0".into()), ("main".into(), "CODE:0x100".into())]
+            vec![
+                ("reset".into(), "CODE:0x0".into()),
+                ("main".into(), "CODE:0x100".into()),
+            ]
         }
     }
 
@@ -322,6 +336,9 @@ mod tests {
         let cat = catalog();
         let line = "set_note(address=CODE:0x0..0x1, note=";
         let c = complete(&cat, line, line.len(), None);
-        assert_eq!(names(&c), vec!["Note(content=\"\", tags=[\"todo\"])".to_string()]);
+        assert_eq!(
+            names(&c),
+            vec!["Note(content=\"\", tags=[\"todo\"])".to_string()]
+        );
     }
 }

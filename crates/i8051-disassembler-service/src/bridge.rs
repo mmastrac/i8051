@@ -106,13 +106,17 @@ mod tests {
             "note": "System init. Sets SFRs for UART and Timers.",
         }));
         let dsl = build_command_dsl("set_note", &a).expect("bare-string note builds");
-        assert!(dsl.contains("System init. Sets SFRs for UART and Timers."), "{dsl}");
+        assert!(
+            dsl.contains("System init. Sets SFRs for UART and Timers."),
+            "{dsl}"
+        );
         from_dsl(&dsl).expect("built DSL parses");
     }
 
     #[test]
     fn explicit_note_builds() {
-        let a = args(json!({ "address": "CODE:0x26", "note": "Note(content=\"x\", tags=[\"todo\"])" }));
+        let a =
+            args(json!({ "address": "CODE:0x26", "note": "Note(content=\"x\", tags=[\"todo\"])" }));
         let dsl = build_command_dsl("set_note", &a).expect("explicit Note builds");
         from_dsl(&dsl).expect("parses");
     }
@@ -122,9 +126,9 @@ fn focus_of_value(value: &Value) -> Option<String> {
     match value {
         Value::Address { space, offset } => Some(format!("{space}:{offset:#x}")),
         Value::AddressRange { space, start, .. } => Some(format!("{space}:{start:#x}")),
-        Value::AddressSet { space, ranges } => {
-            ranges.first().map(|&(start, _)| format!("{space}:{start:#x}"))
-        }
+        Value::AddressSet { space, ranges } => ranges
+            .first()
+            .map(|&(start, _)| format!("{space}:{start:#x}")),
         _ => None,
     }
 }

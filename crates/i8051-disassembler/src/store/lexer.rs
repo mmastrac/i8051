@@ -289,8 +289,8 @@ mod tests {
 
     #[test]
     fn comments_skipped_raw_kept() {
-        let (name, args) =
-            parse_call("set_label(address=CODE:0x8, label=\"x\")  # why").expect("trailing comment");
+        let (name, args) = parse_call("set_label(address=CODE:0x8, label=\"x\")  # why")
+            .expect("trailing comment");
         assert_eq!(name, "set_label");
         assert_eq!(args.len(), 2, "the comment must not become an argument");
         let command = from_dsl(

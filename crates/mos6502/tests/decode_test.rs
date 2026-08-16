@@ -68,7 +68,8 @@ fn decode_test() {
 #[test]
 #[ignore]
 fn regenerate_reference() {
-    let mut out = String::from("# 6502 opcode decode sweep (pc=0x1000, operands filled 0x10,0x30)\n");
+    let mut out =
+        String::from("# 6502 opcode decode sweep (pc=0x1000, operands filled 0x10,0x30)\n");
     for op in 0u16..256 {
         let bytes = [op as u8, 0x10, 0x30];
         let ins = Instruction::decode_from_bytes(0x1000, &bytes);
@@ -92,7 +93,10 @@ fn backward_branch_sign_extends() {
     assert_eq!(at(&[0x10, 0x80]).as_string(), "BPL 0x0F82");
     assert_eq!(
         at(&[0xD0, 0xFE]).control_flow(),
-        mos6502::ControlFlow::Choice { fall_through: 0x1002, branch_target: 0x1000 }
+        mos6502::ControlFlow::Choice {
+            fall_through: 0x1002,
+            branch_target: 0x1000
+        }
     );
 }
 

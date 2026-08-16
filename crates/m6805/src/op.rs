@@ -94,10 +94,20 @@ impl Operands {
 /// How execution proceeds after an instruction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlFlow {
-    Continue { next: u32 },
-    Jump { target: u32 },
-    Call { target: u32, return_pc: u32 },
-    Choice { fall_through: u32, branch_target: u32 },
+    Continue {
+        next: u32,
+    },
+    Jump {
+        target: u32,
+    },
+    Call {
+        target: u32,
+        return_pc: u32,
+    },
+    Choice {
+        fall_through: u32,
+        branch_target: u32,
+    },
     Diverge,
 }
 
@@ -186,7 +196,9 @@ impl Instruction {
         // A relative operand names a PC-relative branch target.
         for op in self.operands.as_slice() {
             if let Operand::Relative(r) = op {
-                return Some(((self.pc as i64 + self.len as i64 + *r as i64) as u32 & 0xFFFF) | page);
+                return Some(
+                    ((self.pc as i64 + self.len as i64 + *r as i64) as u32 & 0xFFFF) | page,
+                );
             }
         }
         // A direct/extended JMP or JSR names an absolute target.
@@ -364,16 +376,36 @@ pub fn decode(bytes: &[u8], pc: u32) -> Option<Instruction> {
 
 /// Map an ISA-table addressing-mode shorthand to an [`AddrMode`].
 macro_rules! mode {
-    (inh)  => { AddrMode::Inherent };
-    (imm)  => { AddrMode::Immediate };
-    (dir)  => { AddrMode::Direct };
-    (ext)  => { AddrMode::Extended };
-    (ix0)  => { AddrMode::Indexed0 };
-    (ix1)  => { AddrMode::Indexed1 };
-    (ix2)  => { AddrMode::Indexed2 };
-    (rel)  => { AddrMode::Relative };
-    (bdir) => { AddrMode::BitDirect };
-    (brel) => { AddrMode::BitRelative };
+    (inh) => {
+        AddrMode::Inherent
+    };
+    (imm) => {
+        AddrMode::Immediate
+    };
+    (dir) => {
+        AddrMode::Direct
+    };
+    (ext) => {
+        AddrMode::Extended
+    };
+    (ix0) => {
+        AddrMode::Indexed0
+    };
+    (ix1) => {
+        AddrMode::Indexed1
+    };
+    (ix2) => {
+        AddrMode::Indexed2
+    };
+    (rel) => {
+        AddrMode::Relative
+    };
+    (bdir) => {
+        AddrMode::BitDirect
+    };
+    (brel) => {
+        AddrMode::BitRelative
+    };
 }
 
 /// The 6805 ISA, grouped by mnemonic. Each `0xNN mode` line binds one opcode

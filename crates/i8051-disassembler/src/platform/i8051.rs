@@ -60,12 +60,42 @@ static REGIONS: &[RegionDef] = &[
 
 /// The MCS-51 vectors.
 static ENTRY_POINTS: &[EntryPoint] = &[
-    EntryPoint { space: CODE, offset: 0x00, name: "INT_reset", reason: "power-on reset" },
-    EntryPoint { space: CODE, offset: 0x03, name: "INT_ext0", reason: "external interrupt 0" },
-    EntryPoint { space: CODE, offset: 0x0B, name: "INT_timer0", reason: "timer 0 overflow" },
-    EntryPoint { space: CODE, offset: 0x13, name: "INT_ext1", reason: "external interrupt 1" },
-    EntryPoint { space: CODE, offset: 0x1B, name: "INT_timer1", reason: "timer 1 overflow" },
-    EntryPoint { space: CODE, offset: 0x23, name: "INT_serial", reason: "serial port" },
+    EntryPoint {
+        space: CODE,
+        offset: 0x00,
+        name: "INT_reset",
+        reason: "power-on reset",
+    },
+    EntryPoint {
+        space: CODE,
+        offset: 0x03,
+        name: "INT_ext0",
+        reason: "external interrupt 0",
+    },
+    EntryPoint {
+        space: CODE,
+        offset: 0x0B,
+        name: "INT_timer0",
+        reason: "timer 0 overflow",
+    },
+    EntryPoint {
+        space: CODE,
+        offset: 0x13,
+        name: "INT_ext1",
+        reason: "external interrupt 1",
+    },
+    EntryPoint {
+        space: CODE,
+        offset: 0x1B,
+        name: "INT_timer1",
+        reason: "timer 1 overflow",
+    },
+    EntryPoint {
+        space: CODE,
+        offset: 0x23,
+        name: "INT_serial",
+        reason: "serial port",
+    },
 ];
 
 /// The 8051 driver.
@@ -93,7 +123,11 @@ impl Platform for I8051 {
     /// Bit addresses are a second name for certain SFRs.
     fn canonicalize(&self, space: AddressSpace, offset: AddressValue) -> CanonicalAddr {
         if space != BIT || offset > 0xFF {
-            return CanonicalAddr { space, offset, bit: None };
+            return CanonicalAddr {
+                space,
+                offset,
+                bit: None,
+            };
         }
         let n = offset as u8;
         if n < 0x80 {
@@ -228,8 +262,8 @@ fn is_dptr_load(insn: &Instruction) -> bool {
         )
 }
 
-/// The static data references an instruction makes. 
-/// 
+/// The static data references an instruction makes.
+///
 /// For 8051: Direct operands split into `SFR` (`>= 0x80`) or `IDATA`. Bit
 /// operands land in `BIT`. A `MOV DPTR,#addr` may be either CODE or XDATA.
 fn data_refs(insn: &Instruction) -> Vec<DataRef> {
@@ -304,7 +338,10 @@ mod tests {
             vec![(IDATA, 0x30, Write), (IDATA, 0x40, Read)]
         );
         // JB 0x20,rel (20 20 05) is a branch AND a bit read.
-        assert_eq!(e(&[0x20, 0x20, 0x05]), vec![(CODE, 8, Jump), (BIT, 0x20, Read)]);
+        assert_eq!(
+            e(&[0x20, 0x20, 0x05]),
+            vec![(CODE, 8, Jump), (BIT, 0x20, Read)]
+        );
     }
 
     #[test]
@@ -313,19 +350,65 @@ mod tests {
         let bit = |n| p.canonicalize(BIT, n);
 
         // 0x00-0x7F: bits of internal RAM 0x20-0x2F.
-        assert_eq!(bit(0x65), CanonicalAddr { space: IDATA, offset: 0x2C, bit: Some(5) });
-        assert_eq!(bit(0x00), CanonicalAddr { space: IDATA, offset: 0x20, bit: Some(0) });
-        assert_eq!(bit(0x7F), CanonicalAddr { space: IDATA, offset: 0x2F, bit: Some(7) });
+        assert_eq!(
+            bit(0x65),
+            CanonicalAddr {
+                space: IDATA,
+                offset: 0x2C,
+                bit: Some(5)
+            }
+        );
+        assert_eq!(
+            bit(0x00),
+            CanonicalAddr {
+                space: IDATA,
+                offset: 0x20,
+                bit: Some(0)
+            }
+        );
+        assert_eq!(
+            bit(0x7F),
+            CanonicalAddr {
+                space: IDATA,
+                offset: 0x2F,
+                bit: Some(7)
+            }
+        );
 
         // 0x80-0xFF: bits of the SFRs on eight-byte boundaries.
-        assert_eq!(bit(0x99), CanonicalAddr { space: SFR, offset: 0x98, bit: Some(1) });
-        assert_eq!(bit(0xB3), CanonicalAddr { space: SFR, offset: 0xB0, bit: Some(3) });
+        assert_eq!(
+            bit(0x99),
+            CanonicalAddr {
+                space: SFR,
+                offset: 0x98,
+                bit: Some(1)
+            }
+        );
+        assert_eq!(
+            bit(0xB3),
+            CanonicalAddr {
+                space: SFR,
+                offset: 0xB0,
+                bit: Some(3)
+            }
+        );
 
         assert_eq!(
             p.canonicalize(IDATA, 0x2C),
-            CanonicalAddr { space: IDATA, offset: 0x2C, bit: None }
+            CanonicalAddr {
+                space: IDATA,
+                offset: 0x2C,
+                bit: None
+            }
         );
-        assert_eq!(p.canonicalize(SFR, 0x99), CanonicalAddr { space: SFR, offset: 0x99, bit: None });
+        assert_eq!(
+            p.canonicalize(SFR, 0x99),
+            CanonicalAddr {
+                space: SFR,
+                offset: 0x99,
+                bit: None
+            }
+        );
 
         assert_ne!(bit(0x99).offset, p.canonicalize(SFR, 0x99).offset);
     }

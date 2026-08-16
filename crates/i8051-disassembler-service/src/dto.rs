@@ -58,10 +58,21 @@ pub enum ListingRow {
 /// A collapsed run of rows.
 pub enum FoldRow {
     /// `len` copies of one byte, shown `.ds`-style.
-    Run { addr: AddressValue, value: u8, len: AddressValue },
+    Run {
+        addr: AddressValue,
+        value: u8,
+        len: AddressValue,
+    },
     /// `count` copies of a repeated multi-byte `unit`.
-    Block { addr: AddressValue, unit: Vec<u8>, count: usize },
-    Region { addr: AddressValue, kind: RegionKind },
+    Block {
+        addr: AddressValue,
+        unit: Vec<u8>,
+        count: usize,
+    },
+    Region {
+        addr: AddressValue,
+        kind: RegionKind,
+    },
 }
 
 impl ListingRow {

@@ -58,10 +58,16 @@ fn clear_for(cmd: &dyn Command) -> Option<Box<dyn Command>> {
         return Some(boxed(ClearLabel::new((c.address.space, c.address.offset))));
     }
     if let Some(c) = any.downcast_ref::<SetComment>() {
-        return Some(boxed(ClearComment::new((c.address.space, c.address.offset))));
+        return Some(boxed(ClearComment::new((
+            c.address.space,
+            c.address.offset,
+        ))));
     }
     if let Some(c) = any.downcast_ref::<SetFunction>() {
-        return Some(boxed(ClearFunction::new((c.address.space, c.address.offset))));
+        return Some(boxed(ClearFunction::new((
+            c.address.space,
+            c.address.offset,
+        ))));
     }
     if let Some(c) = any.downcast_ref::<AutoDisassemble>() {
         return Some(boxed(ClearAutoDisassembleRoot::new((
@@ -84,22 +90,13 @@ fn clear_for(cmd: &dyn Command) -> Option<Box<dyn Command>> {
         return Some(boxed(UnmapBytes::new((c.range.space, c.range.range))));
     }
     if let Some(c) = any.downcast_ref::<MarkData>() {
-        return Some(boxed(ClearEquivalents::new((
-            c.range.space,
-            c.range.range,
-        ))));
+        return Some(boxed(ClearEquivalents::new((c.range.space, c.range.range))));
     }
     if let Some(c) = any.downcast_ref::<MarkUnknown>() {
-        return Some(boxed(ClearEquivalents::new((
-            c.range.space,
-            c.range.range,
-        ))));
+        return Some(boxed(ClearEquivalents::new((c.range.space, c.range.range))));
     }
     if let Some(c) = any.downcast_ref::<DisassembleRange>() {
-        return Some(boxed(ClearEquivalents::new((
-            c.range.space,
-            c.range.range,
-        ))));
+        return Some(boxed(ClearEquivalents::new((c.range.space, c.range.range))));
     }
     if let Some(c) = any.downcast_ref::<SetNote>() {
         return Some(boxed(ClearNote::new(c.note.id.clone())));
@@ -118,8 +115,12 @@ mod tests {
     fn db(commands: &str) -> Db {
         let mut db = Db::with_platform(crate::platform::i8051::platform());
         // A small constant-byte program so labels/comments have somewhere to land.
-        db.region_mut(CODE)
-            .set_bytes("t.bin", 0, 0x0, &[0x00, 0x22, 0x00, 0x22, 0x00, 0x22, 0x00, 0x22]);
+        db.region_mut(CODE).set_bytes(
+            "t.bin",
+            0,
+            0x0,
+            &[0x00, 0x22, 0x00, 0x22, 0x00, 0x22, 0x00, 0x22],
+        );
         for command in from_dsl_many(commands).expect("parse") {
             db.apply(command, None::<&dyn Environment>).expect("apply");
         }
@@ -174,8 +175,14 @@ set_comment(address=CODE:0x2, comment="hi")"#);
         // Working state kept the comment but dropped the label.
         let target = db(r#"set_comment(address=CODE:0x2, comment="hi")"#);
         let diff = to_dsl_many(&target.diff_from(&base));
-        assert!(diff.contains("clear_label(addresses=CODE:{0x0})"), "diff: {diff}");
-        assert!(!diff.contains("clear_comment"), "unchanged comment must not clear: {diff}");
+        assert!(
+            diff.contains("clear_label(addresses=CODE:{0x0})"),
+            "diff: {diff}"
+        );
+        assert!(
+            !diff.contains("clear_comment"),
+            "unchanged comment must not clear: {diff}"
+        );
         assert_roundtrip(
             r#"set_label(address=CODE:0x0, label="reset")
 set_comment(address=CODE:0x2, comment="hi")"#,

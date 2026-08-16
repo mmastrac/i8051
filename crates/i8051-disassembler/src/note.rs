@@ -802,12 +802,27 @@ mod tests {
     fn overlap_finds_byte_note() {
         let mut db = NoteDb::default();
         let note = db.create("one byte");
-        db.set_address(crate::platform::i8051::CODE, AddressRange::from(4..5), note.clone());
+        db.set_address(
+            crate::platform::i8051::CODE,
+            AddressRange::from(4..5),
+            note.clone(),
+        );
 
-        assert_eq!(db.get_notes_overlapping(crate::platform::i8051::CODE, 4..5).len(), 1);
-        assert_eq!(db.get_notes_inside(crate::platform::i8051::CODE, 4..5).len(), 1);
+        assert_eq!(
+            db.get_notes_overlapping(crate::platform::i8051::CODE, 4..5)
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.get_notes_inside(crate::platform::i8051::CODE, 4..5)
+                .len(),
+            1
+        );
         // The adjacent byte must not match: the range is half-open `[4, 5)`.
-        assert!(db.get_notes_overlapping(crate::platform::i8051::CODE, 5..6).is_empty());
+        assert!(
+            db.get_notes_overlapping(crate::platform::i8051::CODE, 5..6)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -857,7 +872,10 @@ mod tests {
         assert_eq!(near[1].distance, 0x40 - 0x12);
 
         // A different space has no notes.
-        assert!(db.notes_near(crate::platform::i8051::XDATA, 0x12, 0x1000).is_empty());
+        assert!(
+            db.notes_near(crate::platform::i8051::XDATA, 0x12, 0x1000)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -894,7 +912,11 @@ mod tests {
                 .id,
             id
         );
-        assert_eq!(db.get_notes_inside(crate::platform::i8051::CODE, 0..4).len(), 1);
+        assert_eq!(
+            db.get_notes_inside(crate::platform::i8051::CODE, 0..4)
+                .len(),
+            1
+        );
 
         db.clear(&id);
         assert!(db.notes.is_empty());

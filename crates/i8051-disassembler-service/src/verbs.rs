@@ -1,7 +1,7 @@
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use i8051_disassembler::commands::{ArgKind, CommandArg, COMMANDS};
+use i8051_disassembler::commands::{ArgKind, COMMANDS, CommandArg};
 
 use crate::{Controller, EditResponse, NavResponse, ServiceError, Session};
 
@@ -66,8 +66,10 @@ pub fn catalog() -> Vec<VerbInfo> {
                     description: arg.hint.to_string(),
                 })
                 .collect();
-            let example =
-                call_example(name, entry.args.iter().map(|a| (a.name, edit_placeholder(a))));
+            let example = call_example(
+                name,
+                entry.args.iter().map(|a| (a.name, edit_placeholder(a))),
+            );
             VerbInfo {
                 name: (*name).to_string(),
                 category: Category::Edit,
@@ -92,7 +94,10 @@ pub fn catalog() -> Vec<VerbInfo> {
             .collect();
         let example = call_example(
             def.name,
-            def.args.iter().filter(|a| a.required).map(|a| (a.name, query_placeholder(a.name, a.ty))),
+            def.args
+                .iter()
+                .filter(|a| a.required)
+                .map(|a| (a.name, query_placeholder(a.name, a.ty))),
         );
         VerbInfo {
             name: def.name.to_string(),
@@ -159,8 +164,7 @@ pub(crate) fn dispatch(
             let expected = if def.args.is_empty() {
                 format!("`{name}` takes no arguments")
             } else {
-                let names: Vec<String> =
-                    def.args.iter().map(|a| format!("`{}`", a.name)).collect();
+                let names: Vec<String> = def.args.iter().map(|a| format!("`{}`", a.name)).collect();
                 format!("expected {}", names.join(", "))
             };
             return Some(Err(ServiceError::Parse(format!(
@@ -271,7 +275,9 @@ impl Args<'_> {
     }
 
     fn opt_usize(&self, key: &str) -> Option<usize> {
-        self.present(key).and_then(Value::as_u64).map(|n| n as usize)
+        self.present(key)
+            .and_then(Value::as_u64)
+            .map(|n| n as usize)
     }
 
     fn opt_u64(&self, key: &str) -> Option<u64> {
@@ -299,10 +305,18 @@ struct ArgDecl {
 
 impl ArgDecl {
     const fn req(name: &'static str, ty: ArgType) -> Self {
-        Self { name, ty, required: true }
+        Self {
+            name,
+            ty,
+            required: true,
+        }
     }
     const fn opt(name: &'static str, ty: ArgType) -> Self {
-        Self { name, ty, required: false }
+        Self {
+            name,
+            ty,
+            required: false,
+        }
     }
 }
 
@@ -459,8 +473,13 @@ static VERBS: &[VerbDef] = &[
     VerbDef {
         name: "notes_near",
         doc: "Notes within a window of an address, nearest first.",
-        args: &[ArgDecl::req("address", Str), ArgDecl::opt("window", Integer)],
-        handler: Handler::Query(|s, a| json(s.notes_near(a.req_str("address")?, a.opt_u64("window"))?)),
+        args: &[
+            ArgDecl::req("address", Str),
+            ArgDecl::opt("window", Integer),
+        ],
+        handler: Handler::Query(|s, a| {
+            json(s.notes_near(a.req_str("address")?, a.opt_u64("window"))?)
+        }),
     },
     VerbDef {
         name: "notes_search",

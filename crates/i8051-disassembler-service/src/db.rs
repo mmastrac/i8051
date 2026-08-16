@@ -69,12 +69,20 @@ impl Session {
                 let base_db = build_db(&base_records, self.env.as_ref())?;
                 let commands = self.db.diff_from(&base_db);
                 let count = write_records(diff_path, &commands)?;
-                Ok(SaveReport { path: diff_path.clone(), commands: count, diff: true })
+                Ok(SaveReport {
+                    path: diff_path.clone(),
+                    commands: count,
+                    diff: true,
+                })
             }
             None => {
                 let commands = self.db.to_commands();
                 let count = write_records(&source.base, &commands)?;
-                Ok(SaveReport { path: source.base.clone(), commands: count, diff: false })
+                Ok(SaveReport {
+                    path: source.base.clone(),
+                    commands: count,
+                    diff: false,
+                })
             }
         }
     }
@@ -102,7 +110,8 @@ fn read_records(path: &Path) -> Result<Vec<String>, DbFileError> {
 }
 
 fn is_dsl_path(path: &Path) -> bool {
-    path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("dsl"))
+    path.extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("dsl"))
 }
 
 fn write_records(path: &Path, commands: &[Box<dyn Command>]) -> Result<usize, DbFileError> {
@@ -112,7 +121,9 @@ fn write_records(path: &Path, commands: &[Box<dyn Command>]) -> Result<usize, Db
     } else {
         let records: Vec<DbRecord> = commands
             .iter()
-            .map(|c| DbRecord { command: to_dsl(c.as_ref()) })
+            .map(|c| DbRecord {
+                command: to_dsl(c.as_ref()),
+            })
             .collect();
         serde_json::to_string_pretty(&records).map_err(|e| err(e.to_string()))?
     };
@@ -174,14 +185,22 @@ mod tests {
         .unwrap();
 
         let mut session = Session::open_layered(&base, Some(&diff)).expect("open");
-        session.apply(r#"set_comment(address=CODE:0x0, comment="entry")"#).unwrap();
+        session
+            .apply(r#"set_comment(address=CODE:0x0, comment="entry")"#)
+            .unwrap();
         let report = session.save().expect("save");
         assert!(report.diff);
 
         let written = std::fs::read_to_string(&diff).unwrap();
         assert!(written.contains("set_comment"), "diff: {written}");
-        assert!(!written.contains("set_label"), "base fact leaked into diff: {written}");
-        assert!(!written.contains("set_cpu"), "base fact leaked into diff: {written}");
+        assert!(
+            !written.contains("set_label"),
+            "base fact leaked into diff: {written}"
+        );
+        assert!(
+            !written.contains("set_cpu"),
+            "base fact leaked into diff: {written}"
+        );
 
         let reloaded = Session::open_layered(&base, Some(&diff)).expect("reopen");
         let listing = reloaded.disassembly();
@@ -194,8 +213,7 @@ mod tests {
 
     #[test]
     fn dsl_document_round_trips() {
-        let path =
-            std::env::temp_dir().join(format!("i8051-doc-{}.dsl", std::process::id()));
+        let path = std::env::temp_dir().join(format!("i8051-doc-{}.dsl", std::process::id()));
         std::fs::write(
             &path,
             "# a hand-authored program\nset_cpu(name=\"i8051\")\n\nset_label(address=CODE:0x0, label=\"reset\")\n",
@@ -205,13 +223,23 @@ mod tests {
         let mut session = Session::open(&path).expect("open dsl");
         assert!(session.disassembly().contains("reset"));
 
-        session.apply(r#"set_comment(address=CODE:0x0, comment="entry")"#).unwrap();
+        session
+            .apply(r#"set_comment(address=CODE:0x0, comment="entry")"#)
+            .unwrap();
         let report = session.save().expect("save");
         assert!(!report.diff);
         let written = std::fs::read_to_string(&path).unwrap();
-        assert!(!written.trim_start().starts_with('['), "should be DSL, got JSON: {written}");
-        assert!(!written.contains(r#""command""#), "should be DSL, got JSON: {written}");
-        assert!(written.contains("set_label(address=CODE:0x0, label=\"reset\", provisional=False, local=False)"));
+        assert!(
+            !written.trim_start().starts_with('['),
+            "should be DSL, got JSON: {written}"
+        );
+        assert!(
+            !written.contains(r#""command""#),
+            "should be DSL, got JSON: {written}"
+        );
+        assert!(written.contains(
+            "set_label(address=CODE:0x0, label=\"reset\", provisional=False, local=False)"
+        ));
         assert!(written.contains("set_comment"));
 
         let reloaded = Session::open(&path).expect("reopen dsl");

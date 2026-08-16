@@ -285,9 +285,8 @@ impl Db {
             };
             writer.write(&self.area_header(space));
             // Assembly names, not listing names
-            let names = region.export_names(
-                implicit_labels.get(&space).unwrap_or(&Default::default()),
-            );
+            let names =
+                region.export_names(implicit_labels.get(&space).unwrap_or(&Default::default()));
             for line in region.render_named(space, &implicit_labels, Some(&names)) {
                 writer.write_line(&line);
             }
@@ -630,7 +629,13 @@ impl std::fmt::Display for Error {
                 }
                 Ok(())
             }
-            Self::NotUndefined { at, existing, start, end, requested_end } => {
+            Self::NotUndefined {
+                at,
+                existing,
+                start,
+                end,
+                requested_end,
+            } => {
                 let kind = match existing {
                     EquivalentKind::Code => "code",
                     EquivalentKind::Data => "data",
@@ -1057,8 +1062,11 @@ loc_0010:
 
         // MOV A,#1 / INC A (a 3-byte code block), then 2 data bytes.
         let (mut db, env) = mapped("m.bin", &[0x74, 0x01, 0x04, 0xAA, 0xBB]);
-        db.apply(boxed(DisassembleRange::new((CODE, 0u32..3u32), false)), None)
-            .unwrap();
+        db.apply(
+            boxed(DisassembleRange::new((CODE, 0u32..3u32), false)),
+            None,
+        )
+        .unwrap();
         db.apply(
             boxed(MarkData::new((CODE, 3u32..5u32), DataType::Byte)),
             None,
@@ -1089,8 +1097,11 @@ loc_0010:
 
         // CJNE A,0x20,rel: three operands. We override the third.
         let (mut db, env) = mapped("b.bin", &[0xB5, 0x20, 0x10]);
-        db.apply(boxed(DisassembleRange::new((CODE, 0u32..3u32), false)), None)
-            .unwrap();
+        db.apply(
+            boxed(DisassembleRange::new((CODE, 0u32..3u32), false)),
+            None,
+        )
+        .unwrap();
         let undo = db
             .apply(
                 boxed(OverrideOperand::new(
@@ -1151,7 +1162,10 @@ loc_0010:
             text.contains("clear_equivalents(addresses=CODE:{0xad5..0x1000})"),
             "the clear has to be named: {text}"
         );
-        assert!(text.contains("0x52b"), "the real cost has to be stated: {text}");
+        assert!(
+            text.contains("0x52b"),
+            "the real cost has to be stated: {text}"
+        );
         assert!(
             text.contains("mark_data(range=CODE:0xad5..0xb6e"),
             "the bytes before the request have to be restorable: {text}"
@@ -1184,6 +1198,9 @@ loc_0010:
         let text = unmapped.to_string();
         assert!(text.contains("no byte is mapped at CODE:0x8"), "{text}");
         assert!(text.contains("map_bytes"), "{text}");
-        assert!(text.contains("set_constant_bytes"), "the fill route is valid too: {text}");
+        assert!(
+            text.contains("set_constant_bytes"),
+            "the fill route is valid too: {text}"
+        );
     }
 }

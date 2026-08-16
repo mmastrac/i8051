@@ -11,7 +11,10 @@ fn backward_branch_sign_extends() {
     assert_eq!(at(&[0x0E, 0x50, 0xFD]).as_string(), "BRSET #7,0x50,0x1000");
     assert_eq!(
         at(&[0x27, 0xFE]).control_flow(),
-        ControlFlow::Choice { fall_through: 0x1002, branch_target: 0x1000 }
+        ControlFlow::Choice {
+            fall_through: 0x1002,
+            branch_target: 0x1000
+        }
     );
 }
 
@@ -23,22 +26,34 @@ fn control_flow_is_classified() {
     assert_eq!(cf(&[0xFC]), Diverge); // JMP ,X (indexed, dynamic)
     assert_eq!(
         cf(&[0xCD, 0x20, 0x00]),
-        Call { target: 0x2000, return_pc: 0x1003 } // JSR ext
+        Call {
+            target: 0x2000,
+            return_pc: 0x1003
+        } // JSR ext
     );
     assert_eq!(
         cf(&[0xAD, 0x10]),
-        Call { target: 0x1012, return_pc: 0x1002 } // BSR
+        Call {
+            target: 0x1012,
+            return_pc: 0x1002
+        } // BSR
     );
     assert_eq!(cf(&[0x81]), Diverge); // RTS
     assert_eq!(cf(&[0x20, 0x10]), Jump { target: 0x1012 }); // BRA
     assert_eq!(cf(&[0x21, 0x10]), Continue { next: 0x1002 }); // BRN (never)
     assert_eq!(
         cf(&[0x26, 0x10]),
-        Choice { fall_through: 0x1002, branch_target: 0x1012 } // BNE
+        Choice {
+            fall_through: 0x1002,
+            branch_target: 0x1012
+        } // BNE
     );
     assert_eq!(
         cf(&[0x0E, 0x50, 0x10]),
-        Choice { fall_through: 0x1003, branch_target: 0x1013 } // BRSET7
+        Choice {
+            fall_through: 0x1003,
+            branch_target: 0x1013
+        } // BRSET7
     );
     assert_eq!(cf(&[0x9D]), Continue { next: 0x1001 }); // NOP
 }

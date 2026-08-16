@@ -104,8 +104,15 @@ fn line_text(line: &Value) -> String {
             format!(".db {} ; x {count}", hex_bytes(body.get("unit")))
         }
         "Region" => {
-            let kind = body.get("kind").and_then(Value::as_str).unwrap_or("unknown");
-            let label = if kind == "unknown" { "Unknown bytes" } else { kind };
+            let kind = body
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let label = if kind == "unknown" {
+                "Unknown bytes"
+            } else {
+                kind
+            };
             format!("; {label}")
         }
         "Org" => format!(
@@ -154,7 +161,11 @@ fn symbols(value: &Value) -> Option<String> {
         .iter()
         .map(|s| {
             let get = |key: &str| s.get(key).and_then(Value::as_str).unwrap_or("?");
-            let marker = if get("kind") == "function" { "fn" } else { "  " };
+            let marker = if get("kind") == "function" {
+                "fn"
+            } else {
+                "  "
+            };
             format!("{marker} {:<24} {}", get("name"), get("addr"))
         })
         .collect();
@@ -281,7 +292,8 @@ mod tests {
 
     #[test]
     fn next_renders_facts() {
-        let what = json!({ "kind": "unmapped_gap", "from": "CODE:0x2", "to": "CODE:0x4", "len": 2 });
+        let what =
+            json!({ "kind": "unmapped_gap", "from": "CODE:0x2", "to": "CODE:0x4", "len": 2 });
         let value = json!({
             "done": false, "remaining": 2, "returned": 1,
             "items": [{ "kind": "unmapped_gap", "detail": "", "what": what }],

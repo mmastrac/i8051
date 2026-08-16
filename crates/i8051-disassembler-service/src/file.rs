@@ -60,10 +60,9 @@ impl Environment for MemoryEnvironment {
         offset: usize,
         size: AddressValue,
     ) -> Result<Vec<u8>, io::Error> {
-        let data = self
-            .files
-            .get(file)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("no such file `{file}`")))?;
+        let data = self.files.get(file).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, format!("no such file `{file}`"))
+        })?;
         slice(data, offset, size)
     }
 }

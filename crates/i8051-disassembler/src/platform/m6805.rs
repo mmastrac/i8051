@@ -52,9 +52,9 @@ impl Platform for M6805 {
         let control_flow = map_control_flow(insn.control_flow());
         // The target is always the last operand: the lone operand of a branch or
         // JMP/JSR, or the `rel` at the end of a BRSET/BRCLR.
-        let branch_operand_index =
-            has_target(control_flow).then(|| insn.operands().as_slice().len().checked_sub(1))
-                .flatten();
+        let branch_operand_index = has_target(control_flow)
+            .then(|| insn.operands().as_slice().len().checked_sub(1))
+            .flatten();
         DecodedInsn {
             len: insn.len() as u8,
             bytes: insn.bytes().to_vec(),

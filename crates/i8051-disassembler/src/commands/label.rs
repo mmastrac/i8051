@@ -3,7 +3,6 @@ use crate::db::{Db, Error};
 
 use super::{Apply, Command, Environment, boxed};
 
-
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SetLabel {
     pub address: SpaceAddressValue,
@@ -146,7 +145,9 @@ mod tests {
         assert_eq!(normalize_label("\"uart_init\"").unwrap(), "uart_init");
         assert_eq!(normalize_label("uart_init").unwrap(), "uart_init");
         assert_eq!(normalize_label("  spaced_out  ").unwrap(), "spaced_out");
-        assert!(is_provisional_name(&normalize_label("\"loc_0071\"").unwrap()));
+        assert!(is_provisional_name(
+            &normalize_label("\"loc_0071\"").unwrap()
+        ));
 
         for bad in ["", "  ", "\"\"", "two words", "mid\"quote", "9lives"] {
             assert!(normalize_label(bad).is_err(), "{bad:?} should be rejected");
@@ -158,8 +159,18 @@ mod tests {
         for name in ["sub_002C", "loc_03A9", "sub_002c", "sub_10000"] {
             assert!(is_provisional_name(name), "{name} should be provisional");
         }
-        for name in ["uart_init", "sub_", "sub_2C", "loc_INIT", "subtract_a", "sub_00GG"] {
-            assert!(!is_provisional_name(name), "{name} should not be provisional");
+        for name in [
+            "uart_init",
+            "sub_",
+            "sub_2C",
+            "loc_INIT",
+            "subtract_a",
+            "sub_00GG",
+        ] {
+            assert!(
+                !is_provisional_name(name),
+                "{name} should not be provisional"
+            );
         }
     }
 
@@ -168,7 +179,12 @@ mod tests {
         let mut db = Db::with_platform(crate::platform::i8051::platform());
         let undo = db
             .apply(
-                boxed(SetLabel::new((CODE, 0x2C), "sub_002C".to_string(), false, false)),
+                boxed(SetLabel::new(
+                    (CODE, 0x2C),
+                    "sub_002C".to_string(),
+                    false,
+                    false,
+                )),
                 None,
             )
             .expect("a generated name is ignored, not an error");
@@ -177,7 +193,12 @@ mod tests {
 
         // A real name still lands...
         db.apply(
-            boxed(SetLabel::new((CODE, 0x2C), "uart_init".to_string(), false, false)),
+            boxed(SetLabel::new(
+                (CODE, 0x2C),
+                "uart_init".to_string(),
+                false,
+                false,
+            )),
             None,
         )
         .unwrap();
@@ -185,7 +206,12 @@ mod tests {
 
         // ...and a generated one does not overwrite it.
         db.apply(
-            boxed(SetLabel::new((CODE, 0x2C), "sub_002C".to_string(), false, false)),
+            boxed(SetLabel::new(
+                (CODE, 0x2C),
+                "sub_002C".to_string(),
+                false,
+                false,
+            )),
             None,
         )
         .unwrap();
@@ -198,7 +224,12 @@ mod tests {
     fn provisional_stays_draft() {
         let mut db = Db::with_platform(crate::platform::i8051::platform());
         db.apply(
-            boxed(SetLabel::new((CODE, 0x40), "maybe_crc".to_string(), true, false)),
+            boxed(SetLabel::new(
+                (CODE, 0x40),
+                "maybe_crc".to_string(),
+                true,
+                false,
+            )),
             None,
         )
         .unwrap();
@@ -214,7 +245,12 @@ mod tests {
 
         // Re-naming it without the flag finalizes it.
         db.apply(
-            boxed(SetLabel::new((CODE, 0x40), "crc16".to_string(), false, false)),
+            boxed(SetLabel::new(
+                (CODE, 0x40),
+                "crc16".to_string(),
+                false,
+                false,
+            )),
             None,
         )
         .unwrap();

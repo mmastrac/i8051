@@ -11,8 +11,8 @@ use std::sync::Arc;
 use crate::address::{AddressSpace, AddressValue, PhysicalAddr, Xref, XrefType};
 
 pub mod i8051;
-pub mod mos6502;
 pub mod m6805;
+pub mod mos6502;
 
 /// How execution proceeds after an instruction. CPU-neutral: every driver maps
 /// its own control flow onto these cases.
@@ -149,7 +149,7 @@ pub struct EntryPoint {
 }
 
 /// The canonical address for a location.
-/// 
+///
 /// Some locations may be aliases (e.g.: on the 8051, bit registers are just
 /// subviews of other SFRs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,7 +178,11 @@ pub trait Platform: Send + Sync {
 
     /// Resolve an address to the storage it aliases (or itself if it is not an alias).
     fn canonicalize(&self, space: AddressSpace, offset: AddressValue) -> CanonicalAddr {
-        CanonicalAddr { space, offset, bit: None }
+        CanonicalAddr {
+            space,
+            offset,
+            bit: None,
+        }
     }
 
     /// The longest instruction in bytes, the fetch window for decoding.
@@ -220,14 +224,22 @@ pub fn xrefs_from_instruction(insn: &DecodedInsn, source: PhysicalAddr) -> Vec<X
         ControlFlow::Call { target, .. } => {
             push(source.space, target, XrefType::Call, Certainty::Definite)
         }
-        ControlFlow::Choice { branch_target, .. } => {
-            push(source.space, branch_target, XrefType::Jump, Certainty::Definite)
-        }
+        ControlFlow::Choice { branch_target, .. } => push(
+            source.space,
+            branch_target,
+            XrefType::Jump,
+            Certainty::Definite,
+        ),
         _ => {}
     }
 
     for data_ref in &insn.data_refs {
-        push(data_ref.space, data_ref.offset, data_ref.kind, data_ref.certainty);
+        push(
+            data_ref.space,
+            data_ref.offset,
+            data_ref.kind,
+            data_ref.certainty,
+        );
     }
 
     xrefs

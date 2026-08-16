@@ -159,10 +159,7 @@ mod tests {
         let mut db = fixture();
         assert_eq!(db.xrefs_to(&CODE_8).len(), 1, "both candidates start open");
         assert_eq!(db.xrefs_to(&XDATA_8).len(), 1);
-        assert_eq!(
-            db.undecided_operands().len(),
-            1
-        );
+        assert_eq!(db.undecided_operands().len(), 1);
 
         let undo = db
             .apply(
@@ -175,16 +172,10 @@ mod tests {
             .unwrap();
         assert_eq!(db.xrefs_to(&CODE_8).len(), 1, "there can be only one");
         assert!(db.xrefs_to(&XDATA_8).is_empty(), "the rejected one is gone");
-        assert!(
-            db.undecided_operands().is_empty(),
-            "this is the way"
-        );
+        assert!(db.undecided_operands().is_empty(), "this is the way");
 
         let reloaded = replay(&db);
-        assert!(
-            reloaded.xrefs_to(&XDATA_8).is_empty(),
-            "survives a reload"
-        );
+        assert!(reloaded.xrefs_to(&XDATA_8).is_empty(), "survives a reload");
 
         for command in undo {
             db.apply(command, None).unwrap();

@@ -86,7 +86,9 @@ impl Controller {
                     .map(|c| c.range)
             });
         let Some(range) = range else { return Ok(()) };
-        let Some(platform) = self.session.db.platform() else { return Ok(()) };
+        let Some(platform) = self.session.db.platform() else {
+            return Ok(());
+        };
         let region = self.session.db.region(range.space);
 
         let covered: Vec<_> = platform
@@ -98,7 +100,9 @@ impl Controller {
                     && !region.is_some_and(|r| r.platform_address_disabled(e.offset))
             })
             .collect();
-        let Some(first) = covered.first() else { return Ok(()) };
+        let Some(first) = covered.first() else {
+            return Ok(());
+        };
 
         let vectors: Vec<String> = covered
             .iter()
@@ -238,7 +242,11 @@ impl Controller {
         let Some(name) = self.session.db.platform().map(|p| p.name().to_string()) else {
             return Ok(());
         };
-        let decoded = self.session.status(None).map(|s| s.coverage.code).unwrap_or(0);
+        let decoded = self
+            .session
+            .status(None)
+            .map(|s| s.coverage.code)
+            .unwrap_or(0);
         if decoded == 0 {
             return Ok(());
         }
@@ -253,7 +261,9 @@ impl Controller {
         let Ok(command) = i8051_disassembler::store::from_dsl(dsl) else {
             return Ok(());
         };
-        let Some(set) = command.as_any().downcast_ref::<i8051_disassembler::commands::SetLabel>()
+        let Some(set) = command
+            .as_any()
+            .downcast_ref::<i8051_disassembler::commands::SetLabel>()
         else {
             return Ok(());
         };
@@ -287,8 +297,12 @@ impl Controller {
         name: &str,
     ) -> Result<(), ServiceError> {
         let space = set.address.space;
-        let Some(region) = self.session.db.region(space) else { return Ok(()) };
-        let Some(scope) = region.scope_of(set.address.offset) else { return Ok(()) };
+        let Some(region) = self.session.db.region(space) else {
+            return Ok(());
+        };
+        let Some(scope) = region.scope_of(set.address.offset) else {
+            return Ok(());
+        };
         let clash = region
             .labels()
             .find(|&(at, other)| {
@@ -310,7 +324,9 @@ impl Controller {
         let Ok(command) = i8051_disassembler::store::from_dsl(dsl) else {
             return Ok(());
         };
-        let Some(set) = command.as_any().downcast_ref::<i8051_disassembler::commands::SetLabel>()
+        let Some(set) = command
+            .as_any()
+            .downcast_ref::<i8051_disassembler::commands::SetLabel>()
         else {
             return Ok(());
         };
@@ -344,8 +360,10 @@ impl Controller {
         }
 
         let space = range.range.space;
-        let decode =
-            self.session.db.peek_linear(space, range.range.start, range.range.end);
+        let decode = self
+            .session
+            .db
+            .peek_linear(space, range.range.start, range.range.end);
         let mut reasons = Vec::new();
         if decode.out_of_range_targets > 0 {
             reasons.push(format!(
@@ -369,7 +387,10 @@ impl Controller {
             return Ok(());
         }
         Err(ServiceError::refused(
-            Refusal::RangeDoesNotDecode { count: decode.lines.len(), reasons },
+            Refusal::RangeDoesNotDecode {
+                count: decode.lines.len(),
+                reasons,
+            },
             vec![
                 dsl!(auto_disassemble(address = {space.dsl_addr(range.range.start)})
                     # "follows flow and stops where it stops"),
@@ -406,8 +427,8 @@ impl Controller {
 
     /// Run one verb from a typed line.
     pub fn exec(&mut self, line: &str) -> Result<serde_json::Value, ServiceError> {
-        let (name, kwargs) =
-            i8051_disassembler::store::parse_call(line).map_err(|e| ServiceError::Parse(e.to_string()))?;
+        let (name, kwargs) = i8051_disassembler::store::parse_call(line)
+            .map_err(|e| ServiceError::Parse(e.to_string()))?;
         if crate::verbs::is_edit(&name) {
             let edit = self.apply(line)?;
             return crate::verbs::json(crate::EditResponse::new(self.session(), edit));
@@ -511,9 +532,16 @@ impl Controller {
             self.history.truncate(self.cursor + 1);
             self.history[self.cursor].address = address.to_string();
         } else {
-            let keep = if self.history.is_empty() { 0 } else { self.cursor + 1 };
+            let keep = if self.history.is_empty() {
+                0
+            } else {
+                self.cursor + 1
+            };
             self.history.truncate(keep);
-            self.history.push(NavEntry { address: address.to_string(), local });
+            self.history.push(NavEntry {
+                address: address.to_string(),
+                local,
+            });
             self.cursor = self.history.len() - 1;
         }
         Ok(self.location())
@@ -548,14 +576,19 @@ mod tests {
             .apply(r#"set_label(address=CODE:0x0, label="sub_0000")"#)
             .expect_err("a generated name should be refused, not silently accepted");
         let text = format!("{err:?}");
-        assert!(text.contains("what the code does"), "unhelpful message: {text}");
+        assert!(
+            text.contains("what the code does"),
+            "unhelpful message: {text}"
+        );
 
         assert!(
-            c.apply(r#"set_label(address=CODE:0x0, label="\"loc_0000\"")"#).is_err(),
+            c.apply(r#"set_label(address=CODE:0x0, label="\"loc_0000\"")"#)
+                .is_err(),
             "quotes should not smuggle a generated name past the check"
         );
 
-        c.apply(r#"set_label(address=CODE:0x0, label="reset_entry")"#).expect("real name");
+        c.apply(r#"set_label(address=CODE:0x0, label="reset_entry")"#)
+            .expect("real name");
         assert!(c.session().disassembly().contains("reset_entry"));
 
         let env = Box::new(MemoryEnvironment::new().with_file("fw.bin", vec![0x00, 0x00, 0x22]));
@@ -577,20 +610,23 @@ mod tests {
             .expect("a working guess is storable");
         assert!(c.session().disassembly().contains("maybe_entry"));
 
-        c.apply(r#"set_label(address=CODE:0x0, label="reset_entry")"#).expect("settle");
+        c.apply(r#"set_label(address=CODE:0x0, label="reset_entry")"#)
+            .expect("settle");
         assert!(c.session().disassembly().contains("reset_entry"));
     }
 
     #[test]
     fn duplicate_name_refused() {
         let mut c = controller();
-        c.apply(r#"set_label(address=CODE:0x0, label="entry")"#).expect("first use");
+        c.apply(r#"set_label(address=CODE:0x0, label="entry")"#)
+            .expect("first use");
         let err = c
             .apply(r#"set_label(address=CODE:0x4, label="entry")"#)
             .expect_err("a duplicate name should be refused");
         assert!(format!("{err:?}").contains("already names"), "{err:?}");
 
-        c.apply(r#"set_label(address=CODE:0x0, label="entry")"#).expect("same address is a rename");
+        c.apply(r#"set_label(address=CODE:0x0, label="entry")"#)
+            .expect("same address is a rename");
     }
 
     #[test]
@@ -599,8 +635,13 @@ mod tests {
         let before = c.session().status(None).unwrap().coverage.code;
         assert!(before > 0, "fixture should have decoded code");
 
-        let err = c.apply("clear_cpu()").expect_err("clearing a decoded database is refused");
-        assert!(format!("{err:?}").contains("would stop being code"), "{err:?}");
+        let err = c
+            .apply("clear_cpu()")
+            .expect_err("clearing a decoded database is refused");
+        assert!(
+            format!("{err:?}").contains("would stop being code"),
+            "{err:?}"
+        );
         assert_eq!(
             c.session().status(None).unwrap().coverage.code,
             before,
@@ -610,7 +651,9 @@ mod tests {
         let env = Box::new(MemoryEnvironment::new().with_file("fw.bin", vec![0x00, 0x00, 0x22]));
         let session = Session::from_commands([r#"set_cpu(name="i8051")"#], env).unwrap();
         let mut fresh = Controller::new(session);
-        fresh.apply("clear_cpu()").expect("nothing is decoded yet, so it is still correctable");
+        fresh
+            .apply("clear_cpu()")
+            .expect("nothing is decoded yet, so it is still correctable");
     }
 
     #[test]
@@ -620,8 +663,14 @@ mod tests {
             .apply("mark_data(range=CODE:0x34..0x35, data_type=DataType::Byte)")
             .expect_err("a call target must not be swept into a data range");
         let text = format!("{err:?}");
-        assert!(text.contains("CODE:0x34"), "the target should be named: {text}");
-        assert!(text.contains("CODE:0x30"), "the caller should be named: {text}");
+        assert!(
+            text.contains("CODE:0x34"),
+            "the target should be named: {text}"
+        );
+        assert!(
+            text.contains("CODE:0x30"),
+            "the caller should be named: {text}"
+        );
 
         c.apply("mark_data(range=CODE:0x33..0x34, data_type=DataType::Byte)")
             .expect("a range that stops at the target is allowed");
@@ -637,9 +686,13 @@ mod tests {
             .apply("auto_disassemble(address=CODE:0x33)")
             .expect_err("a root inside a barrier decodes nothing");
         let text = format!("{err:?}");
-        assert!(text.contains("clear_equivalents"), "the way out should be named: {text}");
+        assert!(
+            text.contains("clear_equivalents"),
+            "the way out should be named: {text}"
+        );
 
-        c.apply("clear_equivalents(addresses=CODE:{0x33..0x34})").expect("drop the barrier");
+        c.apply("clear_equivalents(addresses=CODE:{0x33..0x34})")
+            .expect("drop the barrier");
         c.apply("auto_disassemble(address=CODE:0x33)")
             .expect("the address decodes once it is free");
     }
@@ -652,7 +705,10 @@ mod tests {
             .apply("mark_data(range=CODE:0x23..0x26, data_type=DataType::Byte)")
             .expect_err("a range starting at a live vector must not settle it");
         let text = format!("{err:?}");
-        assert!(text.contains("INT_serial"), "the vector should be named: {text}");
+        assert!(
+            text.contains("INT_serial"),
+            "the vector should be named: {text}"
+        );
         assert!(
             text.contains("disable_platform_address"),
             "the way to retire it should be named: {text}"
@@ -717,7 +773,9 @@ mod tests {
         let mut c = controller();
         assert!(!c.session().disassembly().contains("\nreset:"));
 
-        let applied = c.apply(r#"set_label(address=CODE:0x0, label="reset")"#).unwrap();
+        let applied = c
+            .apply(r#"set_label(address=CODE:0x0, label="reset")"#)
+            .unwrap();
         assert_eq!(applied.undo_depth, 1);
         assert_eq!(applied.redo_depth, 0);
         assert_eq!(applied.address.as_deref(), Some("CODE:0x0"));
@@ -737,11 +795,14 @@ mod tests {
     #[test]
     fn edit_clears_redo() {
         let mut c = controller();
-        c.apply(r#"set_label(address=CODE:0x0, label="a")"#).unwrap();
+        c.apply(r#"set_label(address=CODE:0x0, label="a")"#)
+            .unwrap();
         c.undo().unwrap();
         assert_eq!(c.redo().unwrap().undo_depth, 1); // redo works...
         c.undo().unwrap(); // ...back to armed redo
-        let forked = c.apply(r#"set_label(address=CODE:0x0, label="b")"#).unwrap();
+        let forked = c
+            .apply(r#"set_label(address=CODE:0x0, label="b")"#)
+            .unwrap();
         assert_eq!(forked.redo_depth, 0, "a fresh edit forks history");
         assert_eq!(c.redo().unwrap().undo, Vec::<String>::new());
     }
@@ -817,7 +878,10 @@ mod tests {
     #[test]
     fn navigate_rejects_garbage() {
         let mut c = controller();
-        assert!(matches!(c.navigate("not-an-address"), Err(ServiceError::Parse(_))));
+        assert!(matches!(
+            c.navigate("not-an-address"),
+            Err(ServiceError::Parse(_))
+        ));
         assert_eq!(c.location().address, None);
     }
 
@@ -839,7 +903,10 @@ mod tests {
     fn apply_named_reports_errors() {
         let mut c = controller();
         let empty = serde_json::Map::new();
-        assert!(matches!(c.apply_named("nope", &empty), Err(ServiceError::Parse(_))));
+        assert!(matches!(
+            c.apply_named("nope", &empty),
+            Err(ServiceError::Parse(_))
+        ));
         let partial = serde_json::json!({ "address": "CODE:0x0" });
         assert!(matches!(
             c.apply_named("set_label", partial.as_object().unwrap()),
@@ -851,7 +918,9 @@ mod tests {
     fn exec_routes_all_categories() {
         let mut c = controller();
 
-        let edit = c.exec(r#"set_label(address=CODE:0x0, label="reset")"#).unwrap();
+        let edit = c
+            .exec(r#"set_label(address=CODE:0x0, label="reset")"#)
+            .unwrap();
         assert_eq!(edit["address"], "CODE:0x0");
         assert!(c.session().disassembly().contains("\nreset:"));
 
@@ -867,6 +936,9 @@ mod tests {
     #[test]
     fn exec_rejects_unknown_verb() {
         let mut c = controller();
-        assert!(matches!(c.exec("frobnicate(x=1)"), Err(ServiceError::Parse(_))));
+        assert!(matches!(
+            c.exec("frobnicate(x=1)"),
+            Err(ServiceError::Parse(_))
+        ));
     }
 }

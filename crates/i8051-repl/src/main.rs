@@ -11,7 +11,10 @@ use rustyline::history::DefaultHistory;
 use rustyline::{Context as LineContext, Editor, Helper, Highlighter, Hinter, Validator};
 
 #[derive(Parser)]
-#[command(name = "i8051-repl", about = "Interactive DSL REPL for the i8051 disassembler")]
+#[command(
+    name = "i8051-repl",
+    about = "Interactive DSL REPL for the i8051 disassembler"
+)]
 struct Cli {
     db: PathBuf,
     #[arg(long)]
@@ -40,7 +43,10 @@ impl Completer for DslHelper {
             complete(&self.catalog, line, pos, Some(controller.session()));
         let pairs = candidates
             .into_iter()
-            .map(|c| Pair { display: c.display, replacement: c.replacement })
+            .map(|c| Pair {
+                display: c.display,
+                replacement: c.replacement,
+            })
             .collect();
         Ok((start, pairs))
     }
@@ -145,7 +151,11 @@ fn print_catalog(controller: &Controller, filter: Option<&str>) {
         println!("{}:", category_label(category));
         for v in verbs {
             let args: Vec<String> = v.args.iter().map(|a| a.name.clone()).collect();
-            println!("  {:<40} {}", format!("{}({})", v.name, args.join(", ")), first_sentence(&v.description));
+            println!(
+                "  {:<40} {}",
+                format!("{}({})", v.name, args.join(", ")),
+                first_sentence(&v.description)
+            );
         }
     }
 }

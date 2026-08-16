@@ -74,7 +74,8 @@ fn regenerate_reference() {
     for op in 0u16..256 {
         let bytes = [op as u8, 0x02, 0x34];
         let ins = Instruction::decode_from_bytes(0x1000, &bytes);
-        let hex = ins.bytes()
+        let hex = ins
+            .bytes()
             .iter()
             .map(|b| format!("{b:02X}"))
             .collect::<Vec<_>>()

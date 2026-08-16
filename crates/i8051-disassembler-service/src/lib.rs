@@ -50,7 +50,11 @@ pub enum Refusal {
     /// A classify range covering live vectors.
     RangeCoversVectors { vectors: Vec<String> },
     /// An auto-disassemble root under a barrier.
-    BarrierStopsAuto { at: String, barrier: String, marked: String },
+    BarrierStopsAuto {
+        at: String,
+        barrier: String,
+        marked: String,
+    },
     /// A classify range covering branch targets.
     RangeSwallowsTargets {
         /// `addr (from callers)` phrases, at most four.
@@ -99,7 +103,11 @@ impl std::fmt::Display for ServiceError {
                 let text = serde_json::to_value(what)
                     .map_err(|e| e.to_string())
                     .and_then(|v| {
-                        messages::render_value(&v, messages::Audience::Llm, messages::Level::Verbose)
+                        messages::render_value(
+                            &v,
+                            messages::Audience::Llm,
+                            messages::Level::Verbose,
+                        )
                     })
                     .unwrap_or_else(|e| format!("refusal template failed: {e}"));
                 write!(f, "{text}")?;
@@ -124,7 +132,11 @@ pub struct Session {
 impl Session {
     /// Wrap an existing database.
     pub fn new(db: Db, env: Box<dyn Environment + Send + Sync>) -> Self {
-        Self { db, env, source: None }
+        Self {
+            db,
+            env,
+            source: None,
+        }
     }
 
     /// Build by applying DSL commands in order.
@@ -134,12 +146,16 @@ impl Session {
     ) -> Result<Self, ServiceError> {
         let mut db = Db::new();
         for (i, dsl) in commands.into_iter().enumerate() {
-            let command =
-                from_dsl(dsl.as_ref()).map_err(|e| ServiceError::Parse(format!("record {i}: {e}")))?;
+            let command = from_dsl(dsl.as_ref())
+                .map_err(|e| ServiceError::Parse(format!("record {i}: {e}")))?;
             db.apply(command, Some(env.as_ref()))
                 .map_err(|e| ServiceError::Apply(format!("record {i}: {e}")))?;
         }
-        Ok(Self { db, env, source: None })
+        Ok(Self {
+            db,
+            env,
+            source: None,
+        })
     }
 
     /// Apply one command, returning its undo DSL.
@@ -199,7 +215,11 @@ impl Session {
                         }
                     }
                 }
-                Line::Data { addr, data_type, bytes } if bytes.len() > heur.block_size => {
+                Line::Data {
+                    addr,
+                    data_type,
+                    bytes,
+                } if bytes.len() > heur.block_size => {
                     let mut at = addr;
                     for row in heur.literal_rows(&bytes) {
                         out.push(ListingRow::Line(Line::Data {
@@ -262,8 +282,11 @@ impl Session {
                     .map(|b| format!("{b:02x}"))
                     .collect::<Vec<_>>()
                     .join(" ");
-                let mut line =
-                    format!("{}  {bytes:<8}  {}", addr.space.dsl_addr(insn.addr), insn.text);
+                let mut line = format!(
+                    "{}  {bytes:<8}  {}",
+                    addr.space.dsl_addr(insn.addr),
+                    insn.text
+                );
                 if let Some(target) = insn.target {
                     if !insn.target_mapped {
                         line.push_str(&format!(
@@ -294,8 +317,11 @@ impl Session {
                 target_misaligned: insn.target_misaligned,
             })
             .collect();
-        let commit_with = (verdict == "likely_code")
-            .then(|| dsl!(auto_disassemble(address = {addr.space.dsl_addr(addr.offset)})));
+        let commit_with = (verdict == "likely_code").then(|| {
+            dsl!(auto_disassemble(
+                address = { addr.space.dsl_addr(addr.offset) }
+            ))
+        });
         Ok(PeekInfo {
             committed: false,
             commit_with,
@@ -378,7 +404,10 @@ impl Session {
 
         let mut callers: Vec<String> = self
             .db
-            .xrefs_to(&PhysicalAddr { space, offset: entry })
+            .xrefs_to(&PhysicalAddr {
+                space,
+                offset: entry,
+            })
             .into_iter()
             .map(|x| named(x.from.offset))
             .collect();
@@ -466,7 +495,11 @@ impl Session {
             let kind = row.kind();
             match bands.last_mut() {
                 Some(last) if last.kind == kind => last.len += 1,
-                _ => bands.push(OverviewBand { start: i, len: 1, kind }),
+                _ => bands.push(OverviewBand {
+                    start: i,
+                    len: 1,
+                    kind,
+                }),
             }
         }
         Ok(bands)
@@ -601,7 +634,13 @@ impl Session {
             .db
             .notes_near(probe.space, probe.offset, window)
             .into_iter()
-            .map(|p| note_info(p.note, Some((probe.space, p.range)), Some(p.distance as u64)))
+            .map(|p| {
+                note_info(
+                    p.note,
+                    Some((probe.space, p.range)),
+                    Some(p.distance as u64),
+                )
+            })
             .collect())
     }
 
@@ -894,7 +933,10 @@ mod tests {
         let rows: Vec<&ListingRow> = listing.lines.iter().map(|l| &l.line).collect();
         assert!(rows.iter().any(|r| matches!(
             r,
-            ListingRow::Fold(FoldRow::Region { addr: 0, kind: RegionKind::Unknown })
+            ListingRow::Fold(FoldRow::Region {
+                addr: 0,
+                kind: RegionKind::Unknown
+            })
         )));
         for row in &rows {
             if let ListingRow::Line(Line::Raw { bytes, .. }) = row {
@@ -912,12 +954,17 @@ mod tests {
 
         let idx = session.locate("CODE:0x48").expect("locate").expect("found");
         let row = &listing.lines[idx];
-        assert!(row.offset <= 0x48 && 0x48 < row.offset + 16, "row {:#x}", row.offset);
+        assert!(
+            row.offset <= 0x48 && 0x48 < row.offset + 16,
+            "row {:#x}",
+            row.offset
+        );
     }
 
     #[test]
     fn overview_bands_tile() {
-        let env = Box::new(MemoryEnvironment::new().with_file("fw.bin", vec![0x00, 0x22, 0xAB, 0xCD]));
+        let env =
+            Box::new(MemoryEnvironment::new().with_file("fw.bin", vec![0x00, 0x22, 0xAB, 0xCD]));
         let session = Session::from_commands(
             [
                 r#"set_cpu(name="i8051")"#,
@@ -944,7 +991,12 @@ mod tests {
     fn overview_reports_sizes() {
         let session = sample();
         let overview = session.disassembly_overview().expect("overview");
-        assert!(overview.spaces.iter().any(|s| s.space == "CODE" && s.lines > 0));
+        assert!(
+            overview
+                .spaces
+                .iter()
+                .any(|s| s.space == "CODE" && s.lines > 0)
+        );
         assert!(overview.symbols >= 1);
         assert!(overview.hint.contains("listing"));
     }
@@ -1045,14 +1097,20 @@ mod tests {
 
         let status = session.status(None).expect("status");
         assert!(!status.done);
-        let next = status.next.as_ref().expect("unfinished work must name a next step");
+        let next = status
+            .next
+            .as_ref()
+            .expect("unfinished work must name a next step");
         let head = session
             .worklist(None, None, None, Some(1), None)
             .expect("worklist")
             .items
             .remove(0);
         assert_eq!(next.item, head.id, "status and next must agree on the head");
-        assert_eq!(next.run.as_deref(), head.suggested.first().map(String::as_str));
+        assert_eq!(
+            next.run.as_deref(),
+            head.suggested.first().map(String::as_str)
+        );
 
         assert!(sample().status(None).expect("status").next.is_none());
     }
@@ -1081,7 +1139,9 @@ mod tests {
         commands.extend(maps.iter().map(String::as_str));
         let session = Session::from_commands(commands, env).expect("build session");
 
-        let page = session.worklist(None, None, None, None, None).expect("worklist");
+        let page = session
+            .worklist(None, None, None, None, None)
+            .expect("worklist");
         assert_eq!(page.returned, DEFAULT_WORKLIST_LIMIT);
         assert!(page.remaining > DEFAULT_WORKLIST_LIMIT);
         assert!(page.cursor.is_some());
@@ -1098,7 +1158,10 @@ mod tests {
             vec!["auto_disassemble(address=CODE:0x33)".into()],
         );
         let text = err.to_string();
-        assert!(text.contains("auto_disassemble(address=CODE:0x33)"), "{text}");
+        assert!(
+            text.contains("auto_disassemble(address=CODE:0x33)"),
+            "{text}"
+        );
         assert!(!text.contains("template failed"), "{text}");
     }
 
@@ -1121,9 +1184,12 @@ mod tests {
             .worklist(None, None, Some("flow_into_data"), None, None)
             .expect("worklist");
         let item = page.items.first().expect("leak reported");
-        let rendered =
-            messages::render_item(&item.what, messages::Audience::Llm, messages::Level::Verbose)
-                .expect("renders");
+        let rendered = messages::render_item(
+            &item.what,
+            messages::Audience::Llm,
+            messages::Level::Verbose,
+        )
+        .expect("renders");
         assert_eq!(item.detail, rendered);
         assert!(!item.detail.is_empty());
     }

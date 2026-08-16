@@ -3,7 +3,6 @@ use crate::db::{DataType, Db, Equivalent, Error};
 
 use super::{Apply, ClearEquivalents, Command, Environment, boxed};
 
-
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DisassembleRange {
     pub range: SpaceAddressRange,

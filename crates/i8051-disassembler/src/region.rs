@@ -724,7 +724,9 @@ impl Region {
     ) -> Result<&EquivalentRange, Error> {
         if self.has_equivalent(offset) {
             let (start, end, existing) = match self.get_equivalent(offset) {
-                EquivalentAt::Defined { start, range } => (start, range.end, range.equivalent.kind()),
+                EquivalentAt::Defined { start, range } => {
+                    (start, range.end, range.equivalent.kind())
+                }
                 EquivalentAt::Undefined(range) => (range.start, range.end, EquivalentKind::Unknown),
             };
             let requested_end = self
@@ -957,8 +959,10 @@ impl Region {
                 continue;
             }
             let offset = target.offset;
-            let pointers: Vec<&crate::region::xrefs::Edge> =
-                edges.iter().filter(|e| e.kind == XrefType::Pointer).collect();
+            let pointers: Vec<&crate::region::xrefs::Edge> = edges
+                .iter()
+                .filter(|e| e.kind == XrefType::Pointer)
+                .collect();
             if pointers.is_empty()
                 || self.get_label(offset).is_some()
                 || self.read_byte(offset).is_none()
@@ -2436,19 +2440,32 @@ mod tests {
         use crate::db::Db;
 
         let mut db = Db::with_platform(platform());
-        db.apply(boxed(MapBytes::new((CODE, 0), "img", 0usize, 10u32)), Some(&Img))
-            .unwrap();
+        db.apply(
+            boxed(MapBytes::new((CODE, 0), "img", 0usize, 10u32)),
+            Some(&Img),
+        )
+        .unwrap();
         for entry in [0u32, 5] {
             db.apply(boxed(AutoDisassemble::new((CODE, entry))), Some(&Img))
                 .unwrap();
         }
         db.apply(
-            boxed(SetLabel::new((CODE, 0u32), "main".to_string(), false, false)),
+            boxed(SetLabel::new(
+                (CODE, 0u32),
+                "main".to_string(),
+                false,
+                false,
+            )),
             None,
         )
         .unwrap();
         db.apply(
-            boxed(SetLabel::new((CODE, 5u32), "other".to_string(), false, false)),
+            boxed(SetLabel::new(
+                (CODE, 5u32),
+                "other".to_string(),
+                false,
+                false,
+            )),
             None,
         )
         .unwrap();
@@ -2462,13 +2479,19 @@ mod tests {
         }
 
         let asm = db.to_sdas();
-        assert!(asm.contains("1$:"), "locals export as ASxxxx locals:\n{asm}");
+        assert!(
+            asm.contains("1$:"),
+            "locals export as ASxxxx locals:\n{asm}"
+        );
         assert!(!asm.contains(".loop:"), "not a local to sdas:\n{asm}");
         // Each scope restarts numbering, so both routines get their own `1$`.
         assert_eq!(asm.matches("1$:").count(), 2, "one local per scope:\n{asm}");
         // References must follow the definitions, or the output assembles wrong.
         assert_eq!(asm.matches("DJNZ").count(), 2, "{asm}");
-        assert!(!asm.contains("DJNZ    R0,.loop"), "reference not rewritten:\n{asm}");
+        assert!(
+            !asm.contains("DJNZ    R0,.loop"),
+            "reference not rewritten:\n{asm}"
+        );
     }
 
     /// A global name reused at two addresses is disambiguated, since emitting
@@ -2505,24 +2528,42 @@ mod tests {
         use crate::db::Db;
 
         let mut db = Db::with_platform(platform());
-        db.apply(boxed(MapBytes::new((CODE, 0), "img", 0usize, 9u32)), Some(&Img))
-            .unwrap();
+        db.apply(
+            boxed(MapBytes::new((CODE, 0), "img", 0usize, 9u32)),
+            Some(&Img),
+        )
+        .unwrap();
         for entry in [0u32, 4] {
             db.apply(boxed(AutoDisassemble::new((CODE, entry))), Some(&Img))
                 .unwrap();
         }
         db.apply(
-            boxed(SetLabel::new((CODE, 0u32), "main".to_string(), false, false)),
+            boxed(SetLabel::new(
+                (CODE, 0u32),
+                "main".to_string(),
+                false,
+                false,
+            )),
             None,
         )
         .unwrap();
         db.apply(
-            boxed(SetLabel::new((CODE, 4u32), "other".to_string(), false, false)),
+            boxed(SetLabel::new(
+                (CODE, 4u32),
+                "other".to_string(),
+                false,
+                false,
+            )),
             None,
         )
         .unwrap();
         db.apply(
-            boxed(SetLabel::new((CODE, 2u32), "inner".to_string(), false, true)),
+            boxed(SetLabel::new(
+                (CODE, 2u32),
+                "inner".to_string(),
+                false,
+                true,
+            )),
             None,
         )
         .unwrap();
@@ -2532,9 +2573,15 @@ mod tests {
         assert_eq!(region.scope_of(2), Some(0), "its routine is `main`");
 
         let asm = db.to_sdas();
-        assert!(asm.contains("inner:"), "the local falls back to its name:\n{asm}");
+        assert!(
+            asm.contains("inner:"),
+            "the local falls back to its name:\n{asm}"
+        );
         assert!(!asm.contains("1$:"), "it cannot be an ASxxxx local:\n{asm}");
-        assert!(asm.contains("SJMP    inner"), "the reference matches:\n{asm}");
+        assert!(
+            asm.contains("SJMP    inner"),
+            "the reference matches:\n{asm}"
+        );
     }
 
     /// A swallowed label undefines every reference to it.
@@ -2542,7 +2589,9 @@ mod tests {
     fn data_run_stops_early() {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[0x11, 0x22, 0x33, 0x44]);
-        region.set_equivalent(0, Equivalent::Data(DataType::Byte, 4)).unwrap();
+        region
+            .set_equivalent(0, Equivalent::Data(DataType::Byte, 4))
+            .unwrap();
         region.set_label(2, "table_hi", LabelAttrs::default());
 
         let lines = region.render(CODE, &ImplicitLabels::default());
@@ -2553,7 +2602,11 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(labelled, vec![2], "the label must survive the run: {lines:#?}");
+        assert_eq!(
+            labelled,
+            vec![2],
+            "the label must survive the run: {lines:#?}"
+        );
 
         // The run splits rather than losing bytes.
         let data: Vec<(AddressValue, usize)> = lines
@@ -2571,7 +2624,14 @@ mod tests {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[0x00, 0x00, 0x00, 0x22]);
 
-        region.set_label(0, "guess", LabelAttrs { provisional: true, local: true });
+        region.set_label(
+            0,
+            "guess",
+            LabelAttrs {
+                provisional: true,
+                local: true,
+            },
+        );
         assert!(region.is_draft_label(0) && region.is_local_label(0));
 
         region.clear_label(0);
@@ -2583,7 +2643,14 @@ mod tests {
         assert!(!region.is_draft_label(0) && !region.is_local_label(0));
 
         // The range form has to do the same.
-        region.set_label(2, "spot", LabelAttrs { provisional: true, local: true });
+        region.set_label(
+            2,
+            "spot",
+            LabelAttrs {
+                provisional: true,
+                local: true,
+            },
+        );
         region.clear_labels_in(2..3);
         assert!(!region.is_draft_label(2) && !region.is_local_label(2));
     }
@@ -2608,8 +2675,11 @@ mod tests {
         use crate::db::Db;
 
         let mut db = Db::with_platform(platform());
-        db.apply(boxed(MapBytes::new((CODE, 0), "img", 0usize, 5u32)), Some(&Img))
-            .unwrap();
+        db.apply(
+            boxed(MapBytes::new((CODE, 0), "img", 0usize, 5u32)),
+            Some(&Img),
+        )
+        .unwrap();
 
         assert_eq!(db.peek(CODE, 0, 16).self_misaligned_targets, 1);
     }
@@ -2618,7 +2688,9 @@ mod tests {
     fn retyping_says_clearing_cost() {
         let mut region = Region::new(CODE, Some(platform()));
         region.set_bytes("test.bin", 0, 0, &[0x00; 0x40]);
-        region.set_equivalent(0, Equivalent::Data(DataType::Byte, 0x40)).unwrap();
+        region
+            .set_equivalent(0, Equivalent::Data(DataType::Byte, 0x40))
+            .unwrap();
 
         let err = region
             .set_equivalent(0x10, Equivalent::Data(DataType::Byte, 4))
@@ -2630,8 +2702,14 @@ mod tests {
         // The cost, and how to put back what was not being retyped.
         assert!(text.contains("0x40 byte(s)"), "the true cost: {text}");
         assert!(text.contains("past the 0x4 you asked about"), "{text}");
-        assert!(text.contains("mark_data(range=CODE:0x0..0x10"), "restore before: {text}");
-        assert!(text.contains("mark_data(range=CODE:0x14..0x40"), "restore after: {text}");
+        assert!(
+            text.contains("mark_data(range=CODE:0x0..0x10"),
+            "restore before: {text}"
+        );
+        assert!(
+            text.contains("mark_data(range=CODE:0x14..0x40"),
+            "restore after: {text}"
+        );
     }
 
     #[test]

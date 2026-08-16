@@ -52,7 +52,10 @@ pub(crate) enum LabelKind {
 
 /// Provisional name: starts with `sub_` or `loc_` and is followed by hex digits.
 pub fn is_provisional_name(name: &str) -> bool {
-    let Some(hex) = name.strip_prefix("sub_").or_else(|| name.strip_prefix("loc_")) else {
+    let Some(hex) = name
+        .strip_prefix("sub_")
+        .or_else(|| name.strip_prefix("loc_"))
+    else {
         return false;
     };
     hex.len() >= 4 && hex.chars().all(|c| c.is_ascii_hexdigit())

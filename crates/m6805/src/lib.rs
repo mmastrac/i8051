@@ -21,6 +21,6 @@
 mod op;
 
 pub use op::{
-    AddrMode, ControlFlow, Instruction, Mnemonic, OpInfo, Operand, Operands, decode, decode_length,
-    INSTRUCTION_LENGTHS, OPCODES,
+    AddrMode, ControlFlow, INSTRUCTION_LENGTHS, Instruction, Mnemonic, OPCODES, OpInfo, Operand,
+    Operands, decode, decode_length,
 };

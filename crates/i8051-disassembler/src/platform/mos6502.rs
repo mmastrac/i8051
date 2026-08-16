@@ -163,7 +163,10 @@ mod tests {
             decode(&[0x20, 0x00, 0x20]).control_flow,
             ControlFlow::Call { target: 0x2000, .. }
         ));
-        assert_eq!(decode(&[0x6C, 0x00, 0x20]).control_flow, ControlFlow::Diverge);
+        assert_eq!(
+            decode(&[0x6C, 0x00, 0x20]).control_flow,
+            ControlFlow::Diverge
+        );
         assert_eq!(decode(&[0x6C, 0x00, 0x20]).branch_operand_index, None);
     }
 

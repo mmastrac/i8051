@@ -76,7 +76,9 @@ impl Apply for UnmapBytes {
 
         // Refuse to cut a classification
         for range in addresses.ranges() {
-            for (start, equivalent) in region.snapshot_equivalents(range.start, range.end - range.start) {
+            for (start, equivalent) in
+                region.snapshot_equivalents(range.start, range.end - range.start)
+            {
                 if start < range.start || equivalent.end > range.end {
                     return Err(Error::PartialEquivalent {
                         at: (space, range.start).into(),

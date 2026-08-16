@@ -59,7 +59,8 @@ fn committed_scripts_reconstruct() {
         // `auto_disassemble` runs.
         let mut db = Db::new();
         for command in commands {
-            db.apply(command, Some(&SamplesEnv)).expect("command applies");
+            db.apply(command, Some(&SamplesEnv))
+                .expect("command applies");
         }
         assert!(db.platform().is_some(), "{script}: no set_cpu");
 

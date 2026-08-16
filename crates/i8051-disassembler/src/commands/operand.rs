@@ -3,7 +3,6 @@ use crate::db::{Db, Error, OperandOverride};
 
 use super::{Apply, Command, Environment, boxed};
 
-
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OverrideOperand {
     pub address: SpaceAddressValue,

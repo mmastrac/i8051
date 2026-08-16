@@ -110,6 +110,9 @@ fn run(args: &[String]) -> Result<(), String> {
 }
 
 fn parse_hex(s: &str) -> Result<u32, String> {
-    let t = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    let t = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .unwrap_or(s);
     u32::from_str_radix(t, 16).map_err(|_| format!("bad hex value `{s}`"))
 }

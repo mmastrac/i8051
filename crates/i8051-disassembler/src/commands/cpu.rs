@@ -68,7 +68,13 @@ fn restore(prev: Option<PlatformRef>) -> Box<dyn Command> {
     }
 }
 
-serialize_test!(set_cpu, r#"set_cpu(name="m6805")"#, SetCpu { name: "m6805".into() });
+serialize_test!(
+    set_cpu,
+    r#"set_cpu(name="m6805")"#,
+    SetCpu {
+        name: "m6805".into()
+    }
+);
 serialize_test!(clear_cpu, "clear_cpu()", ClearCpu {});
 
 #[cfg(test)]
