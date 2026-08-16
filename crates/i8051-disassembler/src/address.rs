@@ -462,7 +462,7 @@ mod tests {
         }
         set.insert(0x20..0x28);
 
-        // Adjacent addresses coalesce into a range; singletons stay bare.
+        // Adjacent addresses coalesce into a range.
         let value = crate::store::ser::to_value(&set).unwrap();
         assert_eq!(value.render(), "CODE:{0x10..0x13, 0x20..0x28, 0x30}");
 

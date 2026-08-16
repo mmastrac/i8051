@@ -165,7 +165,6 @@ pub trait Environment {
 
 /// A disassembly mutation.
 pub trait Command: std::fmt::Debug {
-    /// Apply the command, returning the inverse commands that undo it.
     fn apply(
         self: Box<Self>,
         db: &mut Db,

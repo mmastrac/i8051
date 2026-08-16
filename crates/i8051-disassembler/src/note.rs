@@ -246,7 +246,6 @@ impl Notes {
         self.by_id.keys().next_back().cloned()
     }
 
-    /// Allocate the next ID from the current tip and insert atomically.
     pub fn create(&mut self, content: impl Into<String>) -> Note {
         let note = Note::new(self.tip().as_ref(), content);
         assert!(
