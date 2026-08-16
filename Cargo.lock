@@ -787,6 +787,8 @@ version = "0.24.0"
 dependencies = [
  "hex-literal",
  "i8051",
+ "i8051-proc-macro",
+ "i8051-script",
  "leiden-rs",
  "m6805",
  "mos6502",
@@ -805,6 +807,7 @@ name = "i8051-disassembler-service"
 version = "0.24.0"
 dependencies = [
  "i8051-disassembler",
+ "i8051-script",
  "include_dir",
  "minijinja",
  "serde",
@@ -833,6 +836,10 @@ dependencies = [
  "rustyline",
  "serde_json",
 ]
+
+[[package]]
+name = "i8051-script"
+version = "0.24.0"
 
 [[package]]
 name = "i8051-test-runner"

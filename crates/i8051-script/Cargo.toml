@@ -1,0 +1,8 @@
+[package]
+name = "i8051-script"
+description = "The DSL value model shared by the i8051 disassembler and its macros."
+version.workspace = true
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+repository.workspace = true

@@ -3,8 +3,6 @@
 //! knowledge: enums, structs, sequences, and maps are reconstructed from the
 //! `Value` shape alone.
 
-use std::collections::BTreeMap;
-
 use serde::de::{
     self, DeserializeOwned, DeserializeSeed, EnumAccess, IntoDeserializer, VariantAccess, Visitor,
 };
@@ -12,7 +10,7 @@ use serde::forward_to_deserialize_any;
 
 use crate::address::{ADDRESS_RANGE_TOKEN, ADDRESS_SET_TOKEN, ADDRESS_TOKEN};
 use crate::store::error::DslError;
-use crate::store::value::{EnumArgs, Value};
+use crate::store::value::{EnumArgs, Fields, Value};
 
 /// Reconstruct a value from the DSL AST.
 pub fn from_value<T: DeserializeOwned>(value: Value) -> Result<T, DslError> {
@@ -33,7 +31,7 @@ impl<'de> de::Deserializer<'de> for ValueDeserializer {
             Value::Int(v) => visitor.visit_u64(v),
             Value::String(v) => visitor.visit_string(v),
             Value::List(items) | Value::Set(items) => visitor.visit_seq(SeqAccess::new(items)),
-            Value::Map(map) => visitor.visit_map(MapAccess::new(map)),
+            Value::Map(map) => visitor.visit_map(MapAccess::new(map.into_iter().collect())),
             Value::Struct { fields, .. } => visitor.visit_map(MapAccess::new(fields)),
             Value::Enum { .. } => visitor.visit_enum(EnumDeserializer { value: self.value }),
             Value::Address { space, offset } => {
@@ -49,8 +47,10 @@ impl<'de> de::Deserializer<'de> for ValueDeserializer {
                 visitor.visit_seq(SeqAccess::new(tuple))
             }
             Value::Call { name, kwargs } => visitor.visit_map(MapAccess::new(
-                std::iter::once((name, Value::Map(kwargs))).collect(),
+                std::iter::once((name, Value::Map(kwargs.into_iter().collect()))).collect(),
             )),
+            // Parsing never produces one.
+            Value::Verbatim(_) => Err(DslError::new("verbatim text cannot deserialize")),
         }
     }
 
@@ -115,24 +115,23 @@ impl<'de> de::Deserializer<'de> for ValueDeserializer {
         if let Value::Address { space, offset } = &self.value
             && fields == ["space", "offset"]
         {
-            let map: BTreeMap<String, Value> = [
+            let fields = vec![
                 ("space".to_string(), Value::String(space.clone())),
                 ("offset".to_string(), Value::Int(*offset)),
-            ]
-            .into();
-            return visitor.visit_map(MapAccess::new(map));
+            ];
+            return visitor.visit_map(MapAccess::new(fields));
         }
         self.deserialize_any(visitor)
     }
 
     fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, DslError> {
         match self.value {
-            Value::Map(map) => visitor.visit_map(MapAccess::new(map)),
+            Value::Map(map) => visitor.visit_map(MapAccess::new(map.into_iter().collect())),
             Value::Struct { fields, .. } => visitor.visit_map(MapAccess::new(fields)),
             // `{}` is ambiguous between an empty map and an empty set; the
             // parser picks `Set`, so accept an empty sequence as an empty map.
             Value::Set(items) | Value::List(items) if items.is_empty() => {
-                visitor.visit_map(MapAccess::new(BTreeMap::new()))
+                visitor.visit_map(MapAccess::new(Vec::new()))
             }
             other => Err(DslError::new(format!("expected a map, got {other:?}"))),
         }
@@ -217,14 +216,14 @@ impl<'de> de::SeqAccess<'de> for SeqAccess {
 }
 
 struct MapAccess {
-    iter: std::collections::btree_map::IntoIter<String, Value>,
+    iter: std::vec::IntoIter<(String, Value)>,
     value: Option<Value>,
 }
 
 impl MapAccess {
-    fn new(map: BTreeMap<String, Value>) -> Self {
+    fn new(fields: Fields) -> Self {
         Self {
-            iter: map.into_iter(),
+            iter: fields.into_iter(),
             value: None,
         }
     }
@@ -315,7 +314,7 @@ impl<'de> VariantAccess<'de> for VariantDeserializer {
     ) -> Result<V::Value, DslError> {
         match self.args {
             EnumArgs::Named(fields) => visitor.visit_map(MapAccess::new(fields)),
-            EnumArgs::Unit => visitor.visit_map(MapAccess::new(BTreeMap::new())),
+            EnumArgs::Unit => visitor.visit_map(MapAccess::new(Vec::new())),
             EnumArgs::Positional(_) => Err(DslError::new("expected a struct variant")),
         }
     }

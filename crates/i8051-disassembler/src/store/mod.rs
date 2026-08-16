@@ -15,9 +15,10 @@ pub mod fields;
 mod lexer;
 mod parser;
 pub mod ser;
-pub mod value;
+pub use i8051_script as value;
 
 pub use error::DslError;
+pub use i8051_proc_macro::dsl;
 
 use crate::commands::{self, COMMANDS, Command};
 use value::Value;
@@ -48,7 +49,7 @@ pub fn from_dsl(input: &str) -> Result<Box<dyn Command>, DslError> {
     })?;
 
     // Reject stray arguments up front.
-    for key in kwargs.keys() {
+    for (key, _) in &kwargs {
         if !entry.args.iter().any(|a| a.name == key) {
             let hint = commands::closest(key, entry.args.iter().map(|a| a.name))
                 .map(|h| format!(" (did you mean `{h}`?)"))
@@ -60,10 +61,10 @@ pub fn from_dsl(input: &str) -> Result<Box<dyn Command>, DslError> {
         }
     }
     for arg in entry.args {
-        if !kwargs.contains_key(arg.name) {
+        if !kwargs.iter().any(|(key, _)| key == arg.name) {
             // Omitted flags default to false.
             if arg.kind == commands::ArgKind::Flag {
-                kwargs.insert(arg.name.to_string(), value::Value::Bool(false));
+                kwargs.push((arg.name.to_string(), value::Value::Bool(false)));
                 continue;
             }
             return Err(DslError::new(format!(
@@ -81,12 +82,11 @@ pub fn from_dsl(input: &str) -> Result<Box<dyn Command>, DslError> {
 }
 
 /// Accept a bare enum variant.
-pub fn qualify_bare_variants(
-    entry: &crate::commands::CommandEntry,
-    kwargs: &mut std::collections::BTreeMap<String, Value>,
-) {
+pub fn qualify_bare_variants(entry: &crate::commands::CommandEntry, kwargs: &mut value::Fields) {
     for arg in entry.args {
-        let Some(value) = kwargs.get(arg.name) else { continue };
+        let Some(value) = kwargs.iter().find(|(key, _)| key == arg.name).map(|(_, v)| v) else {
+            continue;
+        };
         if (arg.check)(value).is_ok() {
             continue;
         }
@@ -108,8 +108,10 @@ pub fn qualify_bare_variants(
         let Ok(qualified) = parser::parse_value(&format!("{prefix}::{bare}")) else {
             continue;
         };
-        if (arg.check)(&qualified).is_ok() {
-            kwargs.insert(arg.name.to_string(), qualified);
+        if (arg.check)(&qualified).is_ok()
+            && let Some(slot) = kwargs.iter_mut().find(|(key, _)| key == arg.name)
+        {
+            slot.1 = qualified;
         }
     }
 }
@@ -127,11 +129,11 @@ fn arg_names(entry: &crate::commands::CommandEntry) -> String {
 pub fn diagnose_args(
     name: &str,
     entry: &crate::commands::CommandEntry,
-    kwargs: std::collections::BTreeMap<String, Value>,
+    kwargs: value::Fields,
     raw: DslError,
 ) -> DslError {
     for arg in entry.args {
-        let Some(value) = kwargs.get(arg.name) else {
+        let Some(value) = kwargs.iter().find(|(key, _)| key == arg.name).map(|(_, v)| v) else {
             continue;
         };
         if let Err(inner) = (arg.check)(value) {
@@ -160,7 +162,7 @@ pub fn parse_value(input: &str) -> Result<Value, DslError> {
 }
 
 /// Parse a `verb(k=v, ...)` call into its name and keyword arguments.
-pub fn parse_call(input: &str) -> Result<(String, std::collections::BTreeMap<String, Value>), DslError> {
+pub fn parse_call(input: &str) -> Result<(String, value::Fields), DslError> {
     match parser::parse_command(input)? {
         Value::Call { name, kwargs } => Ok((name, kwargs)),
         _ => Err(DslError::new("expected a command call")),
@@ -185,63 +187,35 @@ pub fn from_dsl_many(input: &str) -> Result<Vec<Box<dyn Command>>, DslError> {
 
 /// Split a document at the newlines outside strings.
 pub fn split_commands(input: &str) -> Vec<String> {
+    fn flush(out: &mut Vec<String>, current: &mut String) {
+        let line = current.trim();
+        if !line.is_empty() && !line.starts_with('#') {
+            out.push(line.to_string());
+        }
+        current.clear();
+    }
+
     let mut out = Vec::new();
     let mut current = String::new();
-    let mut chars = input.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        match ch {
-            '\n' => {
-                let line = current.trim();
-                if !line.is_empty() && !line.starts_with('#') {
-                    out.push(line.to_string());
-                }
-                current.clear();
-            }
-            // A raw string runs to its matching delimiter, newlines included.
-            'r' if matches!(chars.peek(), Some('"' | '#')) => {
-                current.push(ch);
-                let mut hashes = 0;
-                while chars.peek() == Some(&'#') {
-                    hashes += 1;
-                    current.push(chars.next().unwrap());
-                }
-                if chars.peek() != Some(&'"') {
-                    continue; // not a raw string after all
-                }
-                current.push(chars.next().unwrap());
-                let close = format!("\"{}", "#".repeat(hashes));
-                let mut seen = String::new();
-                for c in chars.by_ref() {
-                    current.push(c);
-                    seen.push(c);
-                    if seen.ends_with(&close) {
-                        break;
-                    }
-                }
-            }
-            '"' => {
-                current.push(ch);
-                while let Some(c) = chars.next() {
-                    current.push(c);
-                    match c {
-                        '\\' => {
-                            if let Some(esc) = chars.next() {
-                                current.push(esc);
-                            }
-                        }
-                        '"' => break,
-                        _ => {}
-                    }
-                }
-            }
-            _ => current.push(ch),
+    let mut rest = input;
+    while let Some(ch) = rest.chars().next() {
+        if ch == '\n' {
+            flush(&mut out, &mut current);
+            rest = &rest[1..];
+            continue;
         }
+        // The lexer decides where a string ends.
+        if (ch == '"' || ch == 'r')
+            && let Some(len) = lexer::leading_string_len(rest)
+        {
+            current.push_str(&rest[..len]);
+            rest = &rest[len..];
+            continue;
+        }
+        current.push(ch);
+        rest = &rest[ch.len_utf8()..];
     }
-    let line = current.trim();
-    if !line.is_empty() && !line.starts_with('#') {
-        out.push(line.to_string());
-    }
+    flush(&mut out, &mut current);
     out
 }
 
@@ -254,7 +228,45 @@ mod tests {
     use crate::db::Function;
     use crate::note::Note;
 
-    use super::{from_dsl, to_dsl};
+    use super::{dsl, from_dsl, parse_call, to_dsl};
+
+    #[test]
+    fn dsl_macro_renders_calls() {
+        let at = "CODE:0x4";
+        let space = "CODE";
+        let len = 2u32;
+        let cases = [
+            (dsl!(peek(address = {at}, lines = 4)), "peek(address=CODE:0x4, lines=4)"),
+            (
+                dsl!(set_label(address = {at}, label = ".loop", local = True)),
+                "set_label(address=CODE:0x4, label=\".loop\", local=True)",
+            ),
+            (
+                dsl!(mark_data(range = {format!("{at}..0x6")}, data_type = DataType::Byte)),
+                "mark_data(range=CODE:0x4..0x6, data_type=DataType::Byte)",
+            ),
+            (
+                dsl!(map_bytes(address = {at}, file = "...", file_offset = {len:#x}, size = 0x0)),
+                "map_bytes(address=CODE:0x4, file=\"...\", file_offset=0x2, size=0x0)",
+            ),
+            (
+                dsl!(set_note(address = {at}, note = Note(content = "..."))),
+                "set_note(address=CODE:0x4, note=Note(content=\"...\"))",
+            ),
+            (
+                dsl!(set_operand_pointer(address = {at}, space = "{space}")),
+                "set_operand_pointer(address=CODE:0x4, space=\"CODE\")",
+            ),
+            (
+                dsl!(auto_disassemble(address = {at}) # "after clearing {space}"),
+                "auto_disassemble(address=CODE:0x4)  # after clearing CODE",
+            ),
+        ];
+        for (rendered, expected) in cases {
+            assert_eq!(rendered, expected);
+            parse_call(&rendered).expect("parses");
+        }
+    }
 
     #[test]
     fn round_trip_auto_disassemble() {
@@ -278,7 +290,7 @@ mod tests {
         let dsl = to_dsl(&*command);
         assert_eq!(
             dsl,
-            "set_label(address=CODE:0x100, label=\"reset_vector\", local=False, provisional=False)"
+            "set_label(address=CODE:0x100, label=\"reset_vector\", provisional=False, local=False)"
         );
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
     }
@@ -360,8 +372,9 @@ mod tests {
         let dsl = to_dsl(&*command);
         assert_eq!(
             dsl,
-            "set_function(address=CODE:0x0, function=Function(addr=PhysicalAddr(offset=0x0, \
-             space=\"CODE\"), length=0x40, name=\"main\", noreturn=False, signature=\"void main(void)\"))"
+            "set_function(address=CODE:0x0, function=Function(addr=PhysicalAddr(space=\"CODE\", \
+             offset=0x0), name=\"main\", signature=\"void main(void)\", length=0x40, \
+             noreturn=False))"
         );
         assert_eq!(&*from_dsl(&dsl).unwrap(), &*command);
     }

@@ -40,7 +40,7 @@ pub struct SpaceOverview {
 /// One rendered listing line.
 pub struct LineInfo {
     pub index: usize,
-    /// DSL address spelling, e.g. `CODE:0x100`.
+    /// The address in DSL form, e.g. `CODE:0x100`.
     pub addr: String,
     pub offset: AddressValue,
     pub line: ListingRow,

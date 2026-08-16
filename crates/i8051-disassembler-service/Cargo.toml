@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 i8051-disassembler = { version = "0.24.0", path = "../i8051-disassembler" }
+i8051-script = { version = "0.24.0", path = "../i8051-script" }
 include_dir = "0.7"
 minijinja = "2"
 serde = { version = "1", features = ["derive"] }

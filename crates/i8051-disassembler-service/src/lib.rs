@@ -4,7 +4,7 @@ use i8051_disassembler::address::{
 use i8051_disassembler::analysis::completeness::{self, Gate, Item, Phase};
 use i8051_disassembler::db::{Db, Note, ScratchDecode};
 use i8051_disassembler::render::Line;
-use i8051_disassembler::store::{from_dsl, from_dsl_value, to_dsl};
+use i8051_disassembler::store::{dsl, from_dsl, from_dsl_value, to_dsl};
 
 pub use i8051_disassembler::commands::Environment;
 
@@ -43,11 +43,51 @@ pub const DEFAULT_PEEK_LINES: usize = 24;
 mod file;
 pub use file::{FsEnvironment, MemoryEnvironment};
 
+/// A refused edit's facts, rendered from templates.
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Refusal {
+    /// A classify range covering live vectors.
+    RangeCoversVectors { vectors: Vec<String> },
+    /// An auto-disassemble root under a barrier.
+    BarrierStopsAuto { at: String, barrier: String, marked: String },
+    /// A classify range covering branch targets.
+    RangeSwallowsTargets {
+        /// `addr (from callers)` phrases, at most four.
+        targets: Vec<String>,
+        omitted: usize,
+        first_target: String,
+        first_source: String,
+        sources: usize,
+    },
+    /// A range that decodes badly.
+    RangeDoesNotDecode { count: usize, reasons: Vec<String> },
+}
+
 #[derive(Debug)]
 /// A failed service call, by cause.
 pub enum ServiceError {
     Parse(String),
     Apply(String),
+    /// A guarded edit, declined with fixes.
+    Refused {
+        what: Refusal,
+        /// Commands that resolve it, runnable verbatim.
+        suggested: Vec<String>,
+    },
+}
+
+impl ServiceError {
+    /// A refusal plus commands that resolve it.
+    pub(crate) fn refused(what: Refusal, suggested: Vec<String>) -> Self {
+        #[cfg(debug_assertions)]
+        for suggestion in &suggested {
+            if let Err(e) = i8051_disassembler::store::parse_call(suggestion) {
+                panic!("refusal suggestion does not parse: {suggestion:?}: {e}");
+            }
+        }
+        Self::Refused { what, suggested }
+    }
 }
 
 impl std::fmt::Display for ServiceError {
@@ -55,6 +95,19 @@ impl std::fmt::Display for ServiceError {
         match self {
             Self::Parse(m) => write!(f, "{m}"),
             Self::Apply(m) => write!(f, "{m}"),
+            Self::Refused { what, suggested } => {
+                let text = serde_json::to_value(what)
+                    .map_err(|e| e.to_string())
+                    .and_then(|v| {
+                        messages::render_value(&v, messages::Audience::Llm, messages::Level::Verbose)
+                    })
+                    .unwrap_or_else(|e| format!("refusal template failed: {e}"));
+                write!(f, "{text}")?;
+                for suggestion in suggested {
+                    write!(f, "\n  {suggestion}")?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -181,7 +234,7 @@ impl Session {
             .take(end.saturating_sub(start))
             .map(|(index, line)| LineInfo {
                 index,
-                addr: addr_dsl(space, line.addr()),
+                addr: space.dsl_addr(line.addr()),
                 offset: line.addr(),
                 line,
             })
@@ -210,17 +263,17 @@ impl Session {
                     .collect::<Vec<_>>()
                     .join(" ");
                 let mut line =
-                    format!("{}  {bytes:<8}  {}", addr_dsl(addr.space, insn.addr), insn.text);
+                    format!("{}  {bytes:<8}  {}", addr.space.dsl_addr(insn.addr), insn.text);
                 if let Some(target) = insn.target {
                     if !insn.target_mapped {
                         line.push_str(&format!(
                             "   ; target {} is outside the loaded image",
-                            addr_dsl(addr.space, target)
+                            addr.space.dsl_addr(target)
                         ));
                     } else if insn.target_misaligned {
                         line.push_str(&format!(
                             "   ; target {} lands inside an existing instruction",
-                            addr_dsl(addr.space, target)
+                            addr.space.dsl_addr(target)
                         ));
                     }
                 }
@@ -233,20 +286,20 @@ impl Session {
             .lines
             .iter()
             .map(|insn| PeekLine {
-                addr: addr_dsl(addr.space, insn.addr),
+                addr: addr.space.dsl_addr(insn.addr),
                 bytes: insn.bytes.clone(),
                 text: insn.text.trim_start().to_string(),
-                target: insn.target.map(|t| addr_dsl(addr.space, t)),
+                target: insn.target.map(|t| addr.space.dsl_addr(t)),
                 target_mapped: insn.target_mapped,
                 target_misaligned: insn.target_misaligned,
             })
             .collect();
         let commit_with = (verdict == "likely_code")
-            .then(|| format!("auto_disassemble(address={})", addr_dsl(addr.space, addr.offset)));
+            .then(|| dsl!(auto_disassemble(address = {addr.space.dsl_addr(addr.offset)})));
         Ok(PeekInfo {
             committed: false,
             commit_with,
-            address: addr_dsl(addr.space, addr.offset),
+            address: addr.space.dsl_addr(addr.offset),
             verdict,
             note,
             terminates: decode.terminates,
@@ -259,13 +312,13 @@ impl Session {
 
     fn touch_name(&self, space: AddressSpace, offset: AddressValue) -> String {
         let Some(platform) = self.db.platform() else {
-            return addr_dsl(space, offset);
+            return space.dsl_addr(offset);
         };
         let canon = platform.canonicalize(space, offset);
         let byte = if canon.space == i8051_disassembler::platform::i8051::SFR {
             i8051_disassembler::platform::i8051::format_direct(canon.offset as u8)
         } else {
-            addr_dsl(canon.space, canon.offset)
+            canon.space.dsl_addr(canon.offset)
         };
         match canon.bit {
             Some(bit) => format!("{byte}.{bit}"),
@@ -320,7 +373,7 @@ impl Session {
             self.db
                 .region(space)
                 .and_then(|r| r.get_label(offset).map(str::to_string))
-                .unwrap_or_else(|| addr_dsl(space, offset))
+                .unwrap_or_else(|| space.dsl_addr(offset))
         };
 
         let mut callers: Vec<String> = self
@@ -354,7 +407,7 @@ impl Session {
             .collect();
 
         Some(RoutineContext {
-            entry: addr_dsl(space, entry),
+            entry: space.dsl_addr(entry),
             name,
             instructions,
             callers,
@@ -466,7 +519,7 @@ impl Session {
             };
             for (addr, func) in region.functions() {
                 symbols.push(SymbolInfo {
-                    addr: addr_dsl(space, addr),
+                    addr: space.dsl_addr(addr),
                     space: space.dsl_name().to_string(),
                     name: func.name.clone(),
                     kind: "function",
@@ -478,7 +531,7 @@ impl Session {
                     continue;
                 }
                 symbols.push(SymbolInfo {
-                    addr: addr_dsl(space, addr),
+                    addr: space.dsl_addr(addr),
                     space: space.dsl_name().to_string(),
                     name: name.to_string(),
                     kind: "label",
@@ -525,12 +578,12 @@ impl Session {
             .basic_blocks(entry.space, entry.offset)
             .into_iter()
             .map(|block| BlockInfo {
-                start: addr_dsl(entry.space, block.start),
-                end: addr_dsl(entry.space, block.end),
+                start: entry.space.dsl_addr(block.start),
+                end: entry.space.dsl_addr(block.end),
                 successors: block
                     .successors
                     .iter()
-                    .map(|&s| addr_dsl(entry.space, s))
+                    .map(|&s| entry.space.dsl_addr(s))
                     .collect(),
             })
             .collect())
@@ -594,7 +647,7 @@ impl Session {
             .map(str::to_string);
         let routine = self.routine_context(addr.space, addr.offset, &lines);
         Ok(AddressContext {
-            address: addr_dsl(addr.space, addr.offset),
+            address: addr.space.dsl_addr(addr.offset),
             comment,
             routine,
             label,
@@ -762,10 +815,6 @@ fn hex_bytes(bytes: &[u8]) -> String {
         .join(", ")
 }
 
-fn addr_dsl(space: AddressSpace, offset: AddressValue) -> String {
-    format!("{}:{:#x}", space.dsl_name(), offset)
-}
-
 fn xref_kind_name(kind: XrefType) -> &'static str {
     match kind {
         XrefType::Call => "call",
@@ -779,8 +828,8 @@ fn xref_kind_name(kind: XrefType) -> &'static str {
 
 fn xref_info(xref: &Xref) -> XrefInfo {
     XrefInfo {
-        from: addr_dsl(xref.from.space, xref.from.offset),
-        to: addr_dsl(xref.to.space, xref.to.offset),
+        from: xref.from.space.dsl_addr(xref.from.offset),
+        to: xref.to.space.dsl_addr(xref.to.offset),
         kind: xref_kind_name(xref.xref_type),
     }
 }
@@ -1036,6 +1085,21 @@ mod tests {
         assert_eq!(page.returned, DEFAULT_WORKLIST_LIMIT);
         assert!(page.remaining > DEFAULT_WORKLIST_LIMIT);
         assert!(page.cursor.is_some());
+    }
+
+    #[test]
+    fn refusal_displays_suggestions() {
+        let err = ServiceError::refused(
+            Refusal::BarrierStopsAuto {
+                at: "CODE:0x33".into(),
+                barrier: "CODE:0x33..0x34".into(),
+                marked: "data".into(),
+            },
+            vec!["auto_disassemble(address=CODE:0x33)".into()],
+        );
+        let text = err.to_string();
+        assert!(text.contains("auto_disassemble(address=CODE:0x33)"), "{text}");
+        assert!(!text.contains("template failed"), "{text}");
     }
 
     #[test]

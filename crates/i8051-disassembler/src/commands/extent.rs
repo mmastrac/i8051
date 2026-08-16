@@ -101,7 +101,7 @@ impl Apply for MarkUnknown {
 // `Box<DataType>` is transparent, so the recursion nests through tuple variants.
 serialize_test!(
     mark_data_recursive_datatype,
-    "mark_data(data_type=DataType::Array(DataType::Byte, 0x10), range=CODE:0x20..0x30)",
+    "mark_data(range=CODE:0x20..0x30, data_type=DataType::Array(DataType::Byte, 0x10))",
     MarkData {
         range: (crate::platform::i8051::CODE, 0x20..0x30).into(),
         data_type: DataType::Array(Box::new(DataType::Byte), 0x10),

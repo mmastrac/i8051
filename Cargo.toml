@@ -7,6 +7,7 @@ members = [
     "crates/i8051-disassembler-service",
     "crates/i8051-proc-macro",
     "crates/i8051-repl",
+    "crates/i8051-script",
     "crates/i8051-test-runner",
     "crates/m6805",
     "crates/mos6502",
@@ -23,6 +24,7 @@ categories = ["compilers", "embedded", "hardware-support", "emulators", "simulat
 
 [workspace.dependencies]
 i8051-proc-macro = { version = "0.24.0", path = "crates/i8051-proc-macro" }
+i8051-script     = { version = "0.24.0", path = "crates/i8051-script" }
 i8051            = { version = "0.24.0", path = "crates/i8051" }
 i8051-debug-tui  = { version = "0.24.0", path = "crates/i8051-debug-tui" }
 mos6502          = { version = "0.24.0", path = "crates/mos6502" }

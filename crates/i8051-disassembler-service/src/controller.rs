@@ -1,6 +1,7 @@
+use i8051_disassembler::store::dsl;
 use serde::Serialize;
 
-use crate::{ServiceError, Session};
+use crate::{Refusal, ServiceError, Session};
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 /// Where the session is looking.
@@ -99,24 +100,19 @@ impl Controller {
             .collect();
         let Some(first) = covered.first() else { return Ok(()) };
 
-        let space = range.space.dsl_name();
-        let names: Vec<String> = covered
+        let vectors: Vec<String> = covered
             .iter()
-            .map(|e| format!("{space}:{:#x} ({})", e.offset, e.name))
+            .map(|e| format!("{} ({})", range.space.dsl_addr(e.offset), e.name))
             .collect();
-        Err(ServiceError::Apply(format!(
-            "this range covers {} the CPU vectors: {}. Each is where the hardware starts \
-             executing, so whether its bytes are a handler or filler is a question about that \
-             vector, and a range settles it without asking. Decide them one at a time.\n\n\
-             `auto_disassemble(address={space}:{:#x})` if that vector is in use. If it is not, \
-             retire it with `disable_platform_address(address={space}:{:#x}, reason=\"...\")` \
-             first, which records why the hardware never comes here and lets its bytes be \
-             classified like any others. What the firmware writes to IE says which.",
-            if covered.len() == 1 { "one of" } else { "several of" },
-            names.join(", "),
-            first.offset,
-            first.offset,
-        )))
+        let at = range.space.dsl_addr(first.offset);
+        Err(ServiceError::refused(
+            Refusal::RangeCoversVectors { vectors },
+            vec![
+                dsl!(auto_disassemble(address = {at}) # "if that vector is in use"),
+                dsl!(disable_platform_address(address = {at}, reason = "...")
+                    # "if it is provably unused"),
+            ],
+        ))
     }
 
     fn check_barrier_sweep(&self, dsl: &str) -> Result<(), ServiceError> {
@@ -145,18 +141,19 @@ impl Controller {
             EquivalentKind::Code => return Ok(()),
         };
         let end = range.end;
-        let name = space.dsl_name();
-        Err(ServiceError::Apply(format!(
-            "{} is inside {name}:{start:#x}..{end:#x}, which is marked {kind}. A barrier stops \
-             auto-disassembly, so this would record a root, decode nothing, and report success \
-             while doing it.\n\nIf these bytes really are code, drop the barrier first with \
-             `clear_equivalents(addresses={name}:{{{start:#x}..{end:#x}}})`, then re-run \
-             `auto_disassemble(address={})`. If they are not code, the reference that made this \
-             look like an entry point is the thing to explain: the bytes that branch here may \
-             themselves be filler.",
-            crate::addr_dsl(space, offset),
-            crate::addr_dsl(space, offset),
-        )))
+        Err(ServiceError::refused(
+            Refusal::BarrierStopsAuto {
+                at: space.dsl_addr(offset),
+                barrier: space.dsl_range(start, end),
+                marked: kind.to_string(),
+            },
+            vec![
+                dsl!(clear_equivalents(addresses = {space.dsl_set(start, end)})
+                    # "if these bytes are code"),
+                dsl!(auto_disassemble(address = {space.dsl_addr(offset)})
+                    # "after clearing the barrier"),
+            ],
+        ))
     }
 
     fn check_swallows_branch_target(&self, dsl: &str) -> Result<(), ServiceError> {
@@ -200,34 +197,31 @@ impl Controller {
             return Ok(());
         };
 
-        let name = space.dsl_name();
         let listed: Vec<String> = hits
             .iter()
             .take(4)
             .map(|(target, from)| {
-                let from: Vec<String> = from.iter().map(|o| format!("{name}:{o:#x}")).collect();
-                format!("{name}:{target:#x} (from {})", from.join(", "))
+                let from: Vec<String> = from.iter().map(|o| space.dsl_addr(*o)).collect();
+                format!("{} (from {})", space.dsl_addr(*target), from.join(", "))
             })
             .collect();
-        let more = match hits.len().saturating_sub(4) {
-            0 => String::new(),
-            n => format!(", and {n} more"),
-        };
-        Err(ServiceError::Apply(format!(
-            "this range contains {} that code branches to: {}{more}. Marking it data would leave \
-             {} calling into bytes nothing can decode, and the call itself still standing.\n\n\
-             Decide the reference first. If {} is a real routine, stop the range at it with \
-             `mark_data(range={name}:{:#x}..{first_target:#x}, data_type=DataType::Byte)`, then \
-             `auto_disassemble(address={name}:{first_target:#x})`. If the branch is filler decoded \
-             as code, classify the bytes at {} first, which retires the reference and lets this \
-             range through.",
-            if hits.len() == 1 { "an address" } else { "addresses" },
-            listed.join("; "),
-            if first_sources.len() == 1 { "an instruction" } else { "instructions" },
-            format_args!("{name}:{first_target:#x}"),
-            bounds.start,
-            format_args!("{name}:{:#x}", first_sources[0]),
-        )))
+        let target = space.dsl_addr(*first_target);
+        Err(ServiceError::refused(
+            Refusal::RangeSwallowsTargets {
+                omitted: hits.len().saturating_sub(4),
+                targets: listed,
+                first_target: target.clone(),
+                first_source: space.dsl_addr(first_sources[0]),
+                sources: first_sources.len(),
+            },
+            vec![
+                dsl!(mark_data(
+                    range = {space.dsl_range(bounds.start, *first_target)},
+                    data_type = DataType::Byte
+                ) # "if {target} is a real routine, stop the range at it"),
+                dsl!(auto_disassemble(address = {target}) # "then decode it"),
+            ],
+        ))
     }
 
     fn check_cpu_still_needed(&self, dsl: &str) -> Result<(), ServiceError> {
@@ -269,7 +263,7 @@ impl Controller {
         if set.local {
             return self.check_duplicate_local(set, &name);
         }
-        let here = crate::addr_dsl(set.address.space, set.address.offset);
+        let here = set.address.space.dsl_addr(set.address.offset);
         let clash = self
             .session
             .symbols(None)
@@ -303,7 +297,7 @@ impl Controller {
                     && region.is_local_label(at)
                     && region.scope_of(at) == Some(scope)
             })
-            .map(|(at, _)| crate::addr_dsl(space, at));
+            .map(|(at, _)| space.dsl_addr(at));
         let Some(clash) = clash else { return Ok(()) };
         Err(ServiceError::Apply(format!(
             "`{name}` already marks {clash} in this same routine. A local name is scoped to the \
@@ -374,16 +368,21 @@ impl Controller {
         if reasons.is_empty() {
             return Ok(());
         }
-        Err(ServiceError::Apply(format!(
-            "these {} bytes do not all decode like code: {}. Real code branches to instruction \
-             boundaries and stays inside the image.\n\nTry `auto_disassemble(address={})` instead: \
-             it follows control flow from there and stops where flow does, so on a range that is \
-             partly code it decodes the real code and leaves the rest alone. `mark_data` if the \
-             whole range is data, or force=True to disassemble it as-is.",
-            decode.lines.len(),
-            reasons.join("; "),
-            crate::addr_dsl(space, range.range.start)
-        )))
+        Err(ServiceError::refused(
+            Refusal::RangeDoesNotDecode { count: decode.lines.len(), reasons },
+            vec![
+                dsl!(auto_disassemble(address = {space.dsl_addr(range.range.start)})
+                    # "follows flow and stops where it stops"),
+                dsl!(mark_data(
+                    range = {space.dsl_range(range.range.start, range.range.end)},
+                    data_type = DataType::Byte
+                ) # "if the whole range is data"),
+                dsl!(disassemble_range(
+                    range = {space.dsl_range(range.range.start, range.range.end)},
+                    force = True
+                ) # "to decode the bytes as-is"),
+            ],
+        ))
     }
 
     /// Every verb a frontend can invoke.

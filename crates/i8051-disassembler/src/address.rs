@@ -305,13 +305,28 @@ impl AddressSpace {
         self.name[0] == 0
     }
 
-    /// The DSL spelling of this space.
+    /// The DSL form of this space.
     pub fn dsl_name(&self) -> &str {
         self.as_str()
     }
 
-    /// Parse a DSL space spelling. Any name up to [`CAP`](Self::CAP) bytes is
-    /// valid — regions are driver-defined, so there is no fixed vocabulary.
+    /// One address, e.g. `CODE:0x95f`.
+    pub fn dsl_addr(&self, offset: AddressValue) -> String {
+        format!("{}:{offset:#x}", self.dsl_name())
+    }
+
+    /// A half-open range, e.g. `CODE:0x2..0x4`.
+    pub fn dsl_range(&self, start: AddressValue, end: AddressValue) -> String {
+        format!("{}:{start:#x}..{end:#x}", self.dsl_name())
+    }
+
+    /// An address set, e.g. `CODE:{0x2..0x4}`.
+    pub fn dsl_set(&self, start: AddressValue, end: AddressValue) -> String {
+        format!("{}:{{{start:#x}..{end:#x}}}", self.dsl_name())
+    }
+
+    /// Parse a space from its DSL name. Regions are driver-defined, so
+    /// any name up to [`CAP`](Self::CAP) bytes is valid.
     pub fn from_dsl_name(name: &str) -> Option<Self> {
         (name.len() <= Self::CAP).then(|| Self::new(name))
     }

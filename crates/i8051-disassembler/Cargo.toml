@@ -16,6 +16,8 @@ analysis = ["leiden-rs"]
 
 [dependencies]
 i8051.workspace = true
+i8051-proc-macro.workspace = true
+i8051-script.workspace = true
 mos6502.workspace = true
 m6805.workspace = true
 regex = "1.12"

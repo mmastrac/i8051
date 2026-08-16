@@ -130,7 +130,6 @@ mod platform_addr;
 mod pointer;
 
 use std::any::Any;
-use std::collections::BTreeMap;
 use std::io;
 
 pub use auto_disassemble::{AutoDisassemble, ClearAutoDisassembleRoot};
@@ -153,7 +152,7 @@ use serde::de::DeserializeOwned;
 use crate::address::{AddressValue, SpaceAddressRange, SpaceAddressSet, SpaceAddressValue};
 use crate::db::{DataType, Db, Error, Function, Note, NoteId, OperandOverride};
 use crate::store::error::DslError;
-use crate::store::value::Value;
+use crate::store::value::{Fields, Value};
 
 pub trait Environment {
     fn load_file_bytes(
@@ -204,7 +203,7 @@ pub fn boxed(command: impl Command + 'static) -> Box<dyn Command> {
 
 /// Parses a command's kwargs into a boxed payload of type `T`. The registry
 /// stores one monomorphization of this per command.
-pub type CommandParser = fn(BTreeMap<String, Value>) -> Result<Box<dyn Command>, DslError>;
+pub type CommandParser = fn(Fields) -> Result<Box<dyn Command>, DslError>;
 
 /// Type-checks one DSL value.
 pub type ArgCheck = fn(&Value) -> Result<(), DslError>;
@@ -252,10 +251,10 @@ pub trait DslArg {
     const KIND: ArgKind;
     /// The stable wire slug a schema/UI switches on, finer than the JSON type.
     const SLUG: &'static str;
-    /// A one-line spelling hint — the single string errors, schema hints, and
+    /// A one-line syntax hint — the single string errors, schema hints, and
     /// help all share.
     const HINT: &'static str;
-    /// A canonical example spelling, or `None` for free text (whose example
+    /// A canonical example, or `None` for free text (whose example
     /// depends on the argument's *name*, not its type).
     const EXAMPLE: Option<&'static str>;
 }
@@ -280,11 +279,11 @@ dsl_arg!(SpaceAddressSet => AddressSet, "address_set",
 dsl_arg!(String => Text, "text", "quoted text, e.g. \"...\"", None);
 dsl_arg!(usize, AddressValue => Offset, "offset", "a byte offset or length", Some("0x0"));
 dsl_arg!(u8 => Byte, "byte", "a byte value, 0-255", Some("0xFF"));
-dsl_arg!(DataType => Struct, "data_type", "a data-type spelling, e.g. DataType::Byte", Some("DataType::Byte"));
+dsl_arg!(DataType => Struct, "data_type", "a data type, e.g. DataType::Byte", Some("DataType::Byte"));
 dsl_arg!(Option<OperandOverride> => Struct, "operand",
-    "an operand-override spelling, or None to clear", Some("None"));
+    "an operand override, or None to clear", Some("None"));
 dsl_arg!(Function => Struct, "function",
-    "a function-definition spelling, e.g. Function(addr=..., name=\"...\", length=...)",
+    "a function definition, e.g. Function(addr=..., name=\"...\", length=...)",
     Some("Function(addr=CODE:0x100, name=\"main\", signature=None, length=0x40, noreturn=False)"));
 dsl_arg!(Note => Struct, "note",
     "a note, e.g. Note(content=\"...\", tags=[\"todo\"]), or bare \"text\"",
@@ -316,7 +315,7 @@ pub struct CommandEntry {
 pub static COMMANDS: ScatteredMap<&'static str, CommandEntry>;
 
 pub fn parse<T: Command + DeserializeOwned + 'static>(
-    kwargs: BTreeMap<String, Value>,
+    kwargs: Fields,
 ) -> Result<Box<dyn Command>, DslError> {
     let value = Value::Struct {
         name: String::new(),

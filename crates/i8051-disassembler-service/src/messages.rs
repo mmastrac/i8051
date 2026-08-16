@@ -183,18 +183,66 @@ mod tests {
         all
     }
 
+    const FORMS: [(Audience, Level); 3] = [
+        (Audience::Human, Level::Terse),
+        (Audience::Llm, Level::Terse),
+        (Audience::Llm, Level::Verbose),
+    ];
+
     #[test]
     fn every_kind_renders() {
-        let forms = [
-            (Audience::Human, Level::Terse),
-            (Audience::Llm, Level::Terse),
-            (Audience::Llm, Level::Verbose),
-        ];
         for kind in samples() {
-            for (audience, level) in forms {
+            for (audience, level) in FORMS {
                 let text = render_item(&kind, audience, level)
                     .unwrap_or_else(|e| panic!("{}/{audience:?}/{level:?}: {e}", kind.slug()));
                 assert!(!text.trim().is_empty(), "{}", kind.slug());
+            }
+        }
+    }
+
+    fn refusal_samples() -> Vec<crate::Refusal> {
+        use crate::Refusal;
+        let all = vec![
+            Refusal::RangeCoversVectors {
+                vectors: vec!["CODE:0xb (INT_timer0)".into()],
+            },
+            Refusal::BarrierStopsAuto {
+                at: "CODE:0x33".into(),
+                barrier: "CODE:0x33..0x34".into(),
+                marked: "data".into(),
+            },
+            Refusal::RangeSwallowsTargets {
+                targets: vec!["CODE:0x34 (from CODE:0x30)".into()],
+                omitted: 0,
+                first_target: "CODE:0x34".into(),
+                first_source: "CODE:0x30".into(),
+                sources: 1,
+            },
+            Refusal::RangeDoesNotDecode {
+                count: 3,
+                reasons: vec!["1 branch target(s) point outside the loaded image".into()],
+            },
+        ];
+        // A new variant must add a sample.
+        for refusal in &all {
+            match refusal {
+                Refusal::RangeCoversVectors { .. }
+                | Refusal::BarrierStopsAuto { .. }
+                | Refusal::RangeSwallowsTargets { .. }
+                | Refusal::RangeDoesNotDecode { .. } => {}
+            }
+        }
+        all
+    }
+
+    #[test]
+    fn every_refusal_renders() {
+        for refusal in refusal_samples() {
+            let value = serde_json::to_value(&refusal).expect("serialize");
+            for (audience, level) in FORMS {
+                let text = render_value(&value, audience, level)
+                    .unwrap_or_else(|e| panic!("{value}/{audience:?}/{level:?}: {e}"));
+                assert!(!text.trim().is_empty(), "{value}");
             }
         }
     }

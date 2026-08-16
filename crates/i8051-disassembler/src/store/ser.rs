@@ -8,7 +8,7 @@ use serde::ser::{self, Serialize};
 
 use crate::address::{ADDRESS_RANGE_TOKEN, ADDRESS_SET_TOKEN, ADDRESS_TOKEN};
 use crate::store::error::DslError;
-use crate::store::value::{EnumArgs, Value};
+use crate::store::value::{EnumArgs, Fields, Value};
 
 /// Lower a value into the DSL AST.
 pub fn to_value<T: Serialize>(value: &T) -> Result<Value, DslError> {
@@ -201,7 +201,7 @@ impl ser::Serializer for ValueSerializer {
     fn serialize_struct(self, name: &'static str, _len: usize) -> Result<StructBuilder, DslError> {
         Ok(StructBuilder {
             name,
-            fields: BTreeMap::new(),
+            fields: Vec::new(),
         })
     }
 
@@ -215,7 +215,7 @@ impl ser::Serializer for ValueSerializer {
         Ok(VariantStructBuilder {
             type_name: name,
             variant,
-            fields: BTreeMap::new(),
+            fields: Vec::new(),
         })
     }
 }
@@ -310,7 +310,7 @@ impl ser::SerializeMap for MapBuilder {
 
 pub struct StructBuilder {
     name: &'static str,
-    fields: BTreeMap<String, Value>,
+    fields: Fields,
 }
 
 impl ser::SerializeStruct for StructBuilder {
@@ -322,7 +322,7 @@ impl ser::SerializeStruct for StructBuilder {
         value: &T,
     ) -> Result<(), DslError> {
         self.fields
-            .insert(key.to_owned(), value.serialize(ValueSerializer)?);
+            .push((key.to_owned(), value.serialize(ValueSerializer)?));
         Ok(())
     }
     fn end(self) -> Result<Value, DslError> {
@@ -336,7 +336,7 @@ impl ser::SerializeStruct for StructBuilder {
 pub struct VariantStructBuilder {
     type_name: &'static str,
     variant: &'static str,
-    fields: BTreeMap<String, Value>,
+    fields: Fields,
 }
 
 impl ser::SerializeStructVariant for VariantStructBuilder {
@@ -348,7 +348,7 @@ impl ser::SerializeStructVariant for VariantStructBuilder {
         value: &T,
     ) -> Result<(), DslError> {
         self.fields
-            .insert(key.to_owned(), value.serialize(ValueSerializer)?);
+            .push((key.to_owned(), value.serialize(ValueSerializer)?));
         Ok(())
     }
     fn end(self) -> Result<Value, DslError> {

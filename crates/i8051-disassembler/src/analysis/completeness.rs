@@ -17,6 +17,7 @@ use crate::address::{AddressSpace, AddressValue, PhysicalAddr, XrefType};
 use crate::db::Db;
 use crate::labels::LabelKind;
 use crate::region::LeakKind;
+use crate::store::dsl;
 
 /// The phases of a disassembly, in dependency order: nothing later is
 /// trustworthy until the earlier phases are clear (code must be decoded before
@@ -261,7 +262,7 @@ impl ItemKind {
                 );
             }
         }
-        let address = fmt_addr(space, offset);
+        let address = space.dsl_addr(offset);
         let (phase, severity) = (self.phase(), self.severity());
         Item {
             id: format!("{}/{}/{}", phase.name(), self.slug(), address),
@@ -371,20 +372,18 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
 
         // Coverage shrinks silently when bytes go missing.
         for (start, end) in region.mapping_gaps() {
-            let from = fmt_addr(space, start);
-            let to = fmt_addr(space, end);
+            let from = space.dsl_addr(start);
+            let to = space.dsl_addr(end);
+            let len = end - start;
             let suggested = vec![
-                format!(
-                    "map_bytes(address={from}, file=\"...\", file_offset=0x{start:x}, size=0x{:x})",
-                    end - start
-                ),
-                format!("set_constant_bytes(range={}, value=0x0)", fmt_range(space, start, end)),
+                dsl!(map_bytes(address = {from}, file = "...", file_offset = {start:#x}, size = {len:#x})),
+                dsl!(set_constant_bytes(range = {space.dsl_range(start, end)}, value = 0x0)),
             ];
-            items.push(ItemKind::UnmappedGap { from, to, len: end - start }.into_item(
+            items.push(ItemKind::UnmappedGap { from, to, len }.into_item(
                 space,
                 rank,
                 start,
-                Some(fmt_range(space, start, end)),
+                Some(space.dsl_range(start, end)),
                 suggested,
             ));
         }
@@ -394,8 +393,8 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
                 XrefType::Call => Flow::Call,
                 _ => Flow::Jump,
             };
-            let addr = fmt_addr(space, target.target);
-            let from = fmt_addr(space, target.from);
+            let addr = space.dsl_addr(target.target);
+            let from = space.dsl_addr(target.from);
             // The whole decoded run.
             let extent_end = region
                 .instruction_range(target.from)
@@ -410,25 +409,21 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
                 match settle_reference_first(db, space, extent_start, extent_end) {
                     Some(blocked) => vec![blocked],
                     None => vec![
-                        format!(
-                            "clear_equivalents(addresses={}:{{{extent_start:#x}..{extent_end:#x}}})",
-                            space.dsl_name()
-                        ),
-                        format!(
-                            "mark_data(range={extent}, data_type=DataType::Byte)  # if these bytes \
-                             are not code"
-                        ),
+                        dsl!(clear_equivalents(
+                            addresses = {space.dsl_set(extent_start, extent_end)}
+                        )),
+                        dsl!(mark_data(range = {extent}, data_type = DataType::Byte)
+                            # "if these bytes are not code"),
                     ],
                 };
             let entry = if !region.has_byte(target.target) {
                 let space_name = space.dsl_name();
                 let bits = region.covering_address_bits();
-                let mut suggested = vec![format!("peek(address={from}, lines=4)")];
+                let mut suggested = vec![dsl!(peek(address = {from}, lines = 4))];
                 suggested.extend(retire.clone());
                 suggested.extend(reclassify.clone());
                 if region.address_bits().is_none() {
-                    suggested
-                        .push(format!("set_address_bits(space=\"{space_name}\", bits={bits})"));
+                    suggested.push(dsl!(set_address_bits(space = "{space_name}", bits = {bits})));
                 }
                 ItemKind::TargetOutsideImage { verb, from, to: addr }
                     .into_item(space, rank, target.from, None, suggested)
@@ -437,14 +432,12 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
                     .covering_instruction(target.target)
                     .map(|(start, end)| format!("{start:#x}..{end:#x}"))
                     .unwrap_or_else(|| format!("{:#x}", target.target));
-                let mut suggested = vec![format!("peek(address={from}, lines=4)")];
+                let covering_set = format!("{}:{{{covering}}}", space.dsl_name());
+                let mut suggested = vec![dsl!(peek(address = {from}, lines = 4))];
                 suggested.extend(retire.clone());
                 suggested.extend(reclassify.clone());
-                suggested.push(format!(
-                    "clear_equivalents(addresses={}:{{{covering}}})",
-                    space.dsl_name()
-                ));
-                suggested.push(format!("auto_disassemble(address={addr})"));
+                suggested.push(dsl!(clear_equivalents(addresses = {covering_set})));
+                suggested.push(dsl!(auto_disassemble(address = {addr})));
                 ItemKind::MisalignedTarget {
                     verb,
                     from,
@@ -456,20 +449,16 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
                 region.get_equivalent(target.target)
                 && range.equivalent.kind() != crate::db::EquivalentKind::Code
             {
-                let space_name = space.dsl_name();
                 let marked = match range.equivalent.kind() {
                     crate::db::EquivalentKind::Data => "data",
                     _ => "unknown",
                 };
                 let mut suggested = vec![
-                    format!("peek(address={addr}, lines=4)"),
-                    format!("peek(address={from}, lines=4)"),
-                    format!(
-                        "clear_equivalents(addresses={space_name}:{{{start:#x}..{:#x}}})  \
-                         # if {addr} is code",
-                        range.end
-                    ),
-                    format!("auto_disassemble(address={addr})  # after clearing the barrier"),
+                    dsl!(peek(address = {addr}, lines = 4)),
+                    dsl!(peek(address = {from}, lines = 4)),
+                    dsl!(clear_equivalents(addresses = {space.dsl_set(start, range.end)})
+                        # "if {addr} is code"),
+                    dsl!(auto_disassemble(address = {addr}) # "after clearing the barrier"),
                 ];
                 suggested.extend(retire.clone());
                 suggested.extend(reclassify.clone());
@@ -478,13 +467,13 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
                     from,
                     to: addr,
                     barrier: Some(UnfollowedBarrier {
-                        range: format!("{space_name}:{start:#x}..{:#x}", range.end),
+                        range: space.dsl_range(start, range.end),
                         marked: marked.to_string(),
                     }),
                 }
                 .into_item(space, rank, target.target, None, suggested)
             } else {
-                let suggested = vec![format!("auto_disassemble(address={addr})")];
+                let suggested = vec![dsl!(auto_disassemble(address = {addr}))];
                 ItemKind::UnfollowedTarget { verb, from, to: addr, barrier: None }
                     .into_item(space, rank, target.target, None, suggested)
             };
@@ -492,11 +481,11 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
         }
 
         for leak in region.flow_leaks() {
-            let from = fmt_addr(space, leak.from);
-            let to = fmt_addr(space, leak.to);
+            let from = space.dsl_addr(leak.from);
+            let to = space.dsl_addr(leak.to);
             let entry = match leak.kind {
                 LeakKind::IntoUndefined => {
-                    let suggested = vec![format!("auto_disassemble(address={to})")];
+                    let suggested = vec![dsl!(auto_disassemble(address = {to}))];
                     ItemKind::FlowIntoUndefined { from, to }
                         .into_item(space, rank, leak.to, None, suggested)
                 }
@@ -506,37 +495,32 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
                         .map(|(_, end)| end)
                         .unwrap_or(leak.from + 1);
                     let code_start = code_run_start(db, space, leak.from);
-                    let code_extent = fmt_range(space, code_start, code_end);
+                    let code_extent = space.dsl_range(code_start, code_end);
                     let (data_start, data_end) = match region.get_equivalent(leak.to) {
                         crate::db::EquivalentAt::Defined { start, range } => (start, range.end),
                         crate::db::EquivalentAt::Undefined(_) => (leak.to, leak.to + 1),
                     };
-                    let data_extent = format!("{data_start:#x}..{data_end:#x}");
-                    let as_code = format!(
-                        "clear_equivalents(addresses={}:{{{data_extent}}})  # if {to} is code",
-                        space.dsl_name()
-                    );
+                    let as_code =
+                        dsl!(clear_equivalents(addresses = {space.dsl_set(data_start, data_end)})
+                            # "if {to} is code");
                     let then_decode =
-                        format!("auto_disassemble(address={to})  # after clearing the barrier");
+                        dsl!(auto_disassemble(address = {to}) # "after clearing the barrier");
                     let mut as_filler: Vec<String> =
                         retire_vector_first(db, space, code_start, code_end)
                             .into_iter()
                             .collect();
-                    as_filler.push(format!(
-                        "clear_equivalents(addresses={}:{{{code_start:#x}..{code_end:#x}}})",
-                        space.dsl_name()
-                    ));
-                    as_filler.push(format!(
-                        "mark_data(range={code_extent}, data_type=DataType::Byte)  # if {from} is \
-                         filler rather than code"
-                    ));
+                    as_filler.push(dsl!(clear_equivalents(
+                        addresses = {space.dsl_set(code_start, code_end)}
+                    )));
+                    as_filler.push(dsl!(mark_data(range = {code_extent}, data_type = DataType::Byte)
+                        # "if {from} is filler rather than code"));
                     let decode = db.peek_linear(space, leak.to, data_end);
                     let decodes_like_code = decode.out_of_range_targets == 0
                         && decode.misaligned_targets == 0
                         && decode.self_misaligned_targets == 0;
 
                     // The likelier reading leads the list.
-                    let mut suggested = vec![format!("peek(address={from}, lines=4)")];
+                    let mut suggested = vec![dsl!(peek(address = {from}, lines = 4))];
                     if decodes_like_code {
                         suggested.push(as_code);
                         suggested.push(then_decode);
@@ -549,7 +533,7 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
                     ItemKind::FlowIntoData {
                         from,
                         to,
-                        barrier: fmt_range(space, data_start, data_end),
+                        barrier: space.dsl_range(data_start, data_end),
                         decodes_like_code,
                     }
                     .into_item(space, rank, leak.to, None, suggested)
@@ -560,21 +544,16 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
                         .map(|(_, end)| end)
                         .unwrap_or(leak.from + 1);
                     let code_start = code_run_start(db, space, leak.from);
-                    let code_extent = fmt_range(space, code_start, code_end);
-                    let mut suggested = vec![format!("peek(address={from}, lines=4)")];
+                    let code_extent = space.dsl_range(code_start, code_end);
+                    let mut suggested = vec![dsl!(peek(address = {from}, lines = 4))];
                     suggested.extend(retire_vector_first(db, space, code_start, code_end));
-                    suggested.push(format!(
-                        "clear_equivalents(addresses={}:{{{code_start:#x}..{code_end:#x}}})",
-                        space.dsl_name()
-                    ));
-                    suggested.push(format!(
-                        "mark_data(range={code_extent}, data_type=DataType::Byte)  # if {from} is \
-                         filler rather than code"
-                    ));
-                    suggested.push(format!(
-                        "map_bytes(address={to}, file=\"...\", file_offset=0x0, size=0x0)  # if \
-                         the image continues past what is loaded"
-                    ));
+                    suggested.push(dsl!(clear_equivalents(
+                        addresses = {space.dsl_set(code_start, code_end)}
+                    )));
+                    suggested.push(dsl!(mark_data(range = {code_extent}, data_type = DataType::Byte)
+                        # "if {from} is filler rather than code"));
+                    suggested.push(dsl!(map_bytes(address = {to}, file = "...", file_offset = 0x0, size = 0x0)
+                        # "if the image continues past what is loaded"));
                     ItemKind::FlowOffEnd { from, to }
                         .into_item(space, rank, leak.from, None, suggested)
                 }
@@ -583,10 +562,10 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
         }
 
         for (start, end) in region.undefined_spans() {
-            let range = fmt_range(space, start, end);
+            let range = space.dsl_range(start, end);
             let suggested = vec![
-                format!("disassemble_range(range={range})"),
-                format!("mark_data(range={range}, data_type=DataType::Byte)"),
+                dsl!(disassemble_range(range = {range})),
+                dsl!(mark_data(range = {range}, data_type = DataType::Byte)),
             ];
             items.push(
                 ItemKind::UndefinedBytes { range: range.clone(), count: end - start }
@@ -595,34 +574,34 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
         }
 
         for (offset, label_kind) in region.provisional_labels() {
-            let at = fmt_addr(space, offset);
+            let at = space.dsl_addr(offset);
             let role = match label_kind {
                 LabelKind::Sub => "subroutine",
                 LabelKind::Loc => "jump target",
             };
-            // Give enough context to name the routine from this item alone
+            // Give enough context to label the routine from this item alone
             // (a caller and the first instruction), so the model does not have
             // to go read the listing before it can commit a name.
             let caller = first_caller(db, space, offset);
             let starts = region.instruction_text(offset);
             // Either mark means an earlier pass already engaged with this
-            // address and still did not name it.
+            // address and still did not label it.
             let draft = region.is_draft_label(offset);
             let noted = !db.get_notes_overlapping(space, offset..offset + 1).is_empty();
             let working_name =
                 draft.then(|| region.get_label(offset).unwrap_or_default().to_string());
             let suggested = if draft {
-                vec![format!("set_label(address={at}, label=\"...\")")]
+                vec![dsl!(set_label(address = {at}, label = "..."))]
             } else if matches!(label_kind, LabelKind::Loc) {
                 // Reached only by jumps.
                 vec![
-                    format!("set_label(address={at}, label=\".loop\", local=True)"),
-                    format!("set_label(address={at}, label=\"...\")"),
+                    dsl!(set_label(address = {at}, label = ".loop", local = True)),
+                    dsl!(set_label(address = {at}, label = "...")),
                 ]
             } else {
                 vec![
-                    format!("set_label(address={at}, label=\"...\")"),
-                    format!("set_label(address={at}, label=\"...\", provisional=True)"),
+                    dsl!(set_label(address = {at}, label = "...")),
+                    dsl!(set_label(address = {at}, label = "...", provisional = True)),
                 ]
             };
             let incoming = db.xrefs_to(&PhysicalAddr { space, offset });
@@ -641,10 +620,10 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
         }
         
         for (offset, refs, first, inferred) in region.unnamed_pointer_targets() {
-            let at = fmt_addr(space, offset);
-            let suggested = vec![format!("set_label(address={at}, label=\"...\")")];
+            let at = space.dsl_addr(offset);
+            let suggested = vec![dsl!(set_label(address = {at}, label = "..."))];
             items.push(
-                ItemKind::UnnamedData { at, refs, first: fmt_addr(space, first), inferred }
+                ItemKind::UnnamedData { at, refs, first: space.dsl_addr(first), inferred }
                     .into_item(space, rank, offset, None, suggested)
                     .ranked_by_callers(refs, first),
             );
@@ -656,11 +635,11 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
             if !db.get_notes_overlapping(space, offset..offset + 1).is_empty() {
                 continue;
             }
-            let at = fmt_addr(space, offset);
+            let at = space.dsl_addr(offset);
             let has_comment = region.get_comment(offset).is_some();
-            let mut suggested = vec![format!("set_note(address={at}, note=Note(content=\"...\"))")];
+            let mut suggested = vec![dsl!(set_note(address = {at}, note = Note(content = "...")))];
             if !has_comment {
-                suggested.push(format!("set_comment(address={at}, comment=\"...\")"));
+                suggested.push(dsl!(set_comment(address = {at}, comment = "...")));
             }
             items.push(
                 ItemKind::UndocumentedRoutine { at, name, has_comment }
@@ -672,14 +651,12 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
     // The CPU's own vectors. Entry points whether or not anything references
     // them.
     for entry in db.undecoded_entry_points() {
-        let at = fmt_addr(entry.space, entry.offset);
+        let at = entry.space.dsl_addr(entry.offset);
         let suggested = vec![
-            format!("peek(address={at}, lines=4)"),
-            format!("auto_disassemble(address={at})  # if the vector is in use"),
-            format!(
-                "disable_platform_address(address={at}, reason=\"...\")  # if this address is \
-                 provably unused"
-            ),
+            dsl!(peek(address = {at}, lines = 4)),
+            dsl!(auto_disassemble(address = {at}) # "if the vector is in use"),
+            dsl!(disable_platform_address(address = {at}, reason = "...")
+                # "if this address is provably unused"),
         ];
         items.push(
             ItemKind::UndecodedEntryPoint {
@@ -693,13 +670,16 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
 
     // An instruction with an ambiguous operand.
     for (site, value, spaces) in db.undecided_operands() {
-        let at = fmt_addr(site.space, site.offset);
-        let candidates: Vec<String> = spaces.iter().map(|s| fmt_addr(*s, value)).collect();
+        let at = site.space.dsl_addr(site.offset);
+        let candidates: Vec<String> = spaces.iter().map(|s| s.dsl_addr(value)).collect();
         let mut suggested: Vec<String> = spaces
             .iter()
-            .map(|s| format!("set_operand_pointer(address={at}, space=\"{}\")", s.dsl_name()))
+            .map(|s| {
+                let sp = s.dsl_name();
+                dsl!(set_operand_pointer(address = {at}, space = "{sp}"))
+            })
             .collect();
-        suggested.push(format!("set_operand_value(address={at})"));
+        suggested.push(dsl!(set_operand_value(address = {at})));
         items.push(
             ItemKind::UndecidedOperand { at, value: format!("0x{value:x}"), candidates }
                 .into_item(site.space, usize::MAX, site.offset, None, suggested)
@@ -741,7 +721,7 @@ fn first_caller(db: &Db, space: AddressSpace, offset: AddressValue) -> Option<St
     let edge = xrefs
         .iter()
         .find(|x| matches!(x.xref_type, XrefType::Call | XrefType::Jump))?;
-    let from = fmt_addr(edge.from.space, edge.from.offset);
+    let from = edge.from.space.dsl_addr(edge.from.offset);
     match db.region(edge.from.space).and_then(|r| r.get_label(edge.from.offset)) {
         Some(name) => Some(format!("{from} ({name})")),
         None => Some(from),
@@ -805,12 +785,10 @@ fn settle_reference_first(
             })
             .map(|x| (offset, x.from.offset))
     })?;
-    let target = fmt_addr(space, target);
-    let from = fmt_addr(space, from);
-    Some(format!(
-        "peek(address={from}, lines=4)  # {target} cannot be marked data while {from} branches \
-         to it; settle whether {from} is code first"
-    ))
+    let target = space.dsl_addr(target);
+    let from = space.dsl_addr(from);
+    Some(dsl!(peek(address = {from}, lines = 4)
+        # "{target} cannot be marked data while {from} branches to it. Settle whether {from} is code first"))
 }
 
 fn retire_vector_first(
@@ -826,20 +804,10 @@ fn retire_vector_first(
             && (start..end).contains(&e.offset)
             && !region.is_some_and(|r| r.platform_address_disabled(e.offset))
     })?;
-    let at = fmt_addr(space, entry.offset);
-    Some(format!(
-        "disable_platform_address(address={at}, reason=\"...\")  # {at} ({}) is a vector; its \
-         bytes cannot be classified until it is retired",
-        entry.name
-    ))
-}
-
-fn fmt_addr(space: AddressSpace, offset: AddressValue) -> String {
-    format!("{}:{:#x}", space.dsl_name(), offset)
-}
-
-fn fmt_range(space: AddressSpace, start: AddressValue, end: AddressValue) -> String {
-    format!("{}:{:#x}..{:#x}", space.dsl_name(), start, end)
+    let at = space.dsl_addr(entry.offset);
+    let name = entry.name;
+    Some(dsl!(disable_platform_address(address = {at}, reason = "...")
+        # "{at} ({name}) is a vector: retire it before classifying its bytes"))
 }
 
 #[cfg(test)]
@@ -906,7 +874,7 @@ mod tests {
 
     #[test]
     fn decoded_and_named_done() {
-        // Auto-disassemble from both roots (follows the call), name the routines.
+        // Auto-disassemble from both roots (follows the call), label the routines.
         let db = db_with(vec![
             boxed(AutoDisassemble::new((CODE, 0u32))),
             boxed(SetLabel::new((CODE, 0u32), "reset".to_string(), false, false)),
@@ -1497,9 +1465,6 @@ mod tests {
         }
     }
 
-    /// A database saved before the classification guards existed can hold a
-    /// call target inside a data range. `auto_disassemble` cannot clear that on
-    /// its own, so the item has to name the barrier and the verb that drops it.
     #[test]
     fn barrier_target_says_clear() {
         use crate::commands::MarkData;

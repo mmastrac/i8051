@@ -274,6 +274,15 @@ impl<'a> Lexer<'a> {
     }
 }
 
+/// The byte length of a leading string token.
+pub(crate) fn leading_string_len(input: &str) -> Option<usize> {
+    let mut lexer = Lexer::new(input);
+    match lexer.next_token() {
+        Ok(Token::String(_)) => Some(lexer.offset()),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::store::{from_dsl, parse_call};

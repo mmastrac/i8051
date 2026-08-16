@@ -189,7 +189,7 @@ pub(crate) fn json<T: Serialize>(value: T) -> Result<Value, ServiceError> {
 }
 
 pub(crate) fn kwargs_to_json(
-    kwargs: std::collections::BTreeMap<String, i8051_disassembler::store::value::Value>,
+    kwargs: i8051_disassembler::store::value::Fields,
 ) -> Map<String, Value> {
     use i8051_disassembler::store::value::Value as Dsl;
     kwargs
@@ -327,7 +327,7 @@ use ArgType::{Boolean, Integer, String as Str};
 static VERBS: &[VerbDef] = &[
     VerbDef {
         name: "help",
-        doc: "The syntax of one verb: its arguments, their spellings, and a filled example. \
+        doc: "The syntax of one verb: its arguments, how to write them, and a filled example. \
               Without `verb`, every verb with its example.",
         args: &[ArgDecl::opt("verb", Str)],
         handler: Handler::Query(|_, a| match a.opt_str("verb") {

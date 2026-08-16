@@ -11,7 +11,7 @@ pub(crate) fn command_focus(dsl: &str) -> Option<String> {
     let Value::Struct { fields, .. } = command.to_value() else {
         return None;
     };
-    fields.values().find_map(focus_of_value)
+    fields.iter().find_map(|(_, value)| focus_of_value(value))
 }
 
 pub(crate) fn build_command_dsl(
@@ -34,11 +34,11 @@ pub(crate) fn build_command_dsl(
         }
     }
 
-    let mut kwargs = std::collections::BTreeMap::new();
+    let mut kwargs = i8051_script::Fields::new();
     for arg in entry.args {
         let Some(json) = args.get(arg.name) else {
             if arg.kind == ArgKind::Flag {
-                kwargs.insert(arg.name.to_string(), Value::Bool(false));
+                kwargs.push((arg.name.to_string(), Value::Bool(false)));
                 continue;
             }
             return Err(ServiceError::Parse(format!(
@@ -48,7 +48,7 @@ pub(crate) fn build_command_dsl(
         };
         let value = json_to_value(arg.kind, json)
             .map_err(|e| ServiceError::Parse(format!("argument `{}`: {e}", arg.name)))?;
-        kwargs.insert(arg.name.to_string(), value);
+        kwargs.push((arg.name.to_string(), value));
     }
     i8051_disassembler::store::qualify_bare_variants(entry, &mut kwargs);
     let command = (entry.parse)(kwargs.clone()).map_err(|raw| {
@@ -84,7 +84,7 @@ fn json_to_value(kind: ArgKind, json: &Json) -> Result<Value, String> {
             _ => Err("expected an integer".to_string()),
         },
         _ => {
-            let s = json.as_str().ok_or("expected a DSL spelling string")?;
+            let s = json.as_str().ok_or("expected a string holding DSL text")?;
             Ok(parse(s).unwrap_or_else(|_| Value::String(s.to_string())))
         }
     }

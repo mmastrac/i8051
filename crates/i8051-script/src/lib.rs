@@ -1,10 +1,9 @@
+//! The DSL value model, shared by the disassembler and the `dsl!` macro.
+
 use std::collections::BTreeMap;
 
-/// The DSL abstract syntax tree. Every serializable value is lowered into this
-/// shape, then rendered to text (or parsed back from it). It is the single
-/// pivot between Rust types and the textual DSL — both the generic
-/// [`Serializer`](crate::store::ser) and [`Deserializer`](crate::store::de)
-/// speak only `Value`.
+/// The DSL abstract syntax tree: the one pivot between Rust types and
+/// DSL text.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Null,
@@ -32,12 +31,12 @@ pub enum Value {
     /// A top-level command: `name(field=value, ...)`.
     Call {
         name: String,
-        kwargs: BTreeMap<String, Value>,
+        kwargs: Fields,
     },
     /// A named struct: `Name(field=value, ...)`.
     Struct {
         name: String,
-        fields: BTreeMap<String, Value>,
+        fields: Fields,
     },
     /// An enum variant: `Type::Variant`, `Type::Variant(a, b)`, or
     /// `Type::Variant(field=value)`.
@@ -46,13 +45,18 @@ pub enum Value {
         variant: String,
         args: EnumArgs,
     },
+    /// Pre-rendered DSL text, spliced as-is. Never produced by parsing.
+    Verbatim(String),
 }
+
+/// Fields in the order they were declared or written.
+pub type Fields = Vec<(String, Value)>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EnumArgs {
     Unit,
     Positional(Vec<Value>),
-    Named(BTreeMap<String, Value>),
+    Named(Fields),
 }
 
 impl Value {
@@ -79,7 +83,10 @@ impl Value {
 
     pub fn field(&self, name: &str) -> Option<&Value> {
         match self {
-            Self::Struct { fields, .. } | Self::Call { kwargs: fields, .. } => fields.get(name),
+            Self::Struct { fields, .. } | Self::Call { kwargs: fields, .. } => fields
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value),
             _ => None,
         }
     }
@@ -126,7 +133,26 @@ impl Value {
                     format!("{type_name}::{variant}({})", render_kwargs(fields))
                 }
             },
+            Self::Verbatim(text) => text.clone(),
         }
+    }
+}
+
+/// Render `name(key=value, ...)` in the given key order, so arguments
+/// stay in the command's declared order. Appends an optional
+/// `# comment`. The `dsl!` macro expands to this.
+pub fn render_call(name: &str, kwargs: &[(&str, Value)], comment: Option<&str>) -> String {
+    let call = Value::Call {
+        name: name.to_string(),
+        kwargs: kwargs
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.clone()))
+            .collect(),
+    }
+    .render();
+    match comment {
+        Some(comment) => format!("{call}  # {comment}"),
+        None => call,
     }
 }
 
@@ -138,7 +164,7 @@ fn render_seq(items: &[Value]) -> String {
         .join(", ")
 }
 
-fn render_kwargs(fields: &BTreeMap<String, Value>) -> String {
+fn render_kwargs(fields: &Fields) -> String {
     fields
         .iter()
         .map(|(key, value)| format!("{key}={}", value.render()))

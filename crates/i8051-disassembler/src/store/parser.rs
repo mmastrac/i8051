@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::store::error::DslError;
 use crate::store::lexer::{Lexer, Token};
-use crate::store::value::{EnumArgs, Value};
+use crate::store::value::{EnumArgs, Fields, Value};
 
 pub struct Parser<'a> {
     lexer: Lexer<'a>,
@@ -291,15 +291,14 @@ impl<'a> Parser<'a> {
                 unreachable!()
             };
             if matches!(self.peek()?, Token::Equals) {
-                let mut fields = BTreeMap::new();
-                fields.insert(name, self.parse_value_after_equals()?);
+                let mut fields = vec![(name, self.parse_value_after_equals()?)];
                 while matches!(self.peek()?, Token::Comma) {
                     self.bump()?;
                     if matches!(self.peek()?, Token::RParen) {
                         break;
                     }
                     let key = self.parse_kwarg_key()?;
-                    fields.insert(key, self.parse_value_after_equals()?);
+                    fields.push((key, self.parse_value_after_equals()?));
                 }
                 self.expect(Token::RParen, "expected ')'")?;
                 return Ok(EnumArgs::Named(fields));
@@ -321,14 +320,14 @@ impl<'a> Parser<'a> {
         Ok(EnumArgs::Positional(args))
     }
 
-    fn parse_kwargs(&mut self) -> Result<BTreeMap<String, Value>, DslError> {
-        let mut fields = BTreeMap::new();
+    fn parse_kwargs(&mut self) -> Result<Fields, DslError> {
+        let mut fields = Fields::new();
         if matches!(self.peek()?, Token::RParen) {
             return Ok(fields);
         }
         loop {
             let key = self.parse_kwarg_key()?;
-            fields.insert(key, self.parse_value_after_equals()?);
+            fields.push((key, self.parse_value_after_equals()?));
             match self.peek()? {
                 Token::Comma => {
                     self.bump()?;
@@ -426,13 +425,13 @@ mod tests {
             value,
             Value::Call {
                 name: "auto_disassemble".into(),
-                kwargs: BTreeMap::from([(
+                kwargs: vec![(
                     "address".into(),
                     Value::Address {
                         space: "CODE".into(),
                         offset: 0x1234,
                     }
-                )]),
+                )],
             }
         );
     }

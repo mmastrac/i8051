@@ -211,7 +211,7 @@ mod tests {
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(!written.trim_start().starts_with('['), "should be DSL, got JSON: {written}");
         assert!(!written.contains(r#""command""#), "should be DSL, got JSON: {written}");
-        assert!(written.contains("set_label(address=CODE:0x0, label=\"reset\", local=False, provisional=False)"));
+        assert!(written.contains("set_label(address=CODE:0x0, label=\"reset\", provisional=False, local=False)"));
         assert!(written.contains("set_comment"));
 
         let reloaded = Session::open(&path).expect("reopen dsl");

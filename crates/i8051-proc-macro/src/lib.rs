@@ -346,3 +346,195 @@ fn ident_to_path(ident: &syn::Ident) -> Path {
         }]),
     }
 }
+
+/// Renders a DSL call written as tokens.
+///
+/// `dsl!(verb(key = value, ...))` expands to an
+/// `i8051_script::render_call` invocation producing a `String`, so
+/// every formatting decision lives with the value model. Values:
+/// string and integer literals, paths (`DataType::Byte`, `True`),
+/// nested calls (`Note(content = "...")`), and interpolations:
+/// `{ident}`, `{ident:#x}`, or `{expr}` for pre-rendered DSL text.
+/// Braces inside string literals interpolate too. A trailing
+/// `# "text"` appends a comment.
+#[proc_macro]
+pub fn dsl(input: TokenStream) -> TokenStream {
+    let call = parse_macro_input!(input as DslCall);
+    let name = call.name.to_string();
+    let kwargs = emit_dsl_kwargs(&call);
+    let comment = match &call.comment {
+        None => quote! { ::core::option::Option::None },
+        Some(lit) if lit.value().contains('{') => {
+            quote! { ::core::option::Option::Some(&::std::format!(#lit)) }
+        }
+        Some(lit) => quote! { ::core::option::Option::Some(#lit) },
+    };
+    TokenStream::from(quote! {
+        ::i8051_script::render_call(#name, &[#(#kwargs),*], #comment)
+    })
+}
+
+fn emit_dsl_kwargs(call: &DslCall) -> Vec<proc_macro2::TokenStream> {
+    call.kwargs
+        .iter()
+        .map(|kwarg| {
+            let key = kwarg.key.to_string();
+            let value = emit_dsl_value(&kwarg.value);
+            quote! { (#key, #value) }
+        })
+        .collect()
+}
+
+fn emit_dsl_value(value: &DslValue) -> proc_macro2::TokenStream {
+    let val = quote! { ::i8051_script::Value };
+    match value {
+        DslValue::Str(lit) if lit.value().contains('{') => {
+            quote! { #val::String(::std::format!(#lit)) }
+        }
+        DslValue::Str(lit) => quote! { #val::String((#lit).into()) },
+        DslValue::Int(lit) => {
+            let text = lit.token().to_string();
+            quote! { #val::Verbatim((#text).into()) }
+        }
+        DslValue::Path(path) if path.is_ident("True") => quote! { #val::Bool(true) },
+        DslValue::Path(path) if path.is_ident("False") => quote! { #val::Bool(false) },
+        DslValue::Path(path) if path.segments.len() == 2 => {
+            let type_name = path.segments[0].ident.to_string();
+            let variant = path.segments[1].ident.to_string();
+            quote! {
+                #val::Enum {
+                    type_name: (#type_name).into(),
+                    variant: (#variant).into(),
+                    args: ::i8051_script::EnumArgs::Unit,
+                }
+            }
+        }
+        DslValue::Path(path) => {
+            let text = path
+                .segments
+                .iter()
+                .map(|s| s.ident.to_string())
+                .collect::<Vec<_>>()
+                .join("::");
+            quote! { #val::Verbatim((#text).into()) }
+        }
+        DslValue::Nested(call) => {
+            let name = call.name.to_string();
+            let fields = call.kwargs.iter().map(|kwarg| {
+                let key = kwarg.key.to_string();
+                let value = emit_dsl_value(&kwarg.value);
+                quote! { ((#key).into(), #value) }
+            });
+            quote! {
+                #val::Struct {
+                    name: (#name).into(),
+                    fields: ::std::vec![#(#fields),*],
+                }
+            }
+        }
+        DslValue::Named(name) => {
+            quote! { #val::Verbatim(::std::string::ToString::to_string(&#name)) }
+        }
+        DslValue::NamedSpec(name, spec) => {
+            let template = syn::LitStr::new(&format!("{{{name}:{spec}}}"), Span::call_site());
+            quote! { #val::Verbatim(::std::format!(#template)) }
+        }
+        DslValue::Expr(expr) => {
+            quote! { #val::Verbatim(::std::string::ToString::to_string(&(#expr))) }
+        }
+    }
+}
+
+struct DslCall {
+    name: syn::Ident,
+    kwargs: Punctuated<DslKwarg, Token![,]>,
+    comment: Option<syn::LitStr>,
+}
+
+struct DslKwarg {
+    key: syn::Ident,
+    value: DslValue,
+}
+
+enum DslValue {
+    Str(syn::LitStr),
+    Int(syn::LitInt),
+    Path(Path),
+    Nested(Box<DslCall>),
+    Named(syn::Ident),
+    NamedSpec(syn::Ident, String),
+    Expr(Expr),
+}
+
+impl syn::parse::Parse for DslCall {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let name: syn::Ident = input.parse()?;
+        let content;
+        syn::parenthesized!(content in input);
+        let kwargs = Punctuated::parse_terminated(&content)?;
+        let comment = if input.peek(Token![#]) {
+            input.parse::<Token![#]>()?;
+            Some(input.parse()?)
+        } else {
+            None
+        };
+        Ok(DslCall {
+            name,
+            kwargs,
+            comment,
+        })
+    }
+}
+
+impl syn::parse::Parse for DslKwarg {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let key: syn::Ident = input.parse()?;
+        input.parse::<Token![=]>()?;
+        let value: DslValue = input.parse()?;
+        Ok(DslKwarg { key, value })
+    }
+}
+
+impl syn::parse::Parse for DslValue {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        if input.peek(syn::LitStr) {
+            return Ok(DslValue::Str(input.parse()?));
+        }
+        if input.peek(syn::LitInt) {
+            return Ok(DslValue::Int(input.parse()?));
+        }
+        if input.peek(syn::token::Brace) {
+            let content;
+            syn::braced!(content in input);
+            return parse_interpolation(content.parse()?);
+        }
+        if input.peek(syn::Ident) {
+            if input.peek2(syn::token::Paren) {
+                let nested: DslCall = input.parse()?;
+                return Ok(DslValue::Nested(Box::new(nested)));
+            }
+            return Ok(DslValue::Path(input.parse()?));
+        }
+        Err(input.error("expected a DSL value"))
+    }
+}
+
+/// `{ident}`, `{ident:spec}`, or `{expr}`.
+fn parse_interpolation(tokens: proc_macro2::TokenStream) -> syn::Result<DslValue> {
+    let trees: Vec<proc_macro2::TokenTree> = tokens.clone().into_iter().collect();
+    if let [proc_macro2::TokenTree::Ident(name)] = trees.as_slice() {
+        return Ok(DslValue::Named(name.clone()));
+    }
+    if let [
+        proc_macro2::TokenTree::Ident(name),
+        proc_macro2::TokenTree::Punct(colon),
+        rest @ ..,
+    ] = trees.as_slice()
+        && colon.as_char() == ':'
+        && !matches!(rest, [proc_macro2::TokenTree::Punct(p), ..] if p.as_char() == ':')
+    {
+        let spec: String = rest.iter().map(ToString::to_string).collect();
+        return Ok(DslValue::NamedSpec(name.clone(), spec));
+    }
+    Ok(DslValue::Expr(syn::parse2(tokens)?))
+}

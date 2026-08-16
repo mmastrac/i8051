@@ -1,0 +1,1 @@
+these {{ count }} bytes do not all decode like code: {{ reasons|join("; ") }}. Real code branches to instruction boundaries and stays inside the image. auto_disassemble follows control flow and stops where it ends, so on a range that is partly code it decodes the real code and leaves the rest alone.

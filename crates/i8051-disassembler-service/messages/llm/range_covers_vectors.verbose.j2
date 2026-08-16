@@ -1,0 +1,1 @@
+this range covers {% if vectors|length == 1 %}one{% else %}several{% endif %} of the CPU vectors: {{ vectors|join(", ") }}. Each is where the hardware starts executing, so whether its bytes are a handler or filler is a question about that vector, and a range settles it without asking. Decide them one at a time.

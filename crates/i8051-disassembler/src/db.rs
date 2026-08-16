@@ -1067,11 +1067,11 @@ loc_0010:
 
         let dsl = crate::store::to_dsl_many(&db.to_commands());
         assert!(
-            dsl.contains("disassemble_range(force=False, range=CODE:0x0..0x3)"),
+            dsl.contains("disassemble_range(range=CODE:0x0..0x3, force=False)"),
             "code island coalesced: {dsl}"
         );
         assert!(
-            dsl.contains("mark_data(data_type=DataType::Byte, range=CODE:0x3..0x5)"),
+            dsl.contains("mark_data(range=CODE:0x3..0x5, data_type=DataType::Byte)"),
             "data as a verb: {dsl}"
         );
         assert!(
