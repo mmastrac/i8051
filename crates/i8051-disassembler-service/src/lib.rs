@@ -66,6 +66,16 @@ pub enum Refusal {
     },
     /// A range that decodes badly.
     RangeDoesNotDecode { count: usize, reasons: Vec<String> },
+    /// A cleared CPU with decoded bytes.
+    CpuStillNeeded { cpu: String, decoded: u64 },
+    /// A label another address already holds.
+    LabelTaken { label: String, holder: String },
+    /// A local label reused inside one routine.
+    LocalLabelTaken { label: String, holder: String },
+    /// A label equal to the generated form.
+    GeneratedLabel { label: String },
+    /// A classify target with no mapped byte.
+    NothingMapped { at: String },
 }
 
 #[derive(Debug)]
@@ -91,6 +101,26 @@ impl ServiceError {
             }
         }
         Self::Refused { what, suggested }
+    }
+}
+
+/// Lift a database error into a templated refusal when one fits.
+fn convert_db_error(error: i8051_disassembler::db::Error) -> ServiceError {
+    match error {
+        i8051_disassembler::db::Error::InvalidAddress(at) => {
+            let text = at.space.dsl_addr(at.offset);
+            let range = at.space.dsl_range(at.offset, at.offset.saturating_add(1));
+            ServiceError::refused(
+                Refusal::NothingMapped { at: text.clone() },
+                vec![
+                    dsl!(map_bytes(address = {text}, file = "...", file_offset = 0x0, size = 0x0)
+                        # "bring bytes in from the image file"),
+                    dsl!(set_constant_bytes(range = {range}, value = 0x0)
+                        # "fill the gap with a value, then classify again"),
+                ],
+            )
+        }
+        other => ServiceError::Apply(other.to_string()),
     }
 }
 
@@ -164,7 +194,7 @@ impl Session {
         let undo = self
             .db
             .apply(command, Some(self.env.as_ref()))
-            .map_err(|e| ServiceError::Apply(e.to_string()))?;
+            .map_err(convert_db_error)?;
         Ok(undo.iter().map(|c| to_dsl(c.as_ref())).collect())
     }
 

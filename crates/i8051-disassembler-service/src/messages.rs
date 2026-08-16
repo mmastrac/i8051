@@ -222,6 +222,24 @@ mod tests {
                 count: 3,
                 reasons: vec!["1 branch target(s) point outside the loaded image".into()],
             },
+            Refusal::CpuStillNeeded {
+                cpu: "i8051".into(),
+                decoded: 3,
+            },
+            Refusal::LabelTaken {
+                label: "entry".into(),
+                holder: "CODE:0x0".into(),
+            },
+            Refusal::LocalLabelTaken {
+                label: ".loop".into(),
+                holder: "CODE:0x8".into(),
+            },
+            Refusal::GeneratedLabel {
+                label: "sub_0000".into(),
+            },
+            Refusal::NothingMapped {
+                at: "CODE:0x8".into(),
+            },
         ];
         // A new variant must add a sample.
         for refusal in &all {
@@ -229,7 +247,12 @@ mod tests {
                 Refusal::RangeCoversVectors { .. }
                 | Refusal::BarrierStopsAuto { .. }
                 | Refusal::RangeSwallowsTargets { .. }
-                | Refusal::RangeDoesNotDecode { .. } => {}
+                | Refusal::RangeDoesNotDecode { .. }
+                | Refusal::CpuStillNeeded { .. }
+                | Refusal::LabelTaken { .. }
+                | Refusal::LocalLabelTaken { .. }
+                | Refusal::GeneratedLabel { .. }
+                | Refusal::NothingMapped { .. } => {}
             }
         }
         all

@@ -167,7 +167,7 @@ fn value_candidates(
             .into_iter()
             .map(|s| plain(format!("\"{s}\""), "address space"))
             .collect(),
-        "verb" => catalog
+        "command" => catalog
             .iter()
             .map(|v| plain(format!("\"{}\"", v.name), summary(&v.description)))
             .collect(),

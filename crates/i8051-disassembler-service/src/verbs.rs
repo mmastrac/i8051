@@ -137,7 +137,7 @@ fn query_placeholder(name: &str, ty: ArgType) -> String {
         "space" => "\"CODE\"",
         "gate" => "\"named\"",
         "phase" => "\"decode\"",
-        "verb" => "\"set_note\"",
+        "command" => "\"set_note\"",
         _ => match ty {
             ArgType::Integer => "0",
             ArgType::Boolean => "True",
@@ -226,7 +226,7 @@ fn query_kind(name: &str, ty: ArgType) -> &'static str {
         "space" => "space",
         "gate" => "gate",
         "phase" => "phase",
-        "verb" => "verb",
+        "command" => "command",
         _ => match ty {
             ArgType::Integer => "integer",
             ArgType::Boolean => "boolean",
@@ -250,7 +250,7 @@ fn name_hint(name: &str) -> &'static str {
         "start" => "first line index (0-based)",
         "count" => "number of lines",
         "query" => "case-insensitive text to match",
-        "verb" => "a verb name from the catalog",
+        "command" => "a command name from the catalog",
         _ => "",
     }
 }
@@ -344,9 +344,9 @@ static VERBS: &[VerbDef] = &[
     VerbDef {
         name: "help",
         doc: "The syntax of one command: its arguments, how to write them, and a filled \
-              example. Without `verb`, every command with its example.",
-        args: &[ArgDecl::opt("verb", Str)],
-        handler: Handler::Query(|_, a| match a.opt_str("verb") {
+              example. Omit `command` to show all commands.",
+        args: &[ArgDecl::opt("command", Str)],
+        handler: Handler::Query(|_, a| match a.opt_str("command") {
             Some(name) => {
                 let info = catalog()
                     .into_iter()
@@ -364,7 +364,7 @@ static VERBS: &[VerbDef] = &[
                 json(serde_json::json!({
                     "usage": format!(
                         "{} for one command's full syntax",
-                        i8051_disassembler::store::dsl!(help(verb = "set_note"))
+                        i8051_disassembler::store::dsl!(help(command = "set_note"))
                     ),
                     "verbs": verbs,
                 }))

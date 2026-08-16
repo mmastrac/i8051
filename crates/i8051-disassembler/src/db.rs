@@ -682,13 +682,7 @@ impl std::fmt::Display for Error {
                 Ok(())
             }
             Self::InvalidAddress(at) => {
-                write!(
-                    f,
-                    "no byte is mapped at {}, so nothing there can be classified. \
-                     Map it first: `map_bytes` to bring bytes in from the image file, or \
-                     `set_constant_bytes` to fill the gap with a value and then classify again",
-                    at.space.dsl_addr(at.offset)
-                )
+                write!(f, "no byte is mapped at {}", at.space.dsl_addr(at.offset))
             }
             other => write!(f, "{other:?}"),
         }
@@ -1201,10 +1195,5 @@ loc_0010:
         let unmapped = Error::InvalidAddress((CODE, 0x8u32).into());
         let text = unmapped.to_string();
         assert!(text.contains("no byte is mapped at CODE:0x8"), "{text}");
-        assert!(text.contains("map_bytes"), "{text}");
-        assert!(
-            text.contains("set_constant_bytes"),
-            "the fill route is valid too: {text}"
-        );
     }
 }

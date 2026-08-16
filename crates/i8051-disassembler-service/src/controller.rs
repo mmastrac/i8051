@@ -250,11 +250,10 @@ impl Controller {
         if decoded == 0 {
             return Ok(());
         }
-        Err(ServiceError::Apply(format!(
-            "the database is decoded against {name}: {decoded} bytes of code would stop being \
-             code, because nothing decodes without a CPU. Refused. Nothing in a disassembly \
-             session needs the CPU cleared: it is chosen once when the database is created."
-        )))
+        Err(ServiceError::refused(
+            Refusal::CpuStillNeeded { cpu: name, decoded: u64::from(decoded) },
+            Vec::new(),
+        ))
     }
 
     fn check_duplicate_label(&self, dsl: &str) -> Result<(), ServiceError> {
@@ -281,14 +280,18 @@ impl Controller {
             .into_iter()
             .find(|s| s.name == name && s.addr != here);
         let Some(clash) = clash else { return Ok(()) };
-        Err(ServiceError::Apply(format!(
-            "`{name}` already names {}. Two addresses cannot share a symbol: the listing would \
-             be ambiguous and the assembly would not build. Pick a name that distinguishes this \
-             one from {} (what it does differently, or its role relative to it), or rename that \
-             address first if this is the better home for the name. If this is a spot inside a \
-             routine rather than a routine of its own, `local=True` scopes the name to it.",
-            clash.addr, clash.addr
-        )))
+        let holder = clash.addr;
+        Err(ServiceError::refused(
+            Refusal::LabelTaken { label: name.to_string(), holder: holder.clone() },
+            vec![
+                dsl!(set_label(address = {here}, label = "...")
+                    # "a name that distinguishes it from {holder}"),
+                dsl!(set_label(address = {here}, label = "{name}", local = True)
+                    # "if this is a spot inside a routine, not a routine of its own"),
+                dsl!(set_label(address = {holder}, label = "...")
+                    # "to free the name if this is its better home"),
+            ],
+        ))
     }
 
     fn check_duplicate_local(
@@ -313,11 +316,12 @@ impl Controller {
             })
             .map(|(at, _)| space.dsl_addr(at));
         let Some(clash) = clash else { return Ok(()) };
-        Err(ServiceError::Apply(format!(
-            "`{name}` already marks {clash} in this same routine. A local name is scoped to the \
-             routine that contains it, so it still has to be unique within it, but it is free \
-             to repeat in other routines."
-        )))
+        let here = set.address.space.dsl_addr(set.address.offset);
+        Err(ServiceError::refused(
+            Refusal::LocalLabelTaken { label: name.to_string(), holder: clash },
+            vec![dsl!(set_label(address = {here}, label = "...", local = True)
+                # "a name unused in this routine")],
+        ))
     }
 
     fn check_provisional_label(dsl: &str) -> Result<(), ServiceError> {
@@ -336,13 +340,16 @@ impl Controller {
         if !i8051_disassembler::labels::is_provisional_name(&name) {
             return Ok(());
         }
-        Err(ServiceError::Apply(format!(
-            "`{name}` is the name this address already displays when it has none: storing it \
-             would retire the address from the naming worklist without naming it, so it was not \
-             applied. Give a name that says what the code does (`uart_tx`, `debounce_column`); a \
-             rough guess you refine later beats the generated name. If you cannot tell yet, leave \
-             it and record what you do know with `set_note`."
-        )))
+        let here = set.address.space.dsl_addr(set.address.offset);
+        Err(ServiceError::refused(
+            Refusal::GeneratedLabel { label: name },
+            vec![
+                dsl!(set_label(address = {here}, label = "...")
+                    # "a name that says what the code does, e.g. uart_tx"),
+                dsl!(set_note(address = {here}, note = Note(content = "..."))
+                    # "record what you know if you cannot tell yet"),
+            ],
+        ))
     }
 
     fn check_speculative_decode(&self, dsl: &str) -> Result<(), ServiceError> {
@@ -623,7 +630,9 @@ mod tests {
         let err = c
             .apply(r#"set_label(address=CODE:0x4, label="entry")"#)
             .expect_err("a duplicate name should be refused");
-        assert!(format!("{err:?}").contains("already names"), "{err:?}");
+        let text = format!("{err:?}");
+        assert!(text.contains("LabelTaken"), "{text}");
+        assert!(text.contains("CODE:0x0"), "holder shown: {text}");
 
         c.apply(r#"set_label(address=CODE:0x0, label="entry")"#)
             .expect("same address is a rename");
@@ -638,10 +647,7 @@ mod tests {
         let err = c
             .apply("clear_cpu()")
             .expect_err("clearing a decoded database is refused");
-        assert!(
-            format!("{err:?}").contains("would stop being code"),
-            "{err:?}"
-        );
+        assert!(format!("{err:?}").contains("CpuStillNeeded"), "{err:?}");
         assert_eq!(
             c.session().status(None).unwrap().coverage.code,
             before,

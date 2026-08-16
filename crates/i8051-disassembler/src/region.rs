@@ -2722,6 +2722,5 @@ mod tests {
             .expect_err("the run runs past the mapped bytes");
         let text = err.to_string();
         assert!(text.starts_with("no byte is mapped at CODE:0x2"), "{text}");
-        assert!(text.contains("map_bytes"), "{text}");
     }
 }

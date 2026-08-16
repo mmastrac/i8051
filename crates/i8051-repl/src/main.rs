@@ -187,7 +187,7 @@ Meta-commands:
   :save               write edits to the database file (also: save())
   :help               this help
   :quit               exit (or Ctrl-D)",
-        dsl!(help(verb = "set_note"))
+        dsl!(help(command = "set_note"))
     );
 }
 
