@@ -6,13 +6,13 @@ use i8051_disassembler::db::{Db, Note, ScratchDecode};
 use i8051_disassembler::render::Line;
 use i8051_disassembler::store::{dsl, from_dsl, from_dsl_value, to_dsl};
 
-pub use i8051_disassembler::commands::Environment;
+pub use i8051_disassembler::commands::{Command, Environment};
 
 mod verbs;
 pub use verbs::{ArgType, Category, VerbArg, VerbInfo};
 
-mod bridge;
-pub(crate) use bridge::{build_command_dsl, command_focus};
+pub(crate) mod bridge;
+pub(crate) use bridge::command_focus;
 
 mod controller;
 pub use controller::{Controller, EditResult, Location};
@@ -191,6 +191,14 @@ impl Session {
     /// Apply one command, returning its undo DSL.
     pub fn apply(&mut self, dsl: &str) -> Result<Vec<String>, ServiceError> {
         let command = from_dsl(dsl).map_err(|e| ServiceError::Parse(e.to_string()))?;
+        self.apply_command(command)
+    }
+
+    /// Apply a parsed command, returning its undo DSL.
+    pub fn apply_command(
+        &mut self,
+        command: Box<dyn Command>,
+    ) -> Result<Vec<String>, ServiceError> {
         let undo = self
             .db
             .apply(command, Some(self.env.as_ref()))

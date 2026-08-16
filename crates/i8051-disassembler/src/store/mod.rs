@@ -38,11 +38,19 @@ pub fn to_dsl(command: &dyn Command) -> String {
 /// Parse a single command from DSL text, dispatching on its name through the
 /// registry.
 pub fn from_dsl(input: &str) -> Result<Box<dyn Command>, DslError> {
-    let Value::Call { name, mut kwargs } = parser::parse_command(input)? else {
+    let Value::Call { name, kwargs } = parser::parse_command(input)? else {
         return Err(DslError::new("expected a command call"));
     };
-    let entry = COMMANDS.get(name.as_str()).ok_or_else(|| {
-        let hint = commands::closest(&name, (&COMMANDS).into_iter().map(|(n, _)| *n))
+    command_from_call(&name, kwargs)
+}
+
+/// Build a command from an already-parsed call.
+pub fn command_from_call(
+    name: &str,
+    mut kwargs: value::Fields,
+) -> Result<Box<dyn Command>, DslError> {
+    let entry = COMMANDS.get(name).ok_or_else(|| {
+        let hint = commands::closest(name, (&COMMANDS).into_iter().map(|(n, _)| *n))
             .map(|h| format!(" (did you mean `{h}`?)"))
             .unwrap_or_default();
         DslError::new(format!("unknown command `{name}`{hint}"))
@@ -77,7 +85,7 @@ pub fn from_dsl(input: &str) -> Result<Box<dyn Command>, DslError> {
     qualify_bare_variants(entry, &mut kwargs);
     match (entry.parse)(kwargs.clone()) {
         Ok(command) => Ok(command),
-        Err(raw) => Err(diagnose_args(&name, entry, kwargs, raw)),
+        Err(raw) => Err(diagnose_args(name, entry, kwargs, raw)),
     }
 }
 

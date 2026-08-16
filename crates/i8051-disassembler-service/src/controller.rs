@@ -1,4 +1,5 @@
-use i8051_disassembler::store::dsl;
+use i8051_disassembler::commands::Command;
+use i8051_disassembler::store::{command_from_call, dsl, from_dsl, parse_call};
 use serde::Serialize;
 
 use crate::{Refusal, ServiceError, Session};
@@ -73,10 +74,7 @@ impl Controller {
         self.revision != self.saved_revision
     }
 
-    fn check_covers_entry_points(&self, dsl: &str) -> Result<(), ServiceError> {
-        let Ok(command) = i8051_disassembler::store::from_dsl(dsl) else {
-            return Ok(());
-        };
+    fn check_covers_entry_points(&self, command: &dyn Command) -> Result<(), ServiceError> {
         let any = command.as_any();
         let range = any
             .downcast_ref::<i8051_disassembler::commands::MarkData>()
@@ -119,12 +117,9 @@ impl Controller {
         ))
     }
 
-    fn check_barrier_sweep(&self, dsl: &str) -> Result<(), ServiceError> {
+    fn check_barrier_sweep(&self, command: &dyn Command) -> Result<(), ServiceError> {
         use i8051_disassembler::db::{EquivalentAt, EquivalentKind};
 
-        let Ok(command) = i8051_disassembler::store::from_dsl(dsl) else {
-            return Ok(());
-        };
         let Some(auto) = command
             .as_any()
             .downcast_ref::<i8051_disassembler::commands::AutoDisassemble>()
@@ -160,12 +155,9 @@ impl Controller {
         ))
     }
 
-    fn check_swallows_branch_target(&self, dsl: &str) -> Result<(), ServiceError> {
+    fn check_swallows_branch_target(&self, command: &dyn Command) -> Result<(), ServiceError> {
         use i8051_disassembler::address::{AddressValue, PhysicalAddr, XrefType};
 
-        let Ok(command) = i8051_disassembler::store::from_dsl(dsl) else {
-            return Ok(());
-        };
         let any = command.as_any();
         let range = any
             .downcast_ref::<i8051_disassembler::commands::MarkData>()
@@ -228,10 +220,7 @@ impl Controller {
         ))
     }
 
-    fn check_cpu_still_needed(&self, dsl: &str) -> Result<(), ServiceError> {
-        let Ok(command) = i8051_disassembler::store::from_dsl(dsl) else {
-            return Ok(());
-        };
+    fn check_cpu_still_needed(&self, command: &dyn Command) -> Result<(), ServiceError> {
         if command
             .as_any()
             .downcast_ref::<i8051_disassembler::commands::ClearCpu>()
@@ -251,15 +240,15 @@ impl Controller {
             return Ok(());
         }
         Err(ServiceError::refused(
-            Refusal::CpuStillNeeded { cpu: name, decoded: u64::from(decoded) },
+            Refusal::CpuStillNeeded {
+                cpu: name,
+                decoded: u64::from(decoded),
+            },
             Vec::new(),
         ))
     }
 
-    fn check_duplicate_label(&self, dsl: &str) -> Result<(), ServiceError> {
-        let Ok(command) = i8051_disassembler::store::from_dsl(dsl) else {
-            return Ok(());
-        };
+    fn check_duplicate_label(&self, command: &dyn Command) -> Result<(), ServiceError> {
         let Some(set) = command
             .as_any()
             .downcast_ref::<i8051_disassembler::commands::SetLabel>()
@@ -282,7 +271,10 @@ impl Controller {
         let Some(clash) = clash else { return Ok(()) };
         let holder = clash.addr;
         Err(ServiceError::refused(
-            Refusal::LabelTaken { label: name.to_string(), holder: holder.clone() },
+            Refusal::LabelTaken {
+                label: name.to_string(),
+                holder: holder.clone(),
+            },
             vec![
                 dsl!(set_label(address = {here}, label = "...")
                     # "a name that distinguishes it from {holder}"),
@@ -318,16 +310,18 @@ impl Controller {
         let Some(clash) = clash else { return Ok(()) };
         let here = set.address.space.dsl_addr(set.address.offset);
         Err(ServiceError::refused(
-            Refusal::LocalLabelTaken { label: name.to_string(), holder: clash },
-            vec![dsl!(set_label(address = {here}, label = "...", local = True)
-                # "a name unused in this routine")],
+            Refusal::LocalLabelTaken {
+                label: name.to_string(),
+                holder: clash,
+            },
+            vec![
+                dsl!(set_label(address = {here}, label = "...", local = True)
+                # "a name unused in this routine"),
+            ],
         ))
     }
 
-    fn check_provisional_label(dsl: &str) -> Result<(), ServiceError> {
-        let Ok(command) = i8051_disassembler::store::from_dsl(dsl) else {
-            return Ok(());
-        };
+    fn check_provisional_label(command: &dyn Command) -> Result<(), ServiceError> {
         let Some(set) = command
             .as_any()
             .downcast_ref::<i8051_disassembler::commands::SetLabel>()
@@ -352,10 +346,7 @@ impl Controller {
         ))
     }
 
-    fn check_speculative_decode(&self, dsl: &str) -> Result<(), ServiceError> {
-        let Ok(command) = i8051_disassembler::store::from_dsl(dsl) else {
-            return Ok(());
-        };
+    fn check_speculative_decode(&self, command: &dyn Command) -> Result<(), ServiceError> {
         let Some(range) = command
             .as_any()
             .downcast_ref::<i8051_disassembler::commands::DisassembleRange>()
@@ -434,10 +425,11 @@ impl Controller {
 
     /// Run one verb from a typed line.
     pub fn exec(&mut self, line: &str) -> Result<serde_json::Value, ServiceError> {
-        let (name, kwargs) = i8051_disassembler::store::parse_call(line)
-            .map_err(|e| ServiceError::Parse(e.to_string()))?;
+        let (name, kwargs) = parse_call(line).map_err(|e| ServiceError::Parse(e.to_string()))?;
         if crate::verbs::is_edit(&name) {
-            let edit = self.apply(line)?;
+            let command =
+                command_from_call(&name, kwargs).map_err(|e| ServiceError::Parse(e.to_string()))?;
+            let edit = self.apply_command(command)?;
             return crate::verbs::json(crate::EditResponse::new(self.session(), edit));
         }
         let args = crate::verbs::kwargs_to_json(kwargs);
@@ -446,14 +438,20 @@ impl Controller {
     }
 
     pub fn apply(&mut self, dsl: &str) -> Result<EditResult, ServiceError> {
-        self.check_cpu_still_needed(dsl)?;
-        self.check_covers_entry_points(dsl)?;
-        self.check_swallows_branch_target(dsl)?;
-        self.check_barrier_sweep(dsl)?;
-        self.check_speculative_decode(dsl)?;
-        Self::check_provisional_label(dsl)?;
-        self.check_duplicate_label(dsl)?;
-        let inverse = self.session.apply(dsl)?;
+        let command = from_dsl(dsl).map_err(|e| ServiceError::Parse(e.to_string()))?;
+        self.apply_command(command)
+    }
+
+    /// Apply a parsed command, undoably.
+    pub fn apply_command(&mut self, command: Box<dyn Command>) -> Result<EditResult, ServiceError> {
+        self.check_cpu_still_needed(command.as_ref())?;
+        self.check_covers_entry_points(command.as_ref())?;
+        self.check_swallows_branch_target(command.as_ref())?;
+        self.check_barrier_sweep(command.as_ref())?;
+        self.check_speculative_decode(command.as_ref())?;
+        Self::check_provisional_label(command.as_ref())?;
+        self.check_duplicate_label(command.as_ref())?;
+        let inverse = self.session.apply_command(command)?;
         self.undo.push(inverse.clone());
         self.redo.clear();
         self.revision += 1;
@@ -466,8 +464,8 @@ impl Controller {
         name: &str,
         args: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<EditResult, ServiceError> {
-        let dsl = crate::build_command_dsl(name, args)?;
-        self.apply(&dsl)
+        let command = crate::bridge::build_command(name, args)?;
+        self.apply_command(command)
     }
 
     /// Take back the last edit.

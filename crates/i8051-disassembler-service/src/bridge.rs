@@ -1,8 +1,8 @@
 use serde_json::Value as Json;
 
-use i8051_disassembler::commands::{ArgKind, COMMANDS};
+use i8051_disassembler::commands::{ArgKind, COMMANDS, Command};
 use i8051_disassembler::store::value::Value;
-use i8051_disassembler::store::{from_dsl, parse_value, to_dsl};
+use i8051_disassembler::store::{from_dsl, parse_value};
 
 use crate::ServiceError;
 
@@ -14,10 +14,10 @@ pub(crate) fn command_focus(dsl: &str) -> Option<String> {
     fields.iter().find_map(|(_, value)| focus_of_value(value))
 }
 
-pub(crate) fn build_command_dsl(
+pub(crate) fn build_command(
     name: &str,
     args: &serde_json::Map<String, Json>,
-) -> Result<String, ServiceError> {
+) -> Result<Box<dyn Command>, ServiceError> {
     let entry = COMMANDS
         .get(name)
         .ok_or_else(|| ServiceError::Parse(format!("unknown command `{name}`")))?;
@@ -56,7 +56,7 @@ pub(crate) fn build_command_dsl(
             i8051_disassembler::store::diagnose_args(name, entry, kwargs, raw).to_string(),
         )
     })?;
-    Ok(to_dsl(command.as_ref()))
+    Ok(command)
 }
 
 fn json_to_value(kind: ArgKind, json: &Json) -> Result<Value, String> {
@@ -97,6 +97,14 @@ mod tests {
 
     fn args(v: serde_json::Value) -> serde_json::Map<String, Json> {
         v.as_object().expect("object").clone()
+    }
+
+    fn build_command_dsl(
+        name: &str,
+        args: &serde_json::Map<String, Json>,
+    ) -> Result<String, ServiceError> {
+        use i8051_disassembler::store::to_dsl;
+        build_command(name, args).map(|command| to_dsl(command.as_ref()))
     }
 
     #[test]
