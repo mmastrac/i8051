@@ -102,6 +102,182 @@ impl Gate {
     }
 }
 
+/// The control transfer behind a target item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Flow {
+    Call,
+    Jump,
+}
+
+/// The non-code run covering a target.
+#[derive(Debug, Clone, Serialize)]
+pub struct UnfollowedBarrier {
+    pub range: String,
+    /// What the run is marked as.
+    pub marked: String,
+}
+
+/// One problem's facts, rendered elsewhere.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ItemKind {
+    /// A hole inside the mapped image.
+    UnmappedGap { from: String, to: String, len: AddressValue },
+    /// A control target outside the image.
+    TargetOutsideImage { verb: Flow, from: String, to: String },
+    /// A control target inside another instruction.
+    MisalignedTarget {
+        verb: Flow,
+        from: String,
+        to: String,
+        /// The instruction covering `to`.
+        covering: String,
+    },
+    /// A control target not yet decoded.
+    UnfollowedTarget {
+        verb: Flow,
+        from: String,
+        to: String,
+        /// The blocking run over `to`.
+        barrier: Option<UnfollowedBarrier>,
+    },
+    /// Code falls through into data.
+    FlowIntoData {
+        from: String,
+        to: String,
+        /// The data run covering `to`.
+        barrier: String,
+        /// Whether the data decodes cleanly.
+        decodes_like_code: bool,
+    },
+    /// Code falls through into unclassified bytes.
+    FlowIntoUndefined { from: String, to: String },
+    /// Code runs off the mapped bytes.
+    FlowOffEnd { from: String, to: String },
+    /// A vector whose handler is not decoded.
+    UndecodedEntryPoint { at: String, name: String, reason: String },
+    /// Bytes neither code nor typed data.
+    UndefinedBytes { range: String, count: AddressValue },
+    /// A referenced address without a real name.
+    ProvisionalLabel {
+        at: String,
+        /// `subroutine` or `jump target`.
+        role: String,
+        caller: Option<String>,
+        /// The first instruction at `at`.
+        starts: Option<String>,
+        /// The draft name, when one was tried.
+        working_name: Option<String>,
+        /// Whether a note already covers `at`.
+        noted: bool,
+    },
+    /// Pointer-addressed data without a name.
+    UnnamedData {
+        at: String,
+        refs: usize,
+        first: String,
+        /// Whether the pointer reference is inferred.
+        inferred: bool,
+    },
+    /// A named routine with no note.
+    UndocumentedRoutine { at: String, name: String, has_comment: bool },
+    /// An operand with an ambiguous space.
+    UndecidedOperand { at: String, value: String, candidates: Vec<String> },
+}
+
+impl ItemKind {
+    /// The kind string used in ids.
+    pub fn slug(&self) -> &'static str {
+        match self {
+            Self::UnmappedGap { .. } => "unmapped_gap",
+            Self::TargetOutsideImage { .. } => "target_outside_image",
+            Self::MisalignedTarget { .. } => "misaligned_target",
+            Self::UnfollowedTarget { .. } => "unfollowed_target",
+            Self::FlowIntoData { .. } => "flow_into_data",
+            Self::FlowIntoUndefined { .. } => "flow_into_undefined",
+            Self::FlowOffEnd { .. } => "flow_off_end",
+            Self::UndecodedEntryPoint { .. } => "undecoded_entry_point",
+            Self::UndefinedBytes { .. } => "undefined_bytes",
+            Self::ProvisionalLabel { .. } => "provisional_label",
+            Self::UnnamedData { .. } => "unnamed_data",
+            Self::UndocumentedRoutine { .. } => "undocumented_routine",
+            Self::UndecidedOperand { .. } => "undecided_operand",
+        }
+    }
+
+    /// The phase this kind blocks.
+    pub fn phase(&self) -> Phase {
+        match self {
+            Self::UnmappedGap { .. }
+            | Self::TargetOutsideImage { .. }
+            | Self::MisalignedTarget { .. }
+            | Self::UnfollowedTarget { .. }
+            | Self::FlowIntoData { .. }
+            | Self::FlowIntoUndefined { .. }
+            | Self::FlowOffEnd { .. }
+            | Self::UndecodedEntryPoint { .. } => Phase::Decode,
+            Self::UndefinedBytes { .. } => Phase::Classify,
+            Self::ProvisionalLabel { .. } | Self::UnnamedData { .. } => Phase::Name,
+            Self::UndocumentedRoutine { .. } | Self::UndecidedOperand { .. } => Phase::Document,
+        }
+    }
+
+    /// How much this kind matters.
+    pub fn severity(&self) -> Severity {
+        match self {
+            Self::TargetOutsideImage { .. }
+            | Self::MisalignedTarget { .. }
+            | Self::UnfollowedTarget { .. } => Severity::High,
+            Self::UnmappedGap { .. }
+            | Self::FlowIntoUndefined { .. }
+            | Self::UndecodedEntryPoint { .. }
+            | Self::UndefinedBytes { .. } => Severity::Medium,
+            Self::FlowIntoData { .. }
+            | Self::FlowOffEnd { .. }
+            | Self::ProvisionalLabel { .. }
+            | Self::UnnamedData { .. }
+            | Self::UndocumentedRoutine { .. }
+            | Self::UndecidedOperand { .. } => Severity::Low,
+        }
+    }
+
+    /// Build the worklist entry.
+    fn into_item(
+        self,
+        space: AddressSpace,
+        space_rank: usize,
+        offset: AddressValue,
+        range: Option<String>,
+        suggested: Vec<String>,
+    ) -> Item {
+        // Reject suggestions the DSL cannot parse.
+        #[cfg(debug_assertions)]
+        for suggestion in &suggested {
+            if let Err(e) = crate::store::parse_call(suggestion) {
+                panic!(
+                    "worklist suggestion for `{}` does not parse: {suggestion:?}: {e}",
+                    self.slug()
+                );
+            }
+        }
+        let address = fmt_addr(space, offset);
+        let (phase, severity) = (self.phase(), self.severity());
+        Item {
+            id: format!("{}/{}/{}", phase.name(), self.slug(), address),
+            phase,
+            kind: self.slug(),
+            severity,
+            address,
+            range,
+            detail: String::new(),
+            suggested,
+            sort: (phase.rank(), severity.rank(), 0, u32::MAX, 0, space_rank, offset),
+            what: self,
+        }
+    }
+}
+
 /// One concrete, located problem in the worklist.
 #[derive(Debug, Clone, Serialize)]
 pub struct Item {
@@ -110,13 +286,15 @@ pub struct Item {
     pub phase: Phase,
     /// The problem kind, e.g. `unfollowed_target` or `undefined_bytes`.
     pub kind: &'static str,
+    /// The problem as data.
+    pub what: ItemKind,
     pub severity: Severity,
     /// The address to look at, e.g. `CODE:0x95f`.
     pub address: String,
     /// The affected range, when the item spans one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<String>,
-    /// A one-line explanation.
+    /// Prose, filled by a renderer.
     pub detail: String,
     /// Command(s) that would resolve the item, usually runnable verbatim.
     pub suggested: Vec<String>,
@@ -195,34 +373,26 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
         for (start, end) in region.mapping_gaps() {
             let from = fmt_addr(space, start);
             let to = fmt_addr(space, end);
-            items.push(item(
-                Phase::Decode,
-                "unmapped_gap",
-                Severity::Medium,
+            let suggested = vec![
+                format!(
+                    "map_bytes(address={from}, file=\"...\", file_offset=0x{start:x}, size=0x{:x})",
+                    end - start
+                ),
+                format!("set_constant_bytes(range={}, value=0x0)", fmt_range(space, start, end)),
+            ];
+            items.push(ItemKind::UnmappedGap { from, to, len: end - start }.into_item(
                 space,
                 rank,
                 start,
                 Some(fmt_range(space, start, end)),
-                format!(
-                    "nothing is mapped at {from}..{to}, but there are bytes on both sides. The \
-                     image has a hole: {} byte(s) that are not mapped. Map them from an image \
-                     file or fill them if they are genuinely absent.",
-                    end - start
-                ),
-                vec![
-                    format!(
-                        "map_bytes(address={from}, file=\"...\", file_offset=0x{start:x}, size=0x{:x})",
-                        end - start
-                    ),
-                    format!("set_constant_bytes(range={}, value=0x0)", fmt_range(space, start, end)),
-                ],
+                suggested,
             ));
         }
 
         for target in region.unresolved_control_targets() {
             let verb = match target.kind {
-                XrefType::Call => "call",
-                _ => "jump",
+                XrefType::Call => Flow::Call,
+                _ => Flow::Jump,
             };
             let addr = fmt_addr(space, target.target);
             let from = fmt_addr(space, target.from);
@@ -250,126 +420,86 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
                         ),
                     ],
                 };
-            let (kind, anchor, detail, suggested) = if !region.has_byte(target.target) {
-                {
-                    let space_name = space.dsl_name();
-                    let bits = region.covering_address_bits();
-                    let mut suggested = vec![format!("peek(address={from}, lines=4)")];
-                    suggested.extend(retire.clone());
-                    suggested.extend(reclassify.clone());
-                    if region.address_bits().is_none() {
-                        suggested.push(format!(
-                            "set_address_bits(space=\"{space_name}\", bits={bits})"
-                        ));
-                    }
-                    (
-                        "target_outside_image",
-                        target.from,
-                        format!(
-                            "{verb} from {from} to {addr} is outside the mapped image, so it \
-                             cannot be followed. These bytes may not be code, the image may be \
-                             incomplete, or you may need to limit the address width. `peek`ing the \
-                             source may help decide"
-                        ),
-                        suggested,
-                    )
+            let entry = if !region.has_byte(target.target) {
+                let space_name = space.dsl_name();
+                let bits = region.covering_address_bits();
+                let mut suggested = vec![format!("peek(address={from}, lines=4)")];
+                suggested.extend(retire.clone());
+                suggested.extend(reclassify.clone());
+                if region.address_bits().is_none() {
+                    suggested
+                        .push(format!("set_address_bits(space=\"{space_name}\", bits={bits})"));
                 }
+                ItemKind::TargetOutsideImage { verb, from, to: addr }
+                    .into_item(space, rank, target.from, None, suggested)
             } else if target.misaligned {
                 let covering = region
                     .covering_instruction(target.target)
                     .map(|(start, end)| format!("{start:#x}..{end:#x}"))
                     .unwrap_or_else(|| format!("{:#x}", target.target));
-                (
-                    "misaligned_target",
-                    target.from,
-                    format!(
-                        "{verb} from {from} to {addr} lands inside the instruction at {}:{covering}, \
-                         not at its start. Either the bytes at {from} are not code (e.g.: a branch \
-                         decoded out of filler) or that instruction is decoded from the wrong \
-                         offset. `peek`ing from both ends may help decide",
-                        space.dsl_name()
-                    ),
-                    {
-                        let mut suggested = vec![format!("peek(address={from}, lines=4)")];
-                        suggested.extend(retire.clone());
-                        suggested.extend(reclassify.clone());
-                        suggested.push(format!(
-                            "clear_equivalents(addresses={}:{{{covering}}})",
-                            space.dsl_name()
-                        ));
-                        suggested.push(format!("auto_disassemble(address={addr})"));
-                        suggested
-                    },
-                )
+                let mut suggested = vec![format!("peek(address={from}, lines=4)")];
+                suggested.extend(retire.clone());
+                suggested.extend(reclassify.clone());
+                suggested.push(format!(
+                    "clear_equivalents(addresses={}:{{{covering}}})",
+                    space.dsl_name()
+                ));
+                suggested.push(format!("auto_disassemble(address={addr})"));
+                ItemKind::MisalignedTarget {
+                    verb,
+                    from,
+                    to: addr,
+                    covering: format!("{}:{covering}", space.dsl_name()),
+                }
+                .into_item(space, rank, target.from, None, suggested)
             } else if let crate::db::EquivalentAt::Defined { start, range } =
                 region.get_equivalent(target.target)
                 && range.equivalent.kind() != crate::db::EquivalentKind::Code
             {
                 let space_name = space.dsl_name();
-                let barrier = format!("{space_name}:{start:#x}..{:#x}", range.end);
-                let what = match range.equivalent.kind() {
+                let marked = match range.equivalent.kind() {
                     crate::db::EquivalentKind::Data => "data",
                     _ => "unknown",
                 };
-                (
-                    "unfollowed_target",
-                    target.target,
+                let mut suggested = vec![
+                    format!("peek(address={addr}, lines=4)"),
+                    format!("peek(address={from}, lines=4)"),
                     format!(
-                        "{verb} from {from} to {addr} has not been disassembled, and {addr} sits \
-                         inside {barrier}, which is marked {what}. Either those \
-                         bytes are code and the barrier is wrong, or the {verb} at {from} is \
-                         filler that only looks like one. `peek`ing both may help decide"
+                        "clear_equivalents(addresses={space_name}:{{{start:#x}..{:#x}}})  \
+                         # if {addr} is code",
+                        range.end
                     ),
-                    {
-                        let mut suggested = vec![
-                            format!("peek(address={addr}, lines=4)"),
-                            format!("peek(address={from}, lines=4)"),
-                            format!(
-                                "clear_equivalents(addresses={space_name}:{{{start:#x}..{:#x}}})  \
-                                 # if {addr} is code",
-                                range.end
-                            ),
-                            format!(
-                                "auto_disassemble(address={addr})  # after clearing the barrier"
-                            ),
-                        ];
-                        suggested.extend(retire.clone());
-                        suggested.extend(reclassify.clone());
-                        suggested
-                    },
-                )
+                    format!("auto_disassemble(address={addr})  # after clearing the barrier"),
+                ];
+                suggested.extend(retire.clone());
+                suggested.extend(reclassify.clone());
+                ItemKind::UnfollowedTarget {
+                    verb,
+                    from,
+                    to: addr,
+                    barrier: Some(UnfollowedBarrier {
+                        range: format!("{space_name}:{start:#x}..{:#x}", range.end),
+                        marked: marked.to_string(),
+                    }),
+                }
+                .into_item(space, rank, target.target, None, suggested)
             } else {
-                (
-                    "unfollowed_target",
-                    target.target,
-                    format!("{verb} from {from} to {addr} has not been disassembled"),
-                    vec![format!("auto_disassemble(address={addr})")],
-                )
+                let suggested = vec![format!("auto_disassemble(address={addr})")];
+                ItemKind::UnfollowedTarget { verb, from, to: addr, barrier: None }
+                    .into_item(space, rank, target.target, None, suggested)
             };
-            items.push(item(
-                Phase::Decode,
-                kind,
-                Severity::High,
-                space,
-                rank,
-                anchor,
-                None,
-                detail,
-                suggested,
-            ));
+            items.push(entry);
         }
 
         for leak in region.flow_leaks() {
             let from = fmt_addr(space, leak.from);
             let to = fmt_addr(space, leak.to);
-            let (kind, severity, anchor, detail, suggested) = match leak.kind {
-                LeakKind::IntoUndefined => (
-                    "flow_into_undefined",
-                    Severity::Medium,
-                    leak.to,
-                    format!("code at {from} runs into undefined bytes at {to}"),
-                    vec![format!("auto_disassemble(address={to})")],
-                ),
+            let entry = match leak.kind {
+                LeakKind::IntoUndefined => {
+                    let suggested = vec![format!("auto_disassemble(address={to})")];
+                    ItemKind::FlowIntoUndefined { from, to }
+                        .into_item(space, rank, leak.to, None, suggested)
+                }
                 LeakKind::IntoData => {
                     let code_end = region
                         .instruction_range(leak.from)
@@ -405,34 +535,24 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
                         && decode.misaligned_targets == 0
                         && decode.self_misaligned_targets == 0;
 
+                    // The likelier reading leads the list.
                     let mut suggested = vec![format!("peek(address={from}, lines=4)")];
-                    let evidence = if decodes_like_code {
+                    if decodes_like_code {
                         suggested.push(as_code);
                         suggested.push(then_decode);
                         suggested.extend(as_filler);
-                        format!("The bytes at {to} do decode like code, so try that reading first")
                     } else {
                         suggested.extend(as_filler);
                         suggested.push(as_code);
                         suggested.push(then_decode);
-                        format!(
-                            "Decoding {to} as code branches outside the image or into the middle \
-                             of an instruction, so the filler reading is the likelier one"
-                        )
-                    };
-                    (
-                        "flow_into_data",
-                        Severity::Low,
-                        leak.to,
-                        format!(
-                            "code at {from} runs into data at {to}, so execution would fall out \
-                             of code and into bytes classified as data. One of the two is wrong: \
-                             either {to} is really code and the barrier over it should go, or \
-                             {from} is filler that decoded as code and belongs with the data. \
-                             {evidence}"
-                        ),
-                        suggested,
-                    )
+                    }
+                    ItemKind::FlowIntoData {
+                        from,
+                        to,
+                        barrier: fmt_range(space, data_start, data_end),
+                        decodes_like_code,
+                    }
+                    .into_item(space, rank, leak.to, None, suggested)
                 }
                 LeakKind::OffEnd => {
                     let code_end = region
@@ -455,54 +575,27 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
                         "map_bytes(address={to}, file=\"...\", file_offset=0x0, size=0x0)  # if \
                          the image continues past what is loaded"
                     ));
-                    (
-                        "flow_off_end",
-                        Severity::Low,
-                        leak.from,
-                        format!(
-                            "code at {from} runs past the end of mapped bytes, so the next \
-                             instruction would come from nothing. Either {from} is filler that \
-                             decoded as code, or the image is incomplete and continues past what \
-                             is loaded. `peek` it and decide"
-                        ),
-                        suggested,
-                    )
+                    ItemKind::FlowOffEnd { from, to }
+                        .into_item(space, rank, leak.from, None, suggested)
                 }
             };
-            items.push(item(
-                Phase::Decode,
-                kind,
-                severity,
-                space,
-                rank,
-                anchor,
-                None,
-                detail,
-                suggested,
-            ));
+            items.push(entry);
         }
 
         for (start, end) in region.undefined_spans() {
             let range = fmt_range(space, start, end);
-            let count = end - start;
-            items.push(item(
-                Phase::Classify,
-                "undefined_bytes",
-                Severity::Medium,
-                space,
-                rank,
-                start,
-                Some(range.clone()),
-                format!("{count} undefined byte(s) at {range}, neither code nor typed data"),
-                vec![
-                    format!("disassemble_range(range={range})"),
-                    format!("mark_data(range={range}, data_type=DataType::Byte)"),
-                ],
-            ));
+            let suggested = vec![
+                format!("disassemble_range(range={range})"),
+                format!("mark_data(range={range}, data_type=DataType::Byte)"),
+            ];
+            items.push(
+                ItemKind::UndefinedBytes { range: range.clone(), count: end - start }
+                    .into_item(space, rank, start, Some(range), suggested),
+            );
         }
 
         for (offset, label_kind) in region.provisional_labels() {
-            let addr = fmt_addr(space, offset);
+            let at = fmt_addr(space, offset);
             let role = match label_kind {
                 LabelKind::Sub => "subroutine",
                 LabelKind::Loc => "jump target",
@@ -510,88 +603,50 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
             // Give enough context to name the routine from this item alone
             // (a caller and the first instruction), so the model does not have
             // to go read the listing before it can commit a name.
-            let mut detail = format!("{addr}: unnamed {role}");
-            if let Some(caller) = first_caller(db, space, offset) {
-                detail.push_str(&format!(", referenced from {caller}"));
-            }
-            if let Some(insn) = region.instruction_text(offset) {
-                detail.push_str(&format!("; starts `{insn}`"));
-            }
+            let caller = first_caller(db, space, offset);
+            let starts = region.instruction_text(offset);
             // Either mark means an earlier pass already engaged with this
             // address and still did not name it.
             let draft = region.is_draft_label(offset);
             let noted = !db.get_notes_overlapping(space, offset..offset + 1).is_empty();
-            if draft {
-                let current = region.get_label(offset).unwrap_or_default();
-                detail.push_str(&format!(
-                    "; currently the working name `{current}` — sharpen it, or set it again \
-                     without provisional once you are satisfied"
-                ));
-            } else if noted {
-                detail.push_str(
-                    "; a note already covers this address, so an earlier pass studied it \
-                     without naming it — read that note first",
-                );
-            }
+            let working_name =
+                draft.then(|| region.get_label(offset).unwrap_or_default().to_string());
             let suggested = if draft {
-                vec![format!("set_label(address={addr}, label=\"...\")")]
+                vec![format!("set_label(address={at}, label=\"...\")")]
             } else if matches!(label_kind, LabelKind::Loc) {
                 // Reached only by jumps.
                 vec![
-                    format!("set_label(address={addr}, label=\".loop\", local=True)"),
-                    format!("set_label(address={addr}, label=\"...\")"),
+                    format!("set_label(address={at}, label=\".loop\", local=True)"),
+                    format!("set_label(address={at}, label=\"...\")"),
                 ]
             } else {
                 vec![
-                    format!("set_label(address={addr}, label=\"...\")"),
-                    format!("set_label(address={addr}, label=\"...\", provisional=True)"),
+                    format!("set_label(address={at}, label=\"...\")"),
+                    format!("set_label(address={at}, label=\"...\", provisional=True)"),
                 ]
             };
             let incoming = db.xrefs_to(&PhysicalAddr { space, offset });
             let first_ref = incoming.iter().map(|x| x.from.offset).min().unwrap_or(offset);
-            let entry = item(
-                Phase::Name,
-                "provisional_label",
-                Severity::Low,
-                space,
-                rank,
-                offset,
-                None,
-                detail,
-                suggested,
-            )
+            let entry = ItemKind::ProvisionalLabel {
+                at,
+                role: role.to_string(),
+                caller,
+                starts,
+                working_name,
+                noted,
+            }
+            .into_item(space, rank, offset, None, suggested)
             .ranked_by_callers(incoming.len(), first_ref);
             items.push(if draft || noted { entry.deferred() } else { entry });
         }
         
         for (offset, refs, first, inferred) in region.unnamed_pointer_targets() {
-            let addr = fmt_addr(space, offset);
-            let from = fmt_addr(space, first);
-            let (plural, verb) = if refs == 1 { ("site", "loads") } else { ("sites", "load") };
-            let detail = if inferred {
-                format!(
-                    "{addr}: {refs} {plural} {verb} this address as a pointer (first {from}), \
-                     but it is unnamed. Reading {from} may help decide."
-                )
-            } else {
-                format!(
-                    "{addr}: unnamed data, addressed as a pointer by {refs} {plural} \
-                     (first {from}). Reading {from} may help."
-                )
-            };
+            let at = fmt_addr(space, offset);
+            let suggested = vec![format!("set_label(address={at}, label=\"...\")")];
             items.push(
-                item(
-                    Phase::Name,
-                    "unnamed_data",
-                    Severity::Low,
-                    space,
-                    rank,
-                    offset,
-                    None,
-                    detail,
-                    vec![format!("set_label(address={addr}, label=\"...\")")],
-                )
-                .ranked_by_callers(refs, first),
+                ItemKind::UnnamedData { at, refs, first: fmt_addr(space, first), inferred }
+                    .into_item(space, rank, offset, None, suggested)
+                    .ranked_by_callers(refs, first),
             );
         }
 
@@ -601,91 +656,54 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
             if !db.get_notes_overlapping(space, offset..offset + 1).is_empty() {
                 continue;
             }
-            let addr = fmt_addr(space, offset);
+            let at = fmt_addr(space, offset);
             let has_comment = region.get_comment(offset).is_some();
-            let mut detail = format!(
-                "{addr} ({name}) is named but has no note. Record what it does and how \
-                 it works as a `set_note`, the detailed account future passes read"
-            );
-            let mut suggested =
-                vec![format!("set_note(address={addr}, note=Note(content=\"...\"))")];
+            let mut suggested = vec![format!("set_note(address={at}, note=Note(content=\"...\"))")];
             if !has_comment {
-                detail.push_str("; add a one-line `set_comment` too if its purpose is clear");
-                suggested.push(format!("set_comment(address={addr}, comment=\"...\")"));
+                suggested.push(format!("set_comment(address={at}, comment=\"...\")"));
             }
-            items.push(item(
-                Phase::Document,
-                "undocumented_routine",
-                Severity::Low,
-                space,
-                rank,
-                offset,
-                None,
-                detail,
-                suggested,
-            ));
+            items.push(
+                ItemKind::UndocumentedRoutine { at, name, has_comment }
+                    .into_item(space, rank, offset, None, suggested),
+            );
         }
     }
 
     // The CPU's own vectors. Entry points whether or not anything references
     // them.
     for entry in db.undecoded_entry_points() {
-        let addr = fmt_addr(entry.space, entry.offset);
-        let name = entry.name;
-        let reason = entry.reason;
-        items.push(item(
-            Phase::Decode,
-            "undecoded_entry_point",
-            Severity::Medium,
-            entry.space,
-            0,
-            entry.offset,
-            None,
+        let at = fmt_addr(entry.space, entry.offset);
+        let suggested = vec![
+            format!("peek(address={at}, lines=4)"),
+            format!("auto_disassemble(address={at})  # if the vector is in use"),
             format!(
-                "{addr} ({name}) is a possible vector: the hardware transfers control here on \
-                 {reason}, but the bytes are not decoded as code. `peek` them. A jump or call \
-                 landing inside the image means the vector is in use and those bytes are its \
-                 handler. Bytes that decode to nothing coherent may mean the interrupt is never \
-                 enabled."
+                "disable_platform_address(address={at}, reason=\"...\")  # if this address is \
+                 provably unused"
             ),
-            vec![
-                format!("peek(address={addr}, lines=4)"),
-                format!("auto_disassemble(address={addr})  # if the vector is in use"),
-                format!(
-                    "disable_platform_address(address={addr}, reason=\"...\")  # if this \
-                     interrupt is never enabled — what the firmware writes to IE says which"
-                ),
-            ],
-        ));
+        ];
+        items.push(
+            ItemKind::UndecodedEntryPoint {
+                at,
+                name: entry.name.to_string(),
+                reason: entry.reason.to_string(),
+            }
+            .into_item(entry.space, 0, entry.offset, None, suggested),
+        );
     }
 
     // An instruction with an ambiguous operand.
     for (site, value, spaces) in db.undecided_operands() {
         let at = fmt_addr(site.space, site.offset);
         let candidates: Vec<String> = spaces.iter().map(|s| fmt_addr(*s, value)).collect();
-        let detail = format!(
-            "{at} loads 0x{value:x} as an address, but it is uncertain which memory space it \
-             refers to {}.",
-             candidates.join(" or ")
-        );
         let mut suggested: Vec<String> = spaces
             .iter()
             .map(|s| format!("set_operand_pointer(address={at}, space=\"{}\")", s.dsl_name()))
             .collect();
         suggested.push(format!("set_operand_value(address={at})"));
         items.push(
-            item(
-                Phase::Document,
-                "undecided_operand",
-                Severity::Low,
-                site.space,
-                usize::MAX,
-                site.offset,
-                None,
-                detail,
-                suggested,
-            )
-            .deferred(),
+            ItemKind::UndecidedOperand { at, value: format!("0x{value:x}"), candidates }
+                .into_item(site.space, usize::MAX, site.offset, None, suggested)
+                .deferred(),
         );
     }
 
@@ -713,40 +731,6 @@ pub fn assess_at(db: &Db, gate: Gate) -> Completeness {
         coverage,
         counts,
         items,
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn item(
-    phase: Phase,
-    kind: &'static str,
-    severity: Severity,
-    space: AddressSpace,
-    space_rank: usize,
-    offset: AddressValue,
-    range: Option<String>,
-    detail: String,
-    suggested: Vec<String>,
-) -> Item {
-    // Validate the suggestion DSL in debug mode so we don't accidentally hand
-    // off a bad one.
-    #[cfg(debug_assertions)]
-    for suggestion in &suggested {
-        if let Err(e) = crate::store::parse_call(suggestion) {
-            panic!("worklist suggestion for `{kind}` does not parse: {suggestion:?}: {e}");
-        }
-    }
-    let address = fmt_addr(space, offset);
-    Item {
-        id: format!("{}/{}/{}", phase.name(), kind, address),
-        phase,
-        kind,
-        severity,
-        address,
-        range,
-        detail,
-        suggested,
-        sort: (phase.rank(), severity.rank(), 0, u32::MAX, 0, space_rank, offset),
     }
 }
 
@@ -1011,7 +995,11 @@ mod tests {
             .find(|i| i.kind == "provisional_label" && i.address.contains("0x4"))
             .expect("the noted address must stay on the worklist");
         assert_eq!(noted.sort.2, 1, "a studied address sorts late");
-        assert!(noted.detail.contains("read that note first"), "{}", noted.detail);
+        assert!(
+            matches!(noted.what, ItemKind::ProvisionalLabel { noted: true, .. }),
+            "{:?}",
+            noted.what
+        );
 
         // Ordering only: still present, still blocking.
         assert!(!after.done, "noting an address must not retire it");
@@ -1103,7 +1091,11 @@ mod tests {
             .find(|i| i.kind == "unmapped_gap")
             .expect("a hole between mapped bytes must be reported");
         assert_eq!(gap.range.as_deref(), Some("CODE:0x2..0x4"));
-        assert!(gap.detail.contains("2 byte(s)"), "{}", gap.detail);
+        assert!(
+            matches!(gap.what, ItemKind::UnmappedGap { len: 2, .. }),
+            "{:?}",
+            gap.what
+        );
     }
 
     #[test]
@@ -1215,11 +1207,11 @@ mod tests {
             "{:?}",
             item.suggested
         );
-        // And it says which way the bytes actually lean.
+        // `RET` decodes cleanly.
         assert!(
-            item.detail.contains("decode like code") || item.detail.contains("likelier one"),
-            "{}",
-            item.detail
+            matches!(item.what, ItemKind::FlowIntoData { decodes_like_code: true, .. }),
+            "{:?}",
+            item.what
         );
     }
 
@@ -1254,7 +1246,7 @@ mod tests {
             .expect("code running off");
         assert!(item.suggested.iter().any(|c| c.contains("mark_data")), "{:?}", item.suggested);
         assert!(item.suggested.iter().any(|c| c.contains("map_bytes")), "{:?}", item.suggested);
-        assert!(item.detail.contains("incomplete"), "{}", item.detail);
+        assert!(matches!(item.what, ItemKind::FlowOffEnd { .. }), "{:?}", item.what);
     }
 
     /// A lookup table stays anonymous until it is referenced.
@@ -1288,7 +1280,11 @@ mod tests {
             .expect("a pointer target nothing names must be raised");
         assert_eq!(item.address, "CODE:0x6");
         // The reference is inferred, so the item asks rather than asserts.
-        assert!(item.detail.contains("may help decide"), "{}", item.detail);
+        assert!(
+            matches!(item.what, ItemKind::UnnamedData { inferred: true, .. }),
+            "{:?}",
+            item.what
+        );
 
         // Naming it retires the item.
         db.apply(
@@ -1388,7 +1384,11 @@ mod tests {
             .iter()
             .find(|i| i.kind == "provisional_label" && i.address == "CODE:0x2")
             .expect("the jump target");
-        assert!(item.detail.contains("jump target"), "{}", item.detail);
+        assert!(
+            matches!(&item.what, ItemKind::ProvisionalLabel { role, .. } if role == "jump target"),
+            "{:?}",
+            item.what
+        );
         assert_eq!(
             item.suggested.first().map(String::as_str),
             Some("set_label(address=CODE:0x2, label=\".loop\", local=True)"),
@@ -1447,16 +1447,19 @@ mod tests {
                 .items
                 .iter()
                 .filter(|i| i.kind == "provisional_label" && i.address.contains("0x4"))
-                .map(|i| (i.sort.2, i.detail.clone()))
+                .map(|i| (i.sort.2, i.what.clone()))
                 .next()
         };
         assert!(listed(&db).is_some(), "0x4 is an unnamed call target to begin with");
 
         db.apply(boxed(SetLabel::new((CODE, 4u32), "maybe_inc".to_string(), true, false)), Some(&Env))
             .unwrap();
-        let (deferred, detail) = listed(&db).expect("a working name must stay listed");
+        let (deferred, what) = listed(&db).expect("a working name must stay listed");
         assert_eq!(deferred, 1, "a working name should sort behind untouched addresses");
-        assert!(detail.contains("maybe_inc"), "the item should show the current guess: {detail}");
+        assert!(
+            matches!(&what, ItemKind::ProvisionalLabel { working_name: Some(n), .. } if n == "maybe_inc"),
+            "missing working name: {what:?}"
+        );
 
         db.apply(boxed(SetLabel::new((CODE, 4u32), "inc_a".to_string(), false, false)), Some(&Env))
             .unwrap();
@@ -1513,7 +1516,11 @@ mod tests {
             .find(|i| i.kind == "unfollowed_target")
             .expect("the call at 0x0 still points into the data range");
 
-        assert!(item.detail.contains("marked data"), "{}", item.detail);
+        assert!(
+            matches!(&item.what, ItemKind::UnfollowedTarget { barrier: Some(b), .. } if b.marked == "data"),
+            "{:?}",
+            item.what
+        );
         assert!(
             item.suggested.iter().any(|s| s.starts_with("clear_equivalents")),
             "the barrier has to be droppable from the suggestions: {:?}",
@@ -1619,9 +1626,9 @@ mod tests {
             item.suggested
         );
         assert!(
-            item.detail.contains("filler reading is the likelier one"),
-            "the item should say which the bytes favour: {}",
-            item.detail
+            matches!(item.what, ItemKind::FlowIntoData { decodes_like_code: false, .. }),
+            "expected filler reading: {:?}",
+            item.what
         );
     }
 

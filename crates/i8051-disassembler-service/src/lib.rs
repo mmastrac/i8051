@@ -29,6 +29,8 @@ pub use complete::{Candidate, Completion, ValueSource, complete};
 mod human;
 pub use human::{caret_diagnostic, render_human};
 
+pub mod messages;
+
 mod dto;
 pub use dto::*;
 
@@ -654,6 +656,15 @@ impl Session {
             .flatten();
         items.truncate(limit);
 
+        for entry in &mut items {
+            entry.detail = messages::render_item(
+                &entry.what,
+                messages::Audience::Llm,
+                messages::Level::Verbose,
+            )
+            .unwrap_or_else(|e| format!("message template failed: {e}"));
+        }
+
         Ok(WorklistPage {
             done: report.done,
             remaining,
@@ -1025,6 +1036,32 @@ mod tests {
         assert_eq!(page.returned, DEFAULT_WORKLIST_LIMIT);
         assert!(page.remaining > DEFAULT_WORKLIST_LIMIT);
         assert!(page.cursor.is_some());
+    }
+
+    #[test]
+    fn worklist_renders_facts() {
+        // `INC A` at 0x4 falls through into the `RET` at 0x5, marked data.
+        let env =
+            Box::new(MemoryEnvironment::new().with_file("fw.bin", vec![0, 0, 0, 0, 0x04, 0x22]));
+        let session = Session::from_commands(
+            [
+                r#"set_cpu(name="i8051")"#,
+                r#"map_bytes(address=CODE:0x0, file="fw.bin", file_offset=0x0, size=0x6)"#,
+                "disassemble_range(range=CODE:0x4..0x5)",
+                "mark_data(range=CODE:0x5..0x6, data_type=DataType::Byte)",
+            ],
+            env,
+        )
+        .expect("build session");
+        let page = session
+            .worklist(None, None, Some("flow_into_data"), None, None)
+            .expect("worklist");
+        let item = page.items.first().expect("leak reported");
+        let rendered =
+            messages::render_item(&item.what, messages::Audience::Llm, messages::Level::Verbose)
+                .expect("renders");
+        assert_eq!(item.detail, rendered);
+        assert!(!item.detail.is_empty());
     }
 
     #[test]

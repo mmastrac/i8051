@@ -60,8 +60,7 @@ fn main() -> Result<()> {
     }));
     let _ = rl.load_history(&history);
 
-    let verb_count = controller.borrow().catalog().len();
-    println!("i8051-repl — {verb_count} verbs. Tab to complete, :help for meta-commands, Ctrl-D to quit.");
+    println!("i8051-repl. Tab to complete, :help for meta-commands, Ctrl-D to quit.");
 
     loop {
         match rl.readline("8051> ") {
@@ -126,7 +125,7 @@ fn run_meta(meta: &str, controller: &mut Controller) -> bool {
 fn print_catalog(controller: &Controller, filter: Option<&str>) {
     let catalog = controller.catalog();
     if let Some(v) = filter.and_then(|f| catalog.iter().find(|v| v.name == f)) {
-        println!("{} — {}", v.name, v.description);
+        println!("{}: {}", v.name, v.description);
         for a in &v.args {
             let opt = if a.required { "" } else { " (optional)" };
             println!("  {}{}: {}", a.name, opt, a.description);

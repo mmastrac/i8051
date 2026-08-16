@@ -251,7 +251,7 @@ impl Controller {
         Err(ServiceError::Apply(format!(
             "the database is decoded against {name}: {decoded} bytes of code would stop being \
              code, because nothing decodes without a CPU. Refused. Nothing in a disassembly \
-             session needs the CPU cleared — it is chosen once when the database is created."
+             session needs the CPU cleared: it is chosen once when the database is created."
         )))
     }
 
@@ -278,7 +278,7 @@ impl Controller {
             .find(|s| s.name == name && s.addr != here);
         let Some(clash) = clash else { return Ok(()) };
         Err(ServiceError::Apply(format!(
-            "`{name}` already names {}. Two addresses cannot share a symbol — the listing would \
+            "`{name}` already names {}. Two addresses cannot share a symbol: the listing would \
              be ambiguous and the assembly would not build. Pick a name that distinguishes this \
              one from {} (what it does differently, or its role relative to it), or rename that \
              address first if this is the better home for the name. If this is a spot inside a \
@@ -307,7 +307,7 @@ impl Controller {
         let Some(clash) = clash else { return Ok(()) };
         Err(ServiceError::Apply(format!(
             "`{name}` already marks {clash} in this same routine. A local name is scoped to the \
-             routine that contains it, so it still has to be unique within it — but it is free \
+             routine that contains it, so it still has to be unique within it, but it is free \
              to repeat in other routines."
         )))
     }
@@ -327,7 +327,7 @@ impl Controller {
             return Ok(());
         }
         Err(ServiceError::Apply(format!(
-            "`{name}` is the name this address already displays when it has none — storing it \
+            "`{name}` is the name this address already displays when it has none: storing it \
              would retire the address from the naming worklist without naming it, so it was not \
              applied. Give a name that says what the code does (`uart_tx`, `debounce_column`); a \
              rough guess you refine later beats the generated name. If you cannot tell yet, leave \

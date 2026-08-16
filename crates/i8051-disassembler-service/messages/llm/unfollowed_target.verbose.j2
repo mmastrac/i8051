@@ -1,0 +1,1 @@
+{{ verb }} from {{ from }} to {{ to }} is not decoded{% if barrier %}, and {{ to }} sits inside {{ barrier.range }}, which is marked {{ barrier.marked }}. Either those bytes are code and the barrier is wrong, or the {{ verb }} at {{ from }} is filler that only looks like one. `peek` both and decide{% endif %}

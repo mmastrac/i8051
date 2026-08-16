@@ -1,0 +1,1 @@
+{{ at }} ({{ name }}) is a possible vector: the hardware transfers control here on {{ reason }}, but the bytes are not decoded as code. `peek` them. A jump or call landing inside the image means the vector is in use and those bytes are its handler. Bytes that decode to nothing coherent may mean the entry point is never used.

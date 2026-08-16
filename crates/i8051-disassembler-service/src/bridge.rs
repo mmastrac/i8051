@@ -42,7 +42,7 @@ pub(crate) fn build_command_dsl(
                 continue;
             }
             return Err(ServiceError::Parse(format!(
-                "missing argument `{}` — {}",
+                "missing argument `{}`: {}",
                 arg.name, arg.hint
             )));
         };

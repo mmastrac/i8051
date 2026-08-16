@@ -1,5 +1,7 @@
 use serde_json::Value;
 
+use crate::messages::{Audience, Level, render_value};
+
 /// A verb's result as text, when obvious.
 pub fn render_human(verb: &str, value: &Value) -> Option<String> {
     match verb {
@@ -10,8 +12,29 @@ pub fn render_human(verb: &str, value: &Value) -> Option<String> {
         "peek" => peek(value),
         "help" => help(value),
         "save" => save(value),
+        "next" => next_items(value),
         _ => edit_summary(value),
     }
+}
+
+/// A worklist page as one line per item.
+fn next_items(value: &Value) -> Option<String> {
+    let items = value.get("items")?.as_array()?;
+    if items.is_empty() {
+        let done = value.get("done").and_then(Value::as_bool).unwrap_or(false);
+        return Some(if done { "done" } else { "none" }.to_string());
+    }
+    let remaining = value.get("remaining").and_then(Value::as_u64).unwrap_or(0);
+    let mut out = format!("{} of {remaining} item(s)\n", items.len());
+    for entry in items {
+        let s = |key: &str| entry.get(key).and_then(Value::as_str).unwrap_or("");
+        let text = entry
+            .get("what")
+            .and_then(|w| render_value(w, Audience::Human, Level::Terse).ok())
+            .unwrap_or_else(|| s("detail").to_string());
+        out.push_str(&format!("{:<22} {text}\n", s("kind")));
+    }
+    Some(out)
 }
 
 fn edit_summary(value: &Value) -> Option<String> {
@@ -164,7 +187,7 @@ fn peek(value: &Value) -> Option<String> {
     let commit = value
         .get("commit_with")
         .and_then(Value::as_str)
-        .map(|c| format!("\nnothing was committed — run `{c}` to decode these bytes for real"))
+        .map(|c| format!("\nnothing was committed: run `{c}` to decode these bytes for real"))
         .unwrap_or_else(|| "\nnothing was committed; these bytes are unchanged".to_string());
     Some(format!("[{verdict}] {note}\n{text}{commit}"))
 }
@@ -174,7 +197,7 @@ fn help(value: &Value) -> Option<String> {
         value.get("name").and_then(Value::as_str),
         value.get("description").and_then(Value::as_str),
     ) {
-        let mut out = format!("{name} — {desc}\n");
+        let mut out = format!("{name}: {desc}\n");
         if let Some(args) = value.get("args").and_then(Value::as_array) {
             for a in args {
                 let s = |key: &str| a.get(key).and_then(Value::as_str).unwrap_or("");
@@ -254,6 +277,19 @@ mod tests {
     #[test]
     fn unknown_verb_falls_back() {
         assert!(render_human("status", &json!({})).is_none());
+    }
+
+    #[test]
+    fn next_renders_facts() {
+        let what = json!({ "kind": "unmapped_gap", "from": "CODE:0x2", "to": "CODE:0x4", "len": 2 });
+        let value = json!({
+            "done": false, "remaining": 2, "returned": 1,
+            "items": [{ "kind": "unmapped_gap", "detail": "", "what": what }],
+        });
+        let text = render_human("next", &value).expect("renders");
+        let line = render_value(&what, Audience::Human, Level::Terse).expect("renders");
+        assert_eq!(text.lines().count(), 2);
+        assert!(text.contains(&line), "{text}");
     }
 
     #[test]

@@ -67,7 +67,7 @@ pub fn from_dsl(input: &str) -> Result<Box<dyn Command>, DslError> {
                 continue;
             }
             return Err(DslError::new(format!(
-                "`{name}` is missing argument `{}` — {}",
+                "`{name}` is missing argument `{}`: {}",
                 arg.name, arg.hint
             )));
         }
