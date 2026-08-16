@@ -16,6 +16,7 @@ pub use crate::region::{
 };
 use crate::render::Line;
 use crate::render::sdas::SdasWriter;
+use crate::store::dsl;
 
 pub struct Db {
     regions: BTreeMap<AddressSpace, Region>,
@@ -579,9 +580,8 @@ impl std::fmt::Display for Error {
                 };
                 write!(
                     f,
-                    "range overlaps existing {kind} at {}:0x{:x}",
-                    at.space.dsl_name(),
-                    at.offset
+                    "range overlaps existing {kind} at {}",
+                    at.space.dsl_addr(at.offset)
                 )
             }
             Self::PartialEquivalent {
@@ -595,12 +595,12 @@ impl std::fmt::Display for Error {
                     EquivalentKind::Data => "data",
                     EquivalentKind::Unknown => "a barrier",
                 };
-                let space = at.space.dsl_name();
                 write!(
                     f,
-                    "unmapping would cut {kind} at {space}:0x{start:x}..0x{end:x}, which reaches \
+                    "unmapping would cut {kind} at {}, which reaches \
                      past the bytes being unmapped: `clear_equivalents` first, or unmap a \
-                     larger range"
+                     larger range",
+                    at.space.dsl_range(*start, *end)
                 )
             }
             Self::InvalidLabel { label, reason } => {
@@ -641,13 +641,16 @@ impl std::fmt::Display for Error {
                     EquivalentKind::Data => "data",
                     EquivalentKind::Unknown => "a barrier",
                 };
-                let space = at.space.dsl_name();
+                let clear = dsl!(clear_equivalents(
+                    addresses = { at.space.dsl_set(*start, *end) }
+                ));
                 write!(
                     f,
-                    "{space}:0x{:x} is already {kind}, covering {space}:0x{start:x}..0x{end:x}. \
+                    "{} is already {kind}, covering {}. \
                      Marking only applies to undefined bytes, so clear what is there first: \
-                     clear_equivalents(addresses={space}:{{0x{start:x}..0x{end:x}}})",
-                    at.offset
+                     {clear}",
+                    at.space.dsl_addr(at.offset),
+                    at.space.dsl_range(*start, *end),
                 )?;
                 let covering = end.saturating_sub(*start);
                 let asked = requested_end.saturating_sub(at.offset);
@@ -658,18 +661,20 @@ impl std::fmt::Display for Error {
                          asked about, so restore the remainder straight after"
                     )?;
                     if at.offset > *start {
-                        write!(
-                            f,
-                            ": mark_data(range={space}:0x{start:x}..0x{:x}, \
-                             data_type=DataType::Byte)",
-                            at.offset
-                        )?;
+                        let before = dsl!(mark_data(
+                            range = { at.space.dsl_range(*start, at.offset) },
+                            data_type = DataType::Byte
+                        ));
+                        write!(f, ": {before}")?;
                     }
                     if requested_end < end {
+                        let after = dsl!(mark_data(
+                            range = { at.space.dsl_range(*requested_end, *end) },
+                            data_type = DataType::Byte
+                        ));
                         write!(
                             f,
-                            "{} mark_data(range={space}:0x{requested_end:x}..0x{end:x}, \
-                             data_type=DataType::Byte)",
+                            "{} {after}",
                             if at.offset > *start { " and" } else { ":" }
                         )?;
                     }
@@ -677,13 +682,12 @@ impl std::fmt::Display for Error {
                 Ok(())
             }
             Self::InvalidAddress(at) => {
-                let space = at.space.dsl_name();
                 write!(
                     f,
-                    "no byte is mapped at {space}:0x{:x}, so nothing there can be classified. \
+                    "no byte is mapped at {}, so nothing there can be classified. \
                      Map it first: `map_bytes` to bring bytes in from the image file, or \
                      `set_constant_bytes` to fill the gap with a value and then classify again",
-                    at.offset
+                    at.space.dsl_addr(at.offset)
                 )
             }
             other => write!(f, "{other:?}"),

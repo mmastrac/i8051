@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use i8051_disassembler::store::dsl;
 use i8051_disassembler_service::{Category, Completion, Controller, Session, VerbInfo, complete};
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
@@ -168,23 +169,25 @@ fn first_sentence(doc: &str) -> &str {
 }
 
 fn print_help() {
+    println!("Type a command and press Enter, for example:");
+    for example in [
+        dsl!(status()),
+        dsl!(listing(space = "CODE", start = 0, count = 40)),
+        dsl!(set_label(address = { "CODE:0x100" }, label = "reset")),
+        dsl!(navigate(address = { "CODE:0x100" })),
+    ] {
+        println!("  {example}");
+    }
     println!(
-        "\
-Type a verb call and press Enter, e.g.:
-  status()
-  listing(space=\"CODE\", start=0, count=40)
-  set_label(address=CODE:0x100, label=\"reset\")
-  navigate(address=CODE:0x100)
-
-Addresses are bare DSL (CODE:0x100); text arguments are quoted. Tab completes
-verb and argument names. help(verb=\"set_note\") shows one verb's full syntax
-with a filled example.
+        "\nWrite addresses bare (CODE:0x100) and text in quotes. Tab completes command and
+argument names. {} prints one command's syntax with a filled example.
 
 Meta-commands:
-  :catalog [prefix]   list verbs; an exact name prints its syntax card
+  :catalog [prefix]   list commands, or one command's syntax card
   :save               write edits to the database file (also: save())
   :help               this help
-  :quit               exit (or Ctrl-D)"
+  :quit               exit (or Ctrl-D)",
+        dsl!(help(verb = "set_note"))
     );
 }
 

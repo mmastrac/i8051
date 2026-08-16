@@ -833,6 +833,7 @@ dependencies = [
  "clap",
  "i8051-disassembler",
  "i8051-disassembler-service",
+ "i8051-script",
  "rustyline",
  "serde_json",
 ]

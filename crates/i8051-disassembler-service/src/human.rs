@@ -199,7 +199,7 @@ fn peek(value: &Value) -> Option<String> {
         .get("commit_with")
         .and_then(Value::as_str)
         .map(|c| format!("\nnothing was committed: run `{c}` to decode these bytes for real"))
-        .unwrap_or_else(|| "\nnothing was committed; these bytes are unchanged".to_string());
+        .unwrap_or_else(|| "\nnothing was committed and these bytes are unchanged".to_string());
     Some(format!("[{verdict}] {note}\n{text}{commit}"))
 }
 

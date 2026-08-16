@@ -113,8 +113,10 @@ pub fn catalog() -> Vec<VerbInfo> {
 }
 
 fn call_example<'a>(name: &str, parts: impl Iterator<Item = (&'a str, String)>) -> String {
-    let filled: Vec<String> = parts.map(|(n, v)| format!("{n}={v}")).collect();
-    format!("{name}({})", filled.join(", "))
+    let kwargs: Vec<(&str, i8051_script::Value)> = parts
+        .map(|(name, text)| (name, i8051_script::Value::Verbatim(text)))
+        .collect();
+    i8051_script::render_call(name, &kwargs, None)
 }
 
 fn edit_placeholder(arg: &CommandArg) -> String {
@@ -184,7 +186,7 @@ pub(crate) fn unknown_verb(name: &str) -> ServiceError {
     let hint = i8051_disassembler::commands::closest(name, catalog.iter().map(String::as_str))
         .map(|h| format!(" (did you mean `{h}`?)"))
         .unwrap_or_default();
-    ServiceError::Parse(format!("unknown verb `{name}`{hint}"))
+    ServiceError::Parse(format!("unknown command `{name}`{hint}"))
 }
 
 /// Serialize a verb result to JSON.
@@ -341,8 +343,8 @@ use ArgType::{Boolean, Integer, String as Str};
 static VERBS: &[VerbDef] = &[
     VerbDef {
         name: "help",
-        doc: "The syntax of one verb: its arguments, how to write them, and a filled example. \
-              Without `verb`, every verb with its example.",
+        doc: "The syntax of one command: its arguments, how to write them, and a filled \
+              example. Without `verb`, every command with its example.",
         args: &[ArgDecl::opt("verb", Str)],
         handler: Handler::Query(|_, a| match a.opt_str("verb") {
             Some(name) => {
@@ -360,7 +362,10 @@ static VERBS: &[VerbDef] = &[
                     })
                     .collect();
                 json(serde_json::json!({
-                    "usage": "help(verb=\"set_note\") for one verb's full syntax",
+                    "usage": format!(
+                        "{} for one command's full syntax",
+                        i8051_disassembler::store::dsl!(help(verb = "set_note"))
+                    ),
                     "verbs": verbs,
                 }))
             }
