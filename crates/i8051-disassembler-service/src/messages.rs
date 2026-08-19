@@ -53,6 +53,19 @@ pub fn render_value(
         .map_err(|e| e.to_string())
 }
 
+/// Render a refused command: templated facts plus its fixes.
+pub(crate) fn render_error(error: &i8051_disassembler::db::CommandError) -> String {
+    let mut text = serde_json::to_value(&error.what)
+        .map_err(|e| e.to_string())
+        .and_then(|v| render_value(&v, Audience::Llm, Level::Verbose))
+        .unwrap_or_else(|e| format!("error template failed: {e}"));
+    for suggestion in &error.suggested {
+        text.push_str("\n  ");
+        text.push_str(suggestion);
+    }
+    text
+}
+
 fn template_name(slug: &str, audience: Audience, level: Level) -> String {
     match (audience, level) {
         (Audience::Human, _) => format!("human/{slug}.j2"),
@@ -78,6 +91,8 @@ fn env() -> &'static Environment<'static> {
 
 #[cfg(test)]
 mod tests {
+    use i8051_disassembler::db::ErrorKind;
+
     use super::*;
     use i8051_disassembler::analysis::completeness::{Flow, UnfollowedBarrier};
 
@@ -200,81 +215,125 @@ mod tests {
         }
     }
 
-    fn refusal_samples() -> Vec<crate::Refusal> {
-        use crate::Refusal;
+    fn error_samples() -> Vec<ErrorKind> {
+        use i8051_disassembler::db::ErrorKind;
         let all = vec![
-            Refusal::RangeCoversVectors {
+            ErrorKind::NoEnvironment,
+            ErrorKind::NoCpu,
+            ErrorKind::CpuAlreadySet {
+                current: "i8051".into(),
+            },
+            ErrorKind::UnknownCpu {
+                name: "z80".into(),
+                suggestions: vec!["i8051".into()],
+            },
+            ErrorKind::Overlap {
+                at: "CODE:0x0".into(),
+                marked: "code".into(),
+            },
+            ErrorKind::PartialEquivalent {
+                range: "CODE:0x0..0x10".into(),
+                marked: "data".into(),
+            },
+            ErrorKind::InvalidLabel {
+                label: "9lives".into(),
+                reason: "must start with a letter",
+            },
+            ErrorKind::InvalidArgument {
+                value: "40".into(),
+                reason: "address width must be between 1 and 32 bits",
+            },
+            ErrorKind::UnknownSpace {
+                name: "COED".into(),
+                suggestion: Some("CODE".into()),
+            },
+            ErrorKind::NothingMapped {
+                at: "CODE:0x8".into(),
+            },
+            ErrorKind::InvalidEquivalent,
+            ErrorKind::AlreadyClassified {
+                at: "CODE:0x10".into(),
+                marked: "data".into(),
+                covering: "CODE:0x0..0x40".into(),
+                cleared: 64,
+                asked: 4,
+            },
+            ErrorKind::Io {
+                message: "file not found".into(),
+            },
+            ErrorKind::CpuStillNeeded {
+                cpu: "i8051".into(),
+                decoded: 3,
+            },
+            ErrorKind::LabelTaken {
+                label: "entry".into(),
+                holder: "CODE:0x0".into(),
+            },
+            ErrorKind::LocalLabelTaken {
+                label: ".loop".into(),
+                holder: "CODE:0x8".into(),
+            },
+            ErrorKind::GeneratedLabel {
+                label: "sub_0000".into(),
+            },
+            ErrorKind::RangeDoesNotDecode {
+                count: 3,
+                reasons: vec!["1 branch target(s) point outside the loaded image".into()],
+            },
+            ErrorKind::RangeCoversVectors {
                 vectors: vec!["CODE:0xb (INT_timer0)".into()],
             },
-            Refusal::BarrierStopsAuto {
+            ErrorKind::BarrierStopsAuto {
                 at: "CODE:0x33".into(),
                 barrier: "CODE:0x33..0x34".into(),
                 marked: "data".into(),
             },
-            Refusal::RangeSwallowsTargets {
+            ErrorKind::RangeSwallowsTargets {
                 targets: vec!["CODE:0x34 (from CODE:0x30)".into()],
                 omitted: 0,
                 first_target: "CODE:0x34".into(),
                 first_source: "CODE:0x30".into(),
                 sources: 1,
             },
-            Refusal::RangeDoesNotDecode {
-                count: 3,
-                reasons: vec!["1 branch target(s) point outside the loaded image".into()],
-            },
-            Refusal::CpuStillNeeded {
-                cpu: "i8051".into(),
-                decoded: 3,
-            },
-            Refusal::LabelTaken {
-                label: "entry".into(),
-                holder: "CODE:0x0".into(),
-            },
-            Refusal::LocalLabelTaken {
-                label: ".loop".into(),
-                holder: "CODE:0x8".into(),
-            },
-            Refusal::GeneratedLabel {
-                label: "sub_0000".into(),
-            },
-            Refusal::NothingMapped {
-                at: "CODE:0x8".into(),
-            },
         ];
         // A new variant must add a sample.
-        for refusal in &all {
-            match refusal {
-                Refusal::RangeCoversVectors { .. }
-                | Refusal::BarrierStopsAuto { .. }
-                | Refusal::RangeSwallowsTargets { .. }
-                | Refusal::RangeDoesNotDecode { .. }
-                | Refusal::CpuStillNeeded { .. }
-                | Refusal::LabelTaken { .. }
-                | Refusal::LocalLabelTaken { .. }
-                | Refusal::GeneratedLabel { .. }
-                | Refusal::NothingMapped { .. } => {}
+        for kind in &all {
+            match kind {
+                ErrorKind::NoEnvironment
+                | ErrorKind::NoCpu
+                | ErrorKind::CpuAlreadySet { .. }
+                | ErrorKind::UnknownCpu { .. }
+                | ErrorKind::Overlap { .. }
+                | ErrorKind::PartialEquivalent { .. }
+                | ErrorKind::InvalidLabel { .. }
+                | ErrorKind::InvalidArgument { .. }
+                | ErrorKind::UnknownSpace { .. }
+                | ErrorKind::NothingMapped { .. }
+                | ErrorKind::InvalidEquivalent
+                | ErrorKind::AlreadyClassified { .. }
+                | ErrorKind::Io { .. }
+                | ErrorKind::CpuStillNeeded { .. }
+                | ErrorKind::LabelTaken { .. }
+                | ErrorKind::LocalLabelTaken { .. }
+                | ErrorKind::GeneratedLabel { .. }
+                | ErrorKind::RangeDoesNotDecode { .. }
+                | ErrorKind::RangeCoversVectors { .. }
+                | ErrorKind::BarrierStopsAuto { .. }
+                | ErrorKind::RangeSwallowsTargets { .. } => {}
             }
         }
         all
     }
 
     #[test]
-    fn every_refusal_renders() {
-        for refusal in refusal_samples() {
-            let value = serde_json::to_value(&refusal).expect("serialize");
+    fn every_error_renders() {
+        for kind in error_samples() {
+            let value = serde_json::to_value(&kind).expect("serialize");
             for (audience, level) in FORMS {
                 let text = render_value(&value, audience, level)
                     .unwrap_or_else(|e| panic!("{value}/{audience:?}/{level:?}: {e}"));
                 assert!(!text.trim().is_empty(), "{value}");
             }
-        }
-    }
-
-    #[test]
-    fn slug_matches_tag() {
-        for kind in samples() {
-            let value = serde_json::to_value(&kind).expect("serialize");
-            assert_eq!(value["kind"], kind.slug());
         }
     }
 

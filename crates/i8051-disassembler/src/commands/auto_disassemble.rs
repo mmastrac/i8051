@@ -1,5 +1,5 @@
 use crate::address::SpaceAddressValue;
-use crate::db::{Db, Error};
+use crate::db::{Db, Error, ErrorKind};
 
 use super::{Apply, Command, Environment, boxed};
 
@@ -21,7 +21,7 @@ impl Apply for AutoDisassemble {
         _env: Option<&dyn Environment>,
     ) -> Result<Vec<Box<dyn Command>>, Error> {
         if db.platform().is_none() {
-            return Err(Error::NoCpu);
+            return Err(ErrorKind::NoCpu.into());
         }
         let Self { address } = self;
         let SpaceAddressValue {

@@ -1,4 +1,5 @@
-use crate::db::{Db, Error};
+use crate::db::{Db, Error, ErrorKind};
+use crate::store::dsl;
 use crate::platform::{self, PlatformRef};
 
 use super::{Apply, Command, Environment, boxed};
@@ -23,14 +24,17 @@ impl Apply for SetCpu {
     ) -> Result<Vec<Box<dyn Command>>, Error> {
         let Some(driver) = platform::by_name(&self.name) else {
             if let Some(current) = db.platform() {
-                return Err(Error::CpuAlreadySet {
+                let kind = ErrorKind::CpuAlreadySet {
                     current: current.name().to_string(),
-                });
+                };
+                return Err(Error::from(kind)
+                    .suggest(vec![dsl!(clear_cpu() # "before selecting another CPU")]));
             }
-            return Err(Error::UnknownCpu {
+            return Err(ErrorKind::UnknownCpu {
                 name: self.name.clone(),
                 suggestions: platform::suggest_names(&self.name),
-            });
+            }
+            .into());
         };
         let prev = db.set_platform(Some(driver));
         Ok(vec![restore(prev)])
@@ -87,7 +91,7 @@ mod tests {
     fn disassembly_requires_a_cpu() {
         let mut db = Db::new();
         let auto = boxed(AutoDisassemble::new((i8051::CODE, 0u32)));
-        assert!(matches!(db.apply(auto, None), Err(Error::NoCpu)));
+        assert!(matches!(db.apply(auto, None), Err(e) if matches!(e.what, ErrorKind::NoCpu)));
     }
 
     #[test]
@@ -118,8 +122,8 @@ mod tests {
     fn unknown_cpu_suggests() {
         let mut db = Db::new();
         let err = db.apply(boxed(SetCpu::new("z80")), None).unwrap_err();
-        match err {
-            Error::UnknownCpu { name, suggestions } => {
+        match err.what {
+            ErrorKind::UnknownCpu { name, suggestions } => {
                 assert_eq!(name, "z80");
                 assert_eq!(suggestions[0], "i8051");
             }
@@ -138,7 +142,7 @@ mod tests {
         let mut db = Db::with_platform(i8051::platform());
         assert!(matches!(
             db.apply(boxed(SetCpu::new("z80")), None),
-            Err(Error::CpuAlreadySet { current }) if current == "i8051"
+            Err(e) if matches!(&e.what, ErrorKind::CpuAlreadySet { current } if current == "i8051")
         ));
     }
 }

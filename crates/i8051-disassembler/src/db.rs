@@ -75,11 +75,12 @@ impl Db {
         let spaces = self.spaces();
         match AddressSpace::from_dsl_name(name) {
             Some(space) if spaces.contains(&space) => Ok(space),
-            _ => Err(Error::UnknownSpace {
+            _ => Err(ErrorKind::UnknownSpace {
                 name: name.to_string(),
                 suggestion: crate::commands::closest(name, spaces.iter().map(|s| s.dsl_name()))
                     .map(str::to_string),
-            }),
+            }
+            .into()),
         }
     }
 
@@ -350,7 +351,166 @@ impl Db {
         command: Box<dyn Command>,
         env: Option<&dyn Environment>,
     ) -> Result<Vec<Box<dyn Command>>, Error> {
+        self.check(command.as_ref())?;
         command.apply(self, env)
+    }
+
+    /// Judgment safe to run on replay.
+    fn check(&self, command: &dyn Command) -> Result<(), CommandError> {
+        self.check_cpu_still_needed(command)?;
+        self.check_label(command)?;
+        self.check_speculative_decode(command)
+    }
+
+    fn check_cpu_still_needed(&self, command: &dyn Command) -> Result<(), CommandError> {
+        if command
+            .as_any()
+            .downcast_ref::<crate::commands::ClearCpu>()
+            .is_none()
+        {
+            return Ok(());
+        }
+        let Some(cpu) = self.platform().map(|p| p.name().to_string()) else {
+            return Ok(());
+        };
+        let decoded: u64 = self
+            .regions
+            .values()
+            .map(|region| u64::from(region.coverage().code))
+            .sum();
+        if decoded == 0 {
+            return Ok(());
+        }
+        Err(ErrorKind::CpuStillNeeded { cpu, decoded }.into())
+    }
+
+    fn check_label(&self, command: &dyn Command) -> Result<(), CommandError> {
+        let Some(set) = command.as_any().downcast_ref::<crate::commands::SetLabel>() else {
+            return Ok(());
+        };
+        let Ok(name) = crate::commands::normalize_label(&set.label) else {
+            return Ok(());
+        };
+        let here = set.address.space.dsl_addr(set.address.offset);
+        if crate::labels::is_provisional_name(&name) {
+            return Err(CommandError::from(ErrorKind::GeneratedLabel { label: name }).suggest(
+                vec![
+                    dsl!(set_label(address = {here}, label = "...")
+                        # "a name that says what the code does, e.g. uart_tx"),
+                    dsl!(set_note(address = {here}, note = Note(content = "..."))
+                        # "record what you know if you cannot tell yet"),
+                ],
+            ));
+        }
+        if set.local {
+            return self.check_duplicate_local(set, &name);
+        }
+        for (&space, region) in &self.regions {
+            let clash = region
+                .labels()
+                .map(|(offset, label)| (offset, label.to_string()))
+                .chain(region.functions().map(|(offset, f)| (offset, f.name.clone())))
+                .find(|(offset, label)| {
+                    *label == name && (space, *offset) != (set.address.space, set.address.offset)
+                });
+            let Some((offset, _)) = clash else { continue };
+            let holder = space.dsl_addr(offset);
+            return Err(CommandError::from(ErrorKind::LabelTaken {
+                label: name.clone(),
+                holder: holder.clone(),
+            })
+            .suggest(vec![
+                dsl!(set_label(address = {here}, label = "...")
+                    # "a name that distinguishes it from {holder}"),
+                dsl!(set_label(address = {here}, label = "{name}", local = True)
+                    # "if this is a spot inside a routine, not a routine of its own"),
+                dsl!(set_label(address = {holder}, label = "...")
+                    # "to free the name if this is its better home"),
+            ]));
+        }
+        Ok(())
+    }
+
+    fn check_duplicate_local(
+        &self,
+        set: &crate::commands::SetLabel,
+        name: &str,
+    ) -> Result<(), CommandError> {
+        let space = set.address.space;
+        let Some(region) = self.region(space) else {
+            return Ok(());
+        };
+        let Some(scope) = region.scope_of(set.address.offset) else {
+            return Ok(());
+        };
+        let clash = region
+            .labels()
+            .find(|&(at, other)| {
+                at != set.address.offset && other == name && region.scope_of(at) == Some(scope)
+            })
+            .map(|(at, _)| space.dsl_addr(at));
+        let Some(clash) = clash else { return Ok(()) };
+        let here = space.dsl_addr(set.address.offset);
+        Err(CommandError::from(ErrorKind::LocalLabelTaken {
+            label: name.to_string(),
+            holder: clash,
+        })
+        .suggest(vec![dsl!(set_label(address = {here}, label = "...", local = True)
+            # "a name unused in this routine")]))
+    }
+
+    fn check_speculative_decode(&self, command: &dyn Command) -> Result<(), CommandError> {
+        let Some(range) = command
+            .as_any()
+            .downcast_ref::<crate::commands::DisassembleRange>()
+        else {
+            return Ok(());
+        };
+        if range.force {
+            return Ok(());
+        }
+        let space = range.range.space;
+        let decode = self.peek_linear(space, range.range.start, range.range.end);
+        let mut reasons = Vec::new();
+        if decode.out_of_range_targets > 0 {
+            reasons.push(format!(
+                "{} branch target(s) point outside the loaded image",
+                decode.out_of_range_targets
+            ));
+        }
+        if decode.self_misaligned_targets > 0 {
+            reasons.push(format!(
+                "{} branch target(s) land midway through another instruction in the same range",
+                decode.self_misaligned_targets
+            ));
+        }
+        if decode.misaligned_targets > 0 {
+            reasons.push(format!(
+                "{} branch target(s) land inside existing instructions",
+                decode.misaligned_targets
+            ));
+        }
+        if reasons.is_empty() {
+            return Ok(());
+        }
+        Err(
+            CommandError::from(ErrorKind::RangeDoesNotDecode {
+                count: decode.lines.len(),
+                reasons,
+            })
+            .suggest(vec![
+                dsl!(auto_disassemble(address = {space.dsl_addr(range.range.start)})
+                    # "follows flow and stops where it stops"),
+                dsl!(mark_data(
+                    range = {space.dsl_range(range.range.start, range.range.end)},
+                    data_type = DataType::Byte
+                ) # "if the whole range is data"),
+                dsl!(disassemble_range(
+                    range = {space.dsl_range(range.range.start, range.range.end)},
+                    force = True
+                ) # "to decode the bytes as-is"),
+            ]),
+        )
     }
 
     /// Byte counts for mapped content classified by equivalent kind.
@@ -516,177 +676,191 @@ impl SpaceUsage {
     }
 }
 
+/// A refused command: facts plus commands that resolve it.
 #[derive(Debug)]
-pub enum Error {
+pub struct CommandError {
+    pub what: ErrorKind,
+    /// Commands that resolve it, runnable verbatim.
+    pub suggested: Vec<String>,
+}
+
+/// Kept for existing signatures.
+pub type Error = CommandError;
+
+impl CommandError {
+    /// Attach commands that resolve this error.
+    pub fn suggest(mut self, suggested: Vec<String>) -> Self {
+        #[cfg(debug_assertions)]
+        for suggestion in &suggested {
+            if let Err(e) = crate::store::parse_call(suggestion) {
+                panic!("error suggestion does not parse: {suggestion:?}: {e}");
+            }
+        }
+        self.suggested = suggested;
+        self
+    }
+}
+
+impl From<ErrorKind> for CommandError {
+    fn from(what: ErrorKind) -> Self {
+        Self {
+            what,
+            suggested: Vec::new(),
+        }
+    }
+}
+
+impl From<std::io::Error> for CommandError {
+    fn from(error: std::io::Error) -> Self {
+        ErrorKind::Io {
+            message: error.to_string(),
+        }
+        .into()
+    }
+}
+
+impl std::fmt::Display for CommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.what)?;
+        for suggestion in &self.suggested {
+            write!(f, "\n  {suggestion}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for CommandError {}
+
+/// The facts of a refused command, rendered elsewhere.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ErrorKind {
+    /// File access needed, none attached.
     NoEnvironment,
-    /// A disassembly command ran with no CPU selected (`set_cpu` must run first).
+    /// A disassembly command with no CPU selected.
     NoCpu,
-    /// `set_cpu` ran while a CPU was already selected.
-    CpuAlreadySet {
-        current: String,
-    },
-    /// `set_cpu` named a CPU with no built-in driver.
+    /// `set_cpu` while a CPU is selected.
+    CpuAlreadySet { current: String },
+    /// A CPU with no built-in driver.
     UnknownCpu {
         name: String,
         suggestions: Vec<String>,
     },
-    Overlap {
-        at: SpaceAddressValue,
-        existing: EquivalentKind,
-    },
-    /// Unmapping would have cut a classification that extends past the range.
-    PartialEquivalent {
-        at: SpaceAddressValue,
-        existing: EquivalentKind,
-        start: AddressValue,
-        end: AddressValue,
-    },
-    /// A label was not a legal assembler symbol.
+    /// A range overlapping an existing classification.
+    Overlap { at: String, marked: String },
+    /// An unmap cutting a longer classification.
+    PartialEquivalent { range: String, marked: String },
+    /// An illegal assembler symbol.
     InvalidLabel {
         label: String,
         reason: &'static str,
     },
+    /// A value the command cannot take.
     InvalidArgument {
         value: String,
         reason: &'static str,
     },
-    /// An address space this database does not have.
+    /// An address space this database lacks.
     UnknownSpace {
         name: String,
         suggestion: Option<String>,
     },
-    /// This address is not valid for this operation.
-    InvalidAddress(SpaceAddressValue),
+    /// A classify target with no mapped byte.
+    NothingMapped { at: String },
+    /// A classification the bytes cannot take.
     InvalidEquivalent,
-    /// This range is already classified.
-    NotUndefined {
-        at: SpaceAddressValue,
-        existing: EquivalentKind,
-        start: AddressValue,
-        end: AddressValue,
-        requested_end: AddressValue,
+    /// A mark over already-classified bytes.
+    AlreadyClassified {
+        at: String,
+        marked: String,
+        covering: String,
+        /// Bytes the unblocking clear takes.
+        cleared: u64,
+        /// Bytes the command asked about.
+        asked: u64,
     },
-    Io(std::io::Error),
+    /// A filesystem failure.
+    Io { message: String },
+    /// A cleared CPU with decoded bytes.
+    CpuStillNeeded { cpu: String, decoded: u64 },
+    /// A label another address already holds.
+    LabelTaken { label: String, holder: String },
+    /// A local label reused inside one routine.
+    LocalLabelTaken { label: String, holder: String },
+    /// A label equal to the generated form.
+    GeneratedLabel { label: String },
+    /// A range that decodes badly.
+    RangeDoesNotDecode { count: usize, reasons: Vec<String> },
+    /// A classify range covering live vectors.
+    RangeCoversVectors { vectors: Vec<String> },
+    /// An auto-disassemble root under a barrier.
+    BarrierStopsAuto {
+        at: String,
+        barrier: String,
+        marked: String,
+    },
+    /// A classify range covering branch targets.
+    RangeSwallowsTargets {
+        /// `addr (from callers)` phrases, at most four.
+        targets: Vec<String>,
+        omitted: usize,
+        first_target: String,
+        first_source: String,
+        sources: usize,
+    },
 }
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Overlap { at, existing } => {
-                let kind = match existing {
-                    EquivalentKind::Code => "code",
-                    EquivalentKind::Data => "data",
-                    EquivalentKind::Unknown => "barrier",
-                };
-                write!(
-                    f,
-                    "range overlaps existing {kind} at {}",
-                    at.space.dsl_addr(at.offset)
-                )
-            }
-            Self::PartialEquivalent {
-                at,
-                existing,
-                start,
-                end,
-            } => {
-                let kind = match existing {
-                    EquivalentKind::Code => "code",
-                    EquivalentKind::Data => "data",
-                    EquivalentKind::Unknown => "a barrier",
-                };
-                write!(
-                    f,
-                    "unmapping would cut {kind} at {}, which reaches \
-                     past the bytes being unmapped: `clear_equivalents` first, or unmap a \
-                     larger range",
-                    at.space.dsl_range(*start, *end)
-                )
-            }
-            Self::InvalidLabel { label, reason } => {
-                write!(f, "{label:?} is not a usable label: {reason}")
-            }
-            Self::InvalidArgument { value, reason } => {
-                write!(f, "{value:?} is not usable here: {reason}")
-            }
-            Self::UnknownSpace { name, suggestion } => {
-                write!(f, "unknown address space {name:?}")?;
-                match suggestion {
-                    Some(hint) => write!(f, " (did you mean `{hint}`?)"),
-                    None => Ok(()),
-                }
-            }
-            Self::CpuAlreadySet { current } => {
-                write!(
-                    f,
-                    "CPU already set to {current:?} (use clear_cpu() before selecting another)"
-                )
-            }
-            Self::UnknownCpu { name, suggestions } => {
-                write!(f, "unknown CPU {name:?}")?;
-                if !suggestions.is_empty() {
-                    write!(f, ", did you mean: {}", suggestions.join(", "))?;
-                }
-                Ok(())
-            }
-            Self::NotUndefined {
-                at,
-                existing,
-                start,
-                end,
-                requested_end,
-            } => {
-                let kind = match existing {
-                    EquivalentKind::Code => "code",
-                    EquivalentKind::Data => "data",
-                    EquivalentKind::Unknown => "a barrier",
-                };
-                let clear = dsl!(clear_equivalents(
-                    addresses = { at.space.dsl_set(*start, *end) }
-                ));
-                write!(
-                    f,
-                    "{} is already {kind}, covering {}. \
-                     Marking only applies to undefined bytes, so clear what is there first: \
-                     {clear}",
-                    at.space.dsl_addr(at.offset),
-                    at.space.dsl_range(*start, *end),
-                )?;
-                let covering = end.saturating_sub(*start);
-                let asked = requested_end.saturating_sub(at.offset);
-                if covering > asked {
-                    write!(
-                        f,
-                        ". That clears all 0x{covering:x} byte(s), well past the 0x{asked:x} you \
-                         asked about, so restore the remainder straight after"
-                    )?;
-                    if at.offset > *start {
-                        let before = dsl!(mark_data(
-                            range = { at.space.dsl_range(*start, at.offset) },
-                            data_type = DataType::Byte
-                        ));
-                        write!(f, ": {before}")?;
-                    }
-                    if requested_end < end {
-                        let after = dsl!(mark_data(
-                            range = { at.space.dsl_range(*requested_end, *end) },
-                            data_type = DataType::Byte
-                        ));
-                        write!(
-                            f,
-                            "{} {after}",
-                            if at.offset > *start { " and" } else { ":" }
-                        )?;
-                    }
-                }
-                Ok(())
-            }
-            Self::InvalidAddress(at) => {
-                write!(f, "no byte is mapped at {}", at.space.dsl_addr(at.offset))
-            }
-            other => write!(f, "{other:?}"),
-        }
+/// The word for a classification in messages.
+pub(crate) fn marked_word(kind: EquivalentKind) -> &'static str {
+    match kind {
+        EquivalentKind::Code => "code",
+        EquivalentKind::Data => "data",
+        EquivalentKind::Unknown => "barrier",
     }
+}
+
+/// A [`ErrorKind::NothingMapped`] with its fixes.
+pub(crate) fn nothing_mapped(space: AddressSpace, offset: AddressValue) -> CommandError {
+    let at = space.dsl_addr(offset);
+    let range = space.dsl_range(offset, offset.saturating_add(1));
+    CommandError::from(ErrorKind::NothingMapped { at: at.clone() }).suggest(vec![
+        dsl!(map_bytes(address = {at}, file = "...", file_offset = 0x0, size = 0x0)
+            # "bring bytes in from the image file"),
+        dsl!(set_constant_bytes(range = {range}, value = 0x0)
+            # "fill the gap with a value, then classify again"),
+    ])
+}
+
+/// An [`ErrorKind::AlreadyClassified`] with its unblocking clear.
+pub(crate) fn already_classified(
+    at: SpaceAddressValue,
+    existing: EquivalentKind,
+    start: AddressValue,
+    end: AddressValue,
+    requested_end: AddressValue,
+) -> CommandError {
+    let space = at.space;
+    let mut suggested = vec![dsl!(clear_equivalents(addresses = {space.dsl_set(start, end)}))];
+    if at.offset > start {
+        suggested.push(dsl!(mark_data(
+            range = {space.dsl_range(start, at.offset)},
+            data_type = DataType::Byte
+        ) # "restore this remainder after the clear"));
+    }
+    if requested_end < end {
+        suggested.push(dsl!(mark_data(
+            range = {space.dsl_range(requested_end, end)},
+            data_type = DataType::Byte
+        ) # "restore this remainder after the clear"));
+    }
+    CommandError::from(ErrorKind::AlreadyClassified {
+        at: space.dsl_addr(at.offset),
+        marked: marked_word(existing).to_string(),
+        covering: space.dsl_range(start, end),
+        cleared: u64::from(end.saturating_sub(start)),
+        asked: u64::from(requested_end.saturating_sub(at.offset)),
+    })
+    .suggest(suggested)
 }
 
 #[cfg(test)]
@@ -1073,7 +1247,7 @@ loc_0010:
 
         let dsl = crate::store::to_dsl_many(&db.to_commands());
         assert!(
-            dsl.contains("disassemble_range(range=CODE:0x0..0x3, force=False)"),
+            dsl.contains("disassemble_range(range=CODE:0x0..0x3, force=True)"),
             "code island coalesced: {dsl}"
         );
         assert!(
@@ -1096,7 +1270,7 @@ loc_0010:
         // CJNE A,0x20,rel: three operands. We override the third.
         let (mut db, env) = mapped("b.bin", &[0xB5, 0x20, 0x10]);
         db.apply(
-            boxed(DisassembleRange::new((CODE, 0u32..3u32), false)),
+            boxed(DisassembleRange::new((CODE, 0u32..3u32), true)),
             None,
         )
         .unwrap();
@@ -1147,22 +1321,21 @@ loc_0010:
 
     #[test]
     fn refusal_names_restore_bytes() {
-        let text = Error::NotUndefined {
-            at: (CODE, 0xb6eu32).into(),
-            existing: EquivalentKind::Data,
-            start: 0xad5,
-            end: 0x1000,
-            requested_end: 0xb72,
-        }
-        .to_string();
-
+        let err = crate::db::already_classified(
+            (CODE, 0xb6eu32).into(),
+            EquivalentKind::Data,
+            0xad5,
+            0x1000,
+            0xb72,
+        );
+        assert!(matches!(
+            err.what,
+            ErrorKind::AlreadyClassified { cleared: 0x52b, .. }
+        ));
+        let text = err.to_string();
         assert!(
             text.contains("clear_equivalents(addresses=CODE:{0xad5..0x1000})"),
             "the clear has to be named: {text}"
-        );
-        assert!(
-            text.contains("0x52b"),
-            "the real cost has to be stated: {text}"
         );
         assert!(
             text.contains("mark_data(range=CODE:0xad5..0xb6e"),
@@ -1176,24 +1349,24 @@ loc_0010:
 
     #[test]
     fn refusals_name_unblocking_command() {
-        let occupied = Error::NotUndefined {
-            at: (CODE, 0x8u32).into(),
-            existing: EquivalentKind::Code,
-            start: 0x8,
-            end: 0xA,
-            requested_end: 0xA,
-        };
+        let occupied =
+            crate::db::already_classified((CODE, 0x8u32).into(), EquivalentKind::Code, 0x8, 0xA, 0xA);
+        assert!(matches!(
+            &occupied.what,
+            ErrorKind::AlreadyClassified { marked, .. } if marked == "code"
+        ));
         let text = occupied.to_string();
-        assert!(text.contains("already code"), "{text}");
         assert!(
             text.contains("clear_equivalents(addresses=CODE:{0x8..0xa})"),
             "the message must carry a runnable command: {text}"
         );
-        // Request and equivalent coincide, so there is no remainder to mention.
-        assert!(!text.contains("restore the remainder"), "{text}");
+        // Request and equivalent coincide, so there is no remainder to restore.
+        assert!(!text.contains("mark_data"), "{text}");
 
-        let unmapped = Error::InvalidAddress((CODE, 0x8u32).into());
-        let text = unmapped.to_string();
-        assert!(text.contains("no byte is mapped at CODE:0x8"), "{text}");
+        let unmapped = crate::db::nothing_mapped(CODE, 0x8);
+        assert!(matches!(
+            &unmapped.what,
+            ErrorKind::NothingMapped { at } if at == "CODE:0x8"
+        ));
     }
 }

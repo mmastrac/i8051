@@ -16,8 +16,8 @@ use crate::commands::{
     SetComment, SetConstantBytes, SetFunction, SetLabel, boxed,
 };
 use crate::db::{
-    Equivalent, EquivalentAt, EquivalentKind, EquivalentRange, Error, Function, OperandOverride,
-    SpaceUsage,
+    Equivalent, EquivalentAt, EquivalentKind, EquivalentRange, Error, ErrorKind, Function,
+    OperandOverride, SpaceUsage,
 };
 use crate::labels::{ImplicitLabels, LabelCollector, LabelKind, Labels};
 use crate::pattern::BytePattern;
@@ -733,13 +733,13 @@ impl Region {
                 .equivalent_span(offset, &equivalent)
                 .map(|span| offset.saturating_add(span))
                 .unwrap_or(offset.saturating_add(1));
-            return Err(Error::NotUndefined {
-                at: (self.space, offset).into(),
+            return Err(crate::db::already_classified(
+                (self.space, offset).into(),
                 existing,
                 start,
                 end,
                 requested_end,
-            });
+            ));
         }
 
         let span = self.equivalent_span(offset, &equivalent)?;
@@ -790,14 +790,15 @@ impl Region {
         let mut addr = start;
         let mut spans = Vec::new();
         while addr < end {
-            let insn = self.decode_at(addr).ok_or(Error::InvalidEquivalent)?;
+            let insn = self.decode_at(addr).ok_or_else(|| Error::from(ErrorKind::InvalidEquivalent))?;
             let insn_end = addr.saturating_add(insn.len() as AddressValue);
             let overlaps = self.snapshot_equivalents(addr, insn_end - addr);
             if let Some((at, range)) = overlaps.first() {
-                return Err(Error::Overlap {
-                    at: (self.space, *at).into(),
-                    existing: range.equivalent.kind(),
-                });
+                return Err(ErrorKind::Overlap {
+                    at: self.space.dsl_addr(*at),
+                    marked: crate::db::marked_word(range.equivalent.kind()).to_string(),
+                }
+                .into());
             }
             spans.push((addr, insn_end));
             addr = insn_end;
@@ -1622,7 +1623,7 @@ impl Region {
                     run = Some((start, equivalent_range.end));
                 }
                 (Some((start, end)), _) => {
-                    commands.push(boxed(DisassembleRange::new((space, start..end), false)));
+                    commands.push(boxed(DisassembleRange::new((space, start..end), true)));
                     run = island.then_some((offset, equivalent_range.end));
                 }
                 (None, true) => run = Some((offset, equivalent_range.end)),
@@ -1630,7 +1631,7 @@ impl Region {
             }
         }
         if let Some((start, end)) = run {
-            commands.push(boxed(DisassembleRange::new((space, start..end), false)));
+            commands.push(boxed(DisassembleRange::new((space, start..end), true)));
         }
 
         for (&(offset, index), value) in &self.overrides {
@@ -1786,7 +1787,7 @@ impl Region {
             Equivalent::Code => self
                 .decode_at(offset)
                 .map(|insn| insn.len() as AddressValue)
-                .ok_or(Error::InvalidEquivalent),
+                .ok_or_else(|| Error::from(ErrorKind::InvalidEquivalent)),
             Equivalent::Data(_, size) => Ok(*size),
             Equivalent::Unknown(size) => Ok(*size),
         }
@@ -1799,7 +1800,7 @@ impl Region {
     ) -> Result<(), Error> {
         for i in 0..span {
             if self.read_byte(offset + i).is_none() {
-                return Err(Error::InvalidAddress((self.space, offset + i).into()));
+                return Err(crate::db::nothing_mapped(self.space, offset + i));
             }
         }
         Ok(())
@@ -1814,10 +1815,11 @@ impl Region {
         if let Some((&other_start, other)) = self.equivalents.range(..end).next_back()
             && other.end > offset
         {
-            return Err(Error::Overlap {
-                at: (self.space, other_start).into(),
-                existing: other.equivalent.kind(),
-            });
+            return Err(ErrorKind::Overlap {
+                at: self.space.dsl_addr(other_start),
+                marked: crate::db::marked_word(other.equivalent.kind()).to_string(),
+            }
+            .into());
         }
         Ok(())
     }
@@ -2054,7 +2056,7 @@ fn ranges_overlap_inclusive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{DataType, Equivalent, EquivalentKind, OperandOverride, SpaceUsage};
+    use crate::db::{DataType, Equivalent, OperandOverride, SpaceUsage};
     use crate::platform::i8051::{CODE, platform};
 
     #[test]
@@ -2065,7 +2067,10 @@ mod tests {
         let err = region
             .disassemble_linear(0, 2)
             .expect_err("second instruction overlaps code at 0");
-        assert_eq!(err.to_string(), "range overlaps existing code at CODE:0x0");
+        assert!(matches!(
+            &err.what,
+            ErrorKind::Overlap { at, marked } if at == "CODE:0x0" && marked == "code"
+        ));
     }
 
     #[test]
@@ -2080,15 +2085,12 @@ mod tests {
         region.set_equivalent(0, Equivalent::Code).unwrap();
         assert!(matches!(
             region.set_equivalent(1, Equivalent::Code),
-            Err(Error::NotUndefined { at, .. }) if at.offset == 1
+            Err(e) if matches!(&e.what, ErrorKind::AlreadyClassified { at, .. } if at == "CODE:0x1")
         ));
         region.set_equivalent(6, Equivalent::Code).unwrap();
         assert!(matches!(
             region.set_equivalent(4, Equivalent::Data(DataType::Byte, 3)),
-            Err(Error::Overlap {
-                at,
-                existing: EquivalentKind::Code,
-            }) if at == (CODE, 6).into()
+            Err(e) if matches!(&e.what, ErrorKind::Overlap { at, marked } if at == "CODE:0x6" && marked == "code")
         ));
     }
 
@@ -2695,13 +2697,14 @@ mod tests {
         let err = region
             .set_equivalent(0x10, Equivalent::Data(DataType::Byte, 4))
             .expect_err("those bytes already carry a classification");
+        assert!(matches!(
+            &err.what,
+            ErrorKind::AlreadyClassified { marked, cleared: 0x40, asked: 0x4, .. }
+                if marked == "data"
+        ));
+        // The clear, and how to put back what was not being retyped.
         let text = err.to_string();
-
-        assert!(text.contains("already data"), "{text}");
         assert!(text.contains("clear_equivalents"), "{text}");
-        // The cost, and how to put back what was not being retyped.
-        assert!(text.contains("0x40 byte(s)"), "the true cost: {text}");
-        assert!(text.contains("past the 0x4 you asked about"), "{text}");
         assert!(
             text.contains("mark_data(range=CODE:0x0..0x10"),
             "restore before: {text}"
@@ -2720,7 +2723,9 @@ mod tests {
         let err = region
             .set_equivalent(0, Equivalent::Data(DataType::Byte, 8))
             .expect_err("the run runs past the mapped bytes");
-        let text = err.to_string();
-        assert!(text.starts_with("no byte is mapped at CODE:0x2"), "{text}");
+        assert!(matches!(
+            &err.what,
+            ErrorKind::NothingMapped { at } if at == "CODE:0x2"
+        ));
     }
 }

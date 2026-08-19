@@ -2,7 +2,7 @@ use i8051_disassembler::address::{
     AddressRange, AddressSpace, AddressValue, PhysicalAddr, SpaceAddressValue, Xref, XrefType,
 };
 use i8051_disassembler::analysis::completeness::{self, Gate, Item, Phase};
-use i8051_disassembler::db::{Db, Note, ScratchDecode};
+use i8051_disassembler::db::{CommandError, Db, Note, ScratchDecode};
 use i8051_disassembler::render::Line;
 use i8051_disassembler::store::{dsl, from_dsl, from_dsl_value, to_dsl};
 
@@ -43,85 +43,13 @@ pub const DEFAULT_PEEK_LINES: usize = 24;
 mod file;
 pub use file::{FsEnvironment, MemoryEnvironment};
 
-/// A refused edit's facts, rendered from templates.
-#[derive(Debug, serde::Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Refusal {
-    /// A classify range covering live vectors.
-    RangeCoversVectors { vectors: Vec<String> },
-    /// An auto-disassemble root under a barrier.
-    BarrierStopsAuto {
-        at: String,
-        barrier: String,
-        marked: String,
-    },
-    /// A classify range covering branch targets.
-    RangeSwallowsTargets {
-        /// `addr (from callers)` phrases, at most four.
-        targets: Vec<String>,
-        omitted: usize,
-        first_target: String,
-        first_source: String,
-        sources: usize,
-    },
-    /// A range that decodes badly.
-    RangeDoesNotDecode { count: usize, reasons: Vec<String> },
-    /// A cleared CPU with decoded bytes.
-    CpuStillNeeded { cpu: String, decoded: u64 },
-    /// A label another address already holds.
-    LabelTaken { label: String, holder: String },
-    /// A local label reused inside one routine.
-    LocalLabelTaken { label: String, holder: String },
-    /// A label equal to the generated form.
-    GeneratedLabel { label: String },
-    /// A classify target with no mapped byte.
-    NothingMapped { at: String },
-}
-
 #[derive(Debug)]
 /// A failed service call, by cause.
 pub enum ServiceError {
     Parse(String),
     Apply(String),
-    /// A guarded edit, declined with fixes.
-    Refused {
-        what: Refusal,
-        /// Commands that resolve it, runnable verbatim.
-        suggested: Vec<String>,
-    },
-}
-
-impl ServiceError {
-    /// A refusal plus commands that resolve it.
-    pub(crate) fn refused(what: Refusal, suggested: Vec<String>) -> Self {
-        #[cfg(debug_assertions)]
-        for suggestion in &suggested {
-            if let Err(e) = i8051_disassembler::store::parse_call(suggestion) {
-                panic!("refusal suggestion does not parse: {suggestion:?}: {e}");
-            }
-        }
-        Self::Refused { what, suggested }
-    }
-}
-
-/// Lift a database error into a templated refusal when one fits.
-fn convert_db_error(error: i8051_disassembler::db::Error) -> ServiceError {
-    match error {
-        i8051_disassembler::db::Error::InvalidAddress(at) => {
-            let text = at.space.dsl_addr(at.offset);
-            let range = at.space.dsl_range(at.offset, at.offset.saturating_add(1));
-            ServiceError::refused(
-                Refusal::NothingMapped { at: text.clone() },
-                vec![
-                    dsl!(map_bytes(address = {text}, file = "...", file_offset = 0x0, size = 0x0)
-                        # "bring bytes in from the image file"),
-                    dsl!(set_constant_bytes(range = {range}, value = 0x0)
-                        # "fill the gap with a value, then classify again"),
-                ],
-            )
-        }
-        other => ServiceError::Apply(other.to_string()),
-    }
+    /// A refused command, rendered from templates.
+    Command(CommandError),
 }
 
 impl std::fmt::Display for ServiceError {
@@ -129,23 +57,7 @@ impl std::fmt::Display for ServiceError {
         match self {
             Self::Parse(m) => write!(f, "{m}"),
             Self::Apply(m) => write!(f, "{m}"),
-            Self::Refused { what, suggested } => {
-                let text = serde_json::to_value(what)
-                    .map_err(|e| e.to_string())
-                    .and_then(|v| {
-                        messages::render_value(
-                            &v,
-                            messages::Audience::Llm,
-                            messages::Level::Verbose,
-                        )
-                    })
-                    .unwrap_or_else(|e| format!("refusal template failed: {e}"));
-                write!(f, "{text}")?;
-                for suggestion in suggested {
-                    write!(f, "\n  {suggestion}")?;
-                }
-                Ok(())
-            }
+            Self::Command(error) => write!(f, "{}", messages::render_error(error)),
         }
     }
 }
@@ -178,8 +90,9 @@ impl Session {
         for (i, dsl) in commands.into_iter().enumerate() {
             let command = from_dsl(dsl.as_ref())
                 .map_err(|e| ServiceError::Parse(format!("record {i}: {e}")))?;
-            db.apply(command, Some(env.as_ref()))
-                .map_err(|e| ServiceError::Apply(format!("record {i}: {e}")))?;
+            db.apply(command, Some(env.as_ref())).map_err(|e| {
+                ServiceError::Apply(format!("record {i}: {}", messages::render_error(&e)))
+            })?;
         }
         Ok(Self {
             db,
@@ -202,7 +115,7 @@ impl Session {
         let undo = self
             .db
             .apply(command, Some(self.env.as_ref()))
-            .map_err(convert_db_error)?;
+            .map_err(ServiceError::Command)?;
         Ok(undo.iter().map(|c| to_dsl(c.as_ref())).collect())
     }
 
@@ -1187,13 +1100,13 @@ mod tests {
 
     #[test]
     fn refusal_displays_suggestions() {
-        let err = ServiceError::refused(
-            Refusal::BarrierStopsAuto {
+        let err = ServiceError::Command(
+            CommandError::from(i8051_disassembler::db::ErrorKind::BarrierStopsAuto {
                 at: "CODE:0x33".into(),
                 barrier: "CODE:0x33..0x34".into(),
                 marked: "data".into(),
-            },
-            vec!["auto_disassemble(address=CODE:0x33)".into()],
+            })
+            .suggest(vec!["auto_disassemble(address=CODE:0x33)".into()]),
         );
         let text = err.to_string();
         assert!(

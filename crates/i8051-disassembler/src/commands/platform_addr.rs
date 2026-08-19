@@ -1,5 +1,5 @@
 use crate::address::SpaceAddressValue;
-use crate::db::{Db, Error};
+use crate::db::{Db, Error, ErrorKind};
 
 use super::{Apply, Command, Environment, boxed};
 
@@ -27,10 +27,11 @@ impl Apply for DisablePlatformAddress {
     ) -> Result<Vec<Box<dyn Command>>, Error> {
         let Self { address, reason } = self;
         if reason.trim().is_empty() {
-            return Err(Error::InvalidArgument {
+            return Err(ErrorKind::InvalidArgument {
                 value: reason,
                 reason: "a reason is required: say why this does not apply here",
-            });
+            }
+            .into());
         }
         let claimed = db.platform().is_some_and(|p| {
             p.entry_points()
@@ -38,10 +39,11 @@ impl Apply for DisablePlatformAddress {
                 .any(|e| e.space == address.space && e.offset == address.offset)
         });
         if !claimed {
-            return Err(Error::InvalidArgument {
-                value: format!("{}:{:#x}", address.space.dsl_name(), address.offset),
+            return Err(ErrorKind::InvalidArgument {
+                value: address.space.dsl_addr(address.offset),
                 reason: "the platform doesn't list this address, so there is nothing to disable",
-            });
+            }
+            .into());
         }
         let previous = db
             .region_mut(address.space)

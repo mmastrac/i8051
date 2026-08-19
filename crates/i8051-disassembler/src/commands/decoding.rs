@@ -1,5 +1,5 @@
 use crate::address::AddressValue;
-use crate::db::{Db, Error};
+use crate::db::{Db, Error, ErrorKind};
 
 use super::{Apply, Command, Environment, boxed};
 
@@ -27,10 +27,11 @@ impl Apply for SetAddressBits {
         let Self { space, bits } = self;
         let target = db.resolve_space(&space)?;
         if bits == 0 || bits > AddressValue::BITS {
-            return Err(Error::InvalidArgument {
+            return Err(ErrorKind::InvalidArgument {
                 value: bits.to_string(),
                 reason: "address width must be between 1 and 32 bits",
-            });
+            }
+            .into());
         }
         let previous = db.region_mut(target).set_address_bits(Some(bits as u8));
         Ok(undo_for(&space, previous))
@@ -162,7 +163,7 @@ mod tests {
                     None,
                 )
                 .expect_err("width must be 1..=32");
-            assert!(matches!(err, Error::InvalidArgument { .. }), "{err:?}");
+            assert!(matches!(err.what, ErrorKind::InvalidArgument { .. }), "{err:?}");
         }
         // A typo must not answer as a freshly created region.
         let err = db
@@ -174,9 +175,9 @@ mod tests {
                 None,
             )
             .expect_err("a space this database does not have");
-        assert_eq!(
-            err.to_string(),
-            "unknown address space \"COED\" (did you mean `CODE`?)"
-        );
+        assert!(matches!(
+            &err.what,
+            ErrorKind::UnknownSpace { name, suggestion: Some(s) } if name == "COED" && s == "CODE"
+        ));
     }
 }

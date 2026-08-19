@@ -1,8 +1,9 @@
 use i8051_disassembler::commands::Command;
+use i8051_disassembler::db::{CommandError, ErrorKind};
 use i8051_disassembler::store::{command_from_call, dsl, from_dsl, parse_call};
 use serde::Serialize;
 
-use crate::{Refusal, ServiceError, Session};
+use crate::{ServiceError, Session};
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 /// Where the session is looking.
@@ -107,13 +108,12 @@ impl Controller {
             .map(|e| format!("{} ({})", range.space.dsl_addr(e.offset), e.name))
             .collect();
         let at = range.space.dsl_addr(first.offset);
-        Err(ServiceError::refused(
-            Refusal::RangeCoversVectors { vectors },
-            vec![
+        Err(ServiceError::Command(
+            CommandError::from(ErrorKind::RangeCoversVectors { vectors }).suggest(vec![
                 dsl!(auto_disassemble(address = {at}) # "if that vector is in use"),
                 dsl!(disable_platform_address(address = {at}, reason = "...")
                     # "if it is provably unused"),
-            ],
+            ]),
         ))
     }
 
@@ -140,18 +140,18 @@ impl Controller {
             EquivalentKind::Code => return Ok(()),
         };
         let end = range.end;
-        Err(ServiceError::refused(
-            Refusal::BarrierStopsAuto {
+        Err(ServiceError::Command(
+            CommandError::from(ErrorKind::BarrierStopsAuto {
                 at: space.dsl_addr(offset),
                 barrier: space.dsl_range(start, end),
                 marked: kind.to_string(),
-            },
-            vec![
+            })
+            .suggest(vec![
                 dsl!(clear_equivalents(addresses = {space.dsl_set(start, end)})
                     # "if these bytes are code"),
                 dsl!(auto_disassemble(address = {space.dsl_addr(offset)})
                     # "after clearing the barrier"),
-            ],
+            ]),
         ))
     }
 
@@ -202,207 +202,24 @@ impl Controller {
             })
             .collect();
         let target = space.dsl_addr(*first_target);
-        Err(ServiceError::refused(
-            Refusal::RangeSwallowsTargets {
+        Err(ServiceError::Command(
+            CommandError::from(ErrorKind::RangeSwallowsTargets {
                 omitted: hits.len().saturating_sub(4),
                 targets: listed,
                 first_target: target.clone(),
                 first_source: space.dsl_addr(first_sources[0]),
                 sources: first_sources.len(),
-            },
-            vec![
+            })
+            .suggest(vec![
                 dsl!(mark_data(
                     range = {space.dsl_range(bounds.start, *first_target)},
                     data_type = DataType::Byte
                 ) # "if {target} is a real routine, stop the range at it"),
                 dsl!(auto_disassemble(address = {target}) # "then decode it"),
-            ],
+            ]),
         ))
     }
 
-    fn check_cpu_still_needed(&self, command: &dyn Command) -> Result<(), ServiceError> {
-        if command
-            .as_any()
-            .downcast_ref::<i8051_disassembler::commands::ClearCpu>()
-            .is_none()
-        {
-            return Ok(());
-        }
-        let Some(name) = self.session.db.platform().map(|p| p.name().to_string()) else {
-            return Ok(());
-        };
-        let decoded = self
-            .session
-            .status(None)
-            .map(|s| s.coverage.code)
-            .unwrap_or(0);
-        if decoded == 0 {
-            return Ok(());
-        }
-        Err(ServiceError::refused(
-            Refusal::CpuStillNeeded {
-                cpu: name,
-                decoded: u64::from(decoded),
-            },
-            Vec::new(),
-        ))
-    }
-
-    fn check_duplicate_label(&self, command: &dyn Command) -> Result<(), ServiceError> {
-        let Some(set) = command
-            .as_any()
-            .downcast_ref::<i8051_disassembler::commands::SetLabel>()
-        else {
-            return Ok(());
-        };
-        let Ok(name) = i8051_disassembler::commands::normalize_label(&set.label) else {
-            return Ok(());
-        };
-        if set.local {
-            return self.check_duplicate_local(set, &name);
-        }
-        let here = set.address.space.dsl_addr(set.address.offset);
-        let clash = self
-            .session
-            .symbols(None)
-            .unwrap_or_default()
-            .into_iter()
-            .find(|s| s.name == name && s.addr != here);
-        let Some(clash) = clash else { return Ok(()) };
-        let holder = clash.addr;
-        Err(ServiceError::refused(
-            Refusal::LabelTaken {
-                label: name.to_string(),
-                holder: holder.clone(),
-            },
-            vec![
-                dsl!(set_label(address = {here}, label = "...")
-                    # "a name that distinguishes it from {holder}"),
-                dsl!(set_label(address = {here}, label = "{name}", local = True)
-                    # "if this is a spot inside a routine, not a routine of its own"),
-                dsl!(set_label(address = {holder}, label = "...")
-                    # "to free the name if this is its better home"),
-            ],
-        ))
-    }
-
-    fn check_duplicate_local(
-        &self,
-        set: &i8051_disassembler::commands::SetLabel,
-        name: &str,
-    ) -> Result<(), ServiceError> {
-        let space = set.address.space;
-        let Some(region) = self.session.db.region(space) else {
-            return Ok(());
-        };
-        let Some(scope) = region.scope_of(set.address.offset) else {
-            return Ok(());
-        };
-        let clash = region
-            .labels()
-            .find(|&(at, other)| {
-                at != set.address.offset
-                    && other == name
-                    && region.is_local_label(at)
-                    && region.scope_of(at) == Some(scope)
-            })
-            .map(|(at, _)| space.dsl_addr(at));
-        let Some(clash) = clash else { return Ok(()) };
-        let here = set.address.space.dsl_addr(set.address.offset);
-        Err(ServiceError::refused(
-            Refusal::LocalLabelTaken {
-                label: name.to_string(),
-                holder: clash,
-            },
-            vec![
-                dsl!(set_label(address = {here}, label = "...", local = True)
-                # "a name unused in this routine"),
-            ],
-        ))
-    }
-
-    fn check_provisional_label(command: &dyn Command) -> Result<(), ServiceError> {
-        let Some(set) = command
-            .as_any()
-            .downcast_ref::<i8051_disassembler::commands::SetLabel>()
-        else {
-            return Ok(());
-        };
-        let Ok(name) = i8051_disassembler::commands::normalize_label(&set.label) else {
-            return Ok(());
-        };
-        if !i8051_disassembler::labels::is_provisional_name(&name) {
-            return Ok(());
-        }
-        let here = set.address.space.dsl_addr(set.address.offset);
-        Err(ServiceError::refused(
-            Refusal::GeneratedLabel { label: name },
-            vec![
-                dsl!(set_label(address = {here}, label = "...")
-                    # "a name that says what the code does, e.g. uart_tx"),
-                dsl!(set_note(address = {here}, note = Note(content = "..."))
-                    # "record what you know if you cannot tell yet"),
-            ],
-        ))
-    }
-
-    fn check_speculative_decode(&self, command: &dyn Command) -> Result<(), ServiceError> {
-        let Some(range) = command
-            .as_any()
-            .downcast_ref::<i8051_disassembler::commands::DisassembleRange>()
-        else {
-            return Ok(());
-        };
-        if range.force {
-            return Ok(());
-        }
-
-        let space = range.range.space;
-        let decode = self
-            .session
-            .db
-            .peek_linear(space, range.range.start, range.range.end);
-        let mut reasons = Vec::new();
-        if decode.out_of_range_targets > 0 {
-            reasons.push(format!(
-                "{} branch target(s) point outside the loaded image",
-                decode.out_of_range_targets
-            ));
-        }
-        if decode.self_misaligned_targets > 0 {
-            reasons.push(format!(
-                "{} branch target(s) land midway through another instruction in the same range",
-                decode.self_misaligned_targets
-            ));
-        }
-        if decode.misaligned_targets > 0 {
-            reasons.push(format!(
-                "{} branch target(s) land inside existing instructions",
-                decode.misaligned_targets
-            ));
-        }
-        if reasons.is_empty() {
-            return Ok(());
-        }
-        Err(ServiceError::refused(
-            Refusal::RangeDoesNotDecode {
-                count: decode.lines.len(),
-                reasons,
-            },
-            vec![
-                dsl!(auto_disassemble(address = {space.dsl_addr(range.range.start)})
-                    # "follows flow and stops where it stops"),
-                dsl!(mark_data(
-                    range = {space.dsl_range(range.range.start, range.range.end)},
-                    data_type = DataType::Byte
-                ) # "if the whole range is data"),
-                dsl!(disassemble_range(
-                    range = {space.dsl_range(range.range.start, range.range.end)},
-                    force = True
-                ) # "to decode the bytes as-is"),
-            ],
-        ))
-    }
 
     /// Every verb a frontend can invoke.
     pub fn catalog(&self) -> Vec<crate::VerbInfo> {
@@ -444,13 +261,10 @@ impl Controller {
 
     /// Apply a parsed command, undoably.
     pub fn apply_command(&mut self, command: Box<dyn Command>) -> Result<EditResult, ServiceError> {
-        self.check_cpu_still_needed(command.as_ref())?;
+        // Context judgment, wrong under replay order.
         self.check_covers_entry_points(command.as_ref())?;
         self.check_swallows_branch_target(command.as_ref())?;
         self.check_barrier_sweep(command.as_ref())?;
-        self.check_speculative_decode(command.as_ref())?;
-        Self::check_provisional_label(command.as_ref())?;
-        self.check_duplicate_label(command.as_ref())?;
         let inverse = self.session.apply_command(command)?;
         self.undo.push(inverse.clone());
         self.redo.clear();
@@ -596,6 +410,7 @@ mod tests {
             .expect("real name");
         assert!(c.session().disassembly().contains("reset_entry"));
 
+        // The guard holds on replay too.
         let env = Box::new(MemoryEnvironment::new().with_file("fw.bin", vec![0x00, 0x00, 0x22]));
         Session::from_commands(
             [
@@ -605,7 +420,8 @@ mod tests {
             ],
             env,
         )
-        .expect("a stored provisional label must not break loading");
+        .map(|_| ())
+        .expect_err("the guard holds on replay");
     }
 
     #[test]

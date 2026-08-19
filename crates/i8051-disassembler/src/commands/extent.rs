@@ -1,5 +1,5 @@
 use crate::address::SpaceAddressRange;
-use crate::db::{DataType, Db, Equivalent, Error};
+use crate::db::{DataType, Db, Equivalent, Error, ErrorKind};
 
 use super::{Apply, ClearEquivalents, Command, Environment, boxed};
 
@@ -26,7 +26,7 @@ impl Apply for DisassembleRange {
         _env: Option<&dyn Environment>,
     ) -> Result<Vec<Box<dyn Command>>, Error> {
         if db.platform().is_none() {
-            return Err(Error::NoCpu);
+            return Err(ErrorKind::NoCpu.into());
         }
         let SpaceAddressRange { space, range } = self.range;
         let region = db.region_mut(space);

@@ -1,5 +1,6 @@
 use crate::address::{AddressValue, SpaceAddressRange, SpaceAddressSet, SpaceAddressValue};
-use crate::db::{Db, Error};
+use crate::db::{Db, Error, ErrorKind, marked_word};
+use crate::store::dsl;
 use crate::region::ByteRange;
 
 use super::{Apply, Command, Environment, boxed};
@@ -39,11 +40,11 @@ impl Apply for MapBytes {
         let SpaceAddressValue { space, offset } = address;
         let region = db.region_mut(space);
         let Some(env) = env else {
-            return Err(Error::NoEnvironment);
+            return Err(ErrorKind::NoEnvironment.into());
         };
         let bytes = env
             .load_file_bytes(&file, file_offset, size)
-            .map_err(Error::Io)?;
+            .map_err(Error::from)?;
         let size = bytes.len() as AddressValue;
         let before = region.snapshot_byte_ranges(offset, size);
         region.map_bytes(&file, file_offset, offset, &bytes);
@@ -80,12 +81,14 @@ impl Apply for UnmapBytes {
                 region.snapshot_equivalents(range.start, range.end - range.start)
             {
                 if start < range.start || equivalent.end > range.end {
-                    return Err(Error::PartialEquivalent {
-                        at: (space, range.start).into(),
-                        existing: equivalent.equivalent.kind(),
-                        start,
-                        end: equivalent.end,
-                    });
+                    let end = equivalent.end;
+                    let kind = ErrorKind::PartialEquivalent {
+                        range: space.dsl_range(start, end),
+                        marked: marked_word(equivalent.equivalent.kind()).to_string(),
+                    };
+                    return Err(Error::from(kind).suggest(vec![dsl!(clear_equivalents(
+                        addresses = {space.dsl_set(start, end)}
+                    ) # "then unmap again")]));
                 }
             }
         }
@@ -249,7 +252,7 @@ mod unmap_bytes_tests {
         let err = db
             .apply(boxed(UnmapBytes::new((CODE, 0x8u32..0x9u32))), Some(&Env))
             .expect_err("a partial cut must not be obeyed");
-        assert!(matches!(err, Error::PartialEquivalent { .. }), "{err:?}");
+        assert!(matches!(err.what, ErrorKind::PartialEquivalent { .. }), "{err:?}");
 
         assert_eq!(crate::store::to_dsl_many(&db.to_commands()), before);
     }

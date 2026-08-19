@@ -1,5 +1,5 @@
 use crate::address::{SpaceAddressSet, SpaceAddressValue};
-use crate::db::{Db, Error};
+use crate::db::{Db, Error, ErrorKind};
 
 use super::{Apply, Command, Environment, boxed};
 
@@ -37,9 +37,6 @@ impl Apply for SetLabel {
             local,
         } = self;
         let label = normalize_label(&label)?;
-        if crate::labels::is_provisional_name(&label) {
-            return Ok(Vec::new());
-        }
         let SpaceAddressValue { space, offset } = address;
         let region = db.region_mut(space);
         let before = region.get_label(offset).map(str::to_owned);
@@ -71,10 +68,11 @@ pub fn normalize_label(label: &str) -> Result<String, Error> {
         .unwrap_or(trimmed)
         .trim();
     let invalid = |reason| {
-        Err(Error::InvalidLabel {
+        Err(ErrorKind::InvalidLabel {
             label: label.to_string(),
             reason,
-        })
+        }
+        .into())
     };
     if unquoted.is_empty() {
         return invalid("a label cannot be empty");
@@ -175,9 +173,9 @@ mod tests {
     }
 
     #[test]
-    fn generated_name_is_noop() {
+    fn generated_name_refused() {
         let mut db = Db::with_platform(crate::platform::i8051::platform());
-        let undo = db
+        let err = db
             .apply(
                 boxed(SetLabel::new(
                     (CODE, 0x2C),
@@ -187,8 +185,11 @@ mod tests {
                 )),
                 None,
             )
-            .expect("a generated name is ignored, not an error");
-        assert!(undo.is_empty(), "a no-op contributes nothing to undo");
+            .expect_err("the generated form is refused");
+        assert!(matches!(
+            &err.what,
+            crate::db::ErrorKind::GeneratedLabel { label } if label == "sub_002C"
+        ));
         assert_eq!(db.region_mut(CODE).get_label(0x2C), None, "nothing stored");
 
         // A real name still lands...
@@ -214,7 +215,7 @@ mod tests {
             )),
             None,
         )
-        .unwrap();
+        .expect_err("the generated form is refused");
         assert_eq!(db.region_mut(CODE).get_label(0x2C), Some("uart_init"));
     }
 
