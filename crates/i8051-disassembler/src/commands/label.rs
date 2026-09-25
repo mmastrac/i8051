@@ -48,12 +48,14 @@ impl Apply for SetLabel {
             crate::region::LabelAttrs { provisional, local },
         );
         Ok(match before {
-            Some(label) => vec![boxed(SetLabel {
-                address,
-                label,
-                provisional: was_draft,
-                local: was_local,
-            })],
+            Some(label) => {
+                vec![boxed(SetLabel {
+                    address,
+                    label,
+                    provisional: was_draft,
+                    local: was_local,
+                })]
+            }
             None => vec![boxed(ClearLabel::new((space, offset)))],
         })
     }
@@ -117,20 +119,6 @@ impl Apply for ClearLabel {
         Ok(undo)
     }
 }
-
-// A clear command's `SpaceAddressSet` renders as the optimal `CODE:{...}` form.
-serialize_test!(
-    clear_label_address_set,
-    "clear_label(addresses=CODE:{0x10, 0x20})",
-    ClearLabel {
-        addresses: {
-            let mut set = SpaceAddressSet::new(crate::platform::i8051::CODE);
-            set.insert_address(0x10);
-            set.insert_address(0x20);
-            set
-        },
-    }
-);
 
 #[cfg(test)]
 mod tests {

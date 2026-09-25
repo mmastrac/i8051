@@ -163,7 +163,10 @@ mod tests {
                     None,
                 )
                 .expect_err("width must be 1..=32");
-            assert!(matches!(err.what, ErrorKind::InvalidArgument { .. }), "{err:?}");
+            assert!(
+                matches!(err.what, ErrorKind::InvalidArgument { .. }),
+                "{err:?}"
+            );
         }
         // A typo must not answer as a freshly created region.
         let err = db

@@ -1,6 +1,6 @@
 use crate::db::{Db, Error, ErrorKind};
-use crate::store::dsl;
 use crate::platform::{self, PlatformRef};
+use crate::store::dsl;
 
 use super::{Apply, Command, Environment, boxed};
 

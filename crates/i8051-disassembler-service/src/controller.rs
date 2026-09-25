@@ -220,7 +220,6 @@ impl Controller {
         ))
     }
 
-
     /// Every verb a frontend can invoke.
     pub fn catalog(&self) -> Vec<crate::VerbInfo> {
         crate::verbs::catalog()

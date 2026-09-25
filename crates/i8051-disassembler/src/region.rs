@@ -790,7 +790,9 @@ impl Region {
         let mut addr = start;
         let mut spans = Vec::new();
         while addr < end {
-            let insn = self.decode_at(addr).ok_or_else(|| Error::from(ErrorKind::InvalidEquivalent))?;
+            let insn = self
+                .decode_at(addr)
+                .ok_or_else(|| Error::from(ErrorKind::InvalidEquivalent))?;
             let insn_end = addr.saturating_add(insn.len() as AddressValue);
             let overlaps = self.snapshot_equivalents(addr, insn_end - addr);
             if let Some((at, range)) = overlaps.first() {

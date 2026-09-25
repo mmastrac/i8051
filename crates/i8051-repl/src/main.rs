@@ -17,9 +17,13 @@ use rustyline::{Context as LineContext, Editor, Helper, Highlighter, Hinter, Val
     about = "Interactive DSL REPL for the i8051 disassembler"
 )]
 struct Cli {
+    /// Path to the base database: a JSON array of `{ "command": "<dsl>" }`
+    /// records, or a plain `.dsl` document (one command per line).
     db: PathBuf,
+    /// Optional diff file, overlaid on the base at load.
     #[arg(long)]
     diff: Option<PathBuf>,
+    /// Command history file. Defaults to `.i8051-repl-history` beside the db.
     #[arg(long)]
     history: Option<PathBuf>,
 }

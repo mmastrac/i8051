@@ -202,8 +202,6 @@ impl Db {
             .unwrap_or_default()
     }
 
-    /// The CPU's entry points that are not decoded as code, with the name and
-    /// reason for each.
     pub fn undecoded_entry_points(&self) -> Vec<crate::platform::EntryPoint> {
         let Some(platform) = &self.platform else {
             return Vec::new();
@@ -215,7 +213,10 @@ impl Db {
                 self.region(e.space).is_some_and(|r| {
                     r.has_byte(e.offset)
                         && !r.platform_address_disabled(e.offset)
-                        && !matches!(r.get_equivalent_kind(e.offset), Some(EquivalentKind::Code))
+                        && !matches!(
+                            r.get_equivalent_kind(e.offset),
+                            Some(crate::db::EquivalentKind::Code)
+                        )
                 })
             })
             .copied()
@@ -313,6 +314,13 @@ impl Db {
             }
             // ... then the region's own commands
             commands.extend(region.to_commands(space));
+            // ... then any disabled platform addresses
+            for (offset, reason) in region.disabled_platform_addresses() {
+                commands.push(boxed(crate::commands::DisablePlatformAddress {
+                    address: (space, offset).into(),
+                    reason: reason.to_string(),
+                }));
+            }
             for (offset, kind) in region.operand_types() {
                 commands.push(match kind {
                     OperandType::Pointer(target) => boxed(crate::commands::SetOperandPointer {
@@ -324,17 +332,8 @@ impl Db {
                     }),
                 });
             }
-            // ... then any disabled platform addresses
-            for (offset, reason) in region.disabled_platform_addresses() {
-                commands.push(boxed(crate::commands::DisablePlatformAddress {
-                    address: (space, offset).into(),
-                    reason: reason.to_string(),
-                }));
-            }
         }
-        // Notes live outside the regions, so emit them separately or a DB would
-        // not round-trip. Iterating by NoteId (Lamport order) is deterministic,
-        // and SetNote carries the note's id, so a reload restores it unchanged.
+
         for (id, note) in self.notes.notes.iter() {
             if let Some((space, range)) = self.notes.location(id) {
                 commands.push(boxed(SetNote {
@@ -393,14 +392,14 @@ impl Db {
         };
         let here = set.address.space.dsl_addr(set.address.offset);
         if crate::labels::is_provisional_name(&name) {
-            return Err(CommandError::from(ErrorKind::GeneratedLabel { label: name }).suggest(
-                vec![
+            return Err(
+                CommandError::from(ErrorKind::GeneratedLabel { label: name }).suggest(vec![
                     dsl!(set_label(address = {here}, label = "...")
                         # "a name that says what the code does, e.g. uart_tx"),
                     dsl!(set_note(address = {here}, note = Note(content = "..."))
                         # "record what you know if you cannot tell yet"),
-                ],
-            ));
+                ]),
+            );
         }
         if set.local {
             return self.check_duplicate_local(set, &name);
@@ -409,7 +408,11 @@ impl Db {
             let clash = region
                 .labels()
                 .map(|(offset, label)| (offset, label.to_string()))
-                .chain(region.functions().map(|(offset, f)| (offset, f.name.clone())))
+                .chain(
+                    region
+                        .functions()
+                        .map(|(offset, f)| (offset, f.name.clone())),
+                )
                 .find(|(offset, label)| {
                     *label == name && (space, *offset) != (set.address.space, set.address.offset)
                 });
@@ -455,8 +458,10 @@ impl Db {
             label: name.to_string(),
             holder: clash,
         })
-        .suggest(vec![dsl!(set_label(address = {here}, label = "...", local = True)
-            # "a name unused in this routine")]))
+        .suggest(vec![
+            dsl!(set_label(address = {here}, label = "...", local = True)
+            # "a name unused in this routine"),
+        ]))
     }
 
     fn check_speculative_decode(&self, command: &dyn Command) -> Result<(), CommandError> {
@@ -493,24 +498,22 @@ impl Db {
         if reasons.is_empty() {
             return Ok(());
         }
-        Err(
-            CommandError::from(ErrorKind::RangeDoesNotDecode {
-                count: decode.lines.len(),
-                reasons,
-            })
-            .suggest(vec![
-                dsl!(auto_disassemble(address = {space.dsl_addr(range.range.start)})
+        Err(CommandError::from(ErrorKind::RangeDoesNotDecode {
+            count: decode.lines.len(),
+            reasons,
+        })
+        .suggest(vec![
+            dsl!(auto_disassemble(address = {space.dsl_addr(range.range.start)})
                     # "follows flow and stops where it stops"),
-                dsl!(mark_data(
+            dsl!(mark_data(
                     range = {space.dsl_range(range.range.start, range.range.end)},
                     data_type = DataType::Byte
                 ) # "if the whole range is data"),
-                dsl!(disassemble_range(
+            dsl!(disassemble_range(
                     range = {space.dsl_range(range.range.start, range.range.end)},
                     force = True
                 ) # "to decode the bytes as-is"),
-            ]),
-        )
+        ]))
     }
 
     /// Byte counts for mapped content classified by equivalent kind.
@@ -751,15 +754,9 @@ pub enum ErrorKind {
     /// An unmap cutting a longer classification.
     PartialEquivalent { range: String, marked: String },
     /// An illegal assembler symbol.
-    InvalidLabel {
-        label: String,
-        reason: &'static str,
-    },
+    InvalidLabel { label: String, reason: &'static str },
     /// A value the command cannot take.
-    InvalidArgument {
-        value: String,
-        reason: &'static str,
-    },
+    InvalidArgument { value: String, reason: &'static str },
     /// An address space this database lacks.
     UnknownSpace {
         name: String,
@@ -840,7 +837,9 @@ pub(crate) fn already_classified(
     requested_end: AddressValue,
 ) -> CommandError {
     let space = at.space;
-    let mut suggested = vec![dsl!(clear_equivalents(addresses = {space.dsl_set(start, end)}))];
+    let mut suggested = vec![dsl!(clear_equivalents(
+        addresses = { space.dsl_set(start, end) }
+    ))];
     if at.offset > start {
         suggested.push(dsl!(mark_data(
             range = {space.dsl_range(start, at.offset)},
@@ -1269,11 +1268,8 @@ loc_0010:
 
         // CJNE A,0x20,rel: three operands. We override the third.
         let (mut db, env) = mapped("b.bin", &[0xB5, 0x20, 0x10]);
-        db.apply(
-            boxed(DisassembleRange::new((CODE, 0u32..3u32), true)),
-            None,
-        )
-        .unwrap();
+        db.apply(boxed(DisassembleRange::new((CODE, 0u32..3u32), true)), None)
+            .unwrap();
         let undo = db
             .apply(
                 boxed(OverrideOperand::new(
@@ -1349,8 +1345,13 @@ loc_0010:
 
     #[test]
     fn refusals_name_unblocking_command() {
-        let occupied =
-            crate::db::already_classified((CODE, 0x8u32).into(), EquivalentKind::Code, 0x8, 0xA, 0xA);
+        let occupied = crate::db::already_classified(
+            (CODE, 0x8u32).into(),
+            EquivalentKind::Code,
+            0x8,
+            0xA,
+            0xA,
+        );
         assert!(matches!(
             &occupied.what,
             ErrorKind::AlreadyClassified { marked, .. } if marked == "code"

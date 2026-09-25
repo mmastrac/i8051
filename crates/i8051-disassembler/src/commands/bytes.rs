@@ -1,7 +1,7 @@
 use crate::address::{AddressValue, SpaceAddressRange, SpaceAddressSet, SpaceAddressValue};
 use crate::db::{Db, Error, ErrorKind, marked_word};
-use crate::store::dsl;
 use crate::region::ByteRange;
+use crate::store::dsl;
 
 use super::{Apply, Command, Environment, boxed};
 
@@ -252,7 +252,10 @@ mod unmap_bytes_tests {
         let err = db
             .apply(boxed(UnmapBytes::new((CODE, 0x8u32..0x9u32))), Some(&Env))
             .expect_err("a partial cut must not be obeyed");
-        assert!(matches!(err.what, ErrorKind::PartialEquivalent { .. }), "{err:?}");
+        assert!(
+            matches!(err.what, ErrorKind::PartialEquivalent { .. }),
+            "{err:?}"
+        );
 
         assert_eq!(crate::store::to_dsl_many(&db.to_commands()), before);
     }
