@@ -12,9 +12,9 @@ name = "i8051-repl"
 path = "src/main.rs"
 
 [dependencies]
-i8051-disassembler = { version = "0.24.0", path = "../i8051-disassembler" }
-i8051-disassembler-service = { version = "0.24.0", path = "../i8051-disassembler-service" }
-i8051-script = { version = "0.24.0", path = "../i8051-script" }
+i8051-disassembler = { version = "0.25.0", path = "../i8051-disassembler" }
+i8051-disassembler-service = { version = "0.25.0", path = "../i8051-disassembler-service" }
+i8051-script = { version = "0.25.0", path = "../i8051-script" }
 rustyline = { version = "15", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }

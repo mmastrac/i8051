@@ -88,8 +88,7 @@ macro_rules! register {
         }
 
         #[::scattered_collect::scatter($crate::commands::COMMANDS)]
-        #[allow(non_upper_case_globals)]
-        static $type: (&'static str, $crate::commands::CommandEntry) = (
+        const _: (&'static str, $crate::commands::CommandEntry) = (
             <$type>::COMMAND_NAME,
             $crate::commands::CommandEntry {
                 doc: ::core::concat!($($doc, "\n",)*),

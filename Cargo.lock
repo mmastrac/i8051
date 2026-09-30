@@ -760,7 +760,7 @@ dependencies = [
 
 [[package]]
 name = "i8051"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "bytemuck",
  "divan",
@@ -773,7 +773,7 @@ dependencies = [
 
 [[package]]
 name = "i8051-debug-tui"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "i8051",
  "ratatui",
@@ -783,7 +783,7 @@ dependencies = [
 
 [[package]]
 name = "i8051-disassembler"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "hex-literal",
  "i8051",
@@ -804,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "i8051-disassembler-service"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "i8051-disassembler",
  "i8051-script",
@@ -818,7 +818,7 @@ dependencies = [
 
 [[package]]
 name = "i8051-proc-macro"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -827,7 +827,7 @@ dependencies = [
 
 [[package]]
 name = "i8051-repl"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -840,11 +840,11 @@ dependencies = [
 
 [[package]]
 name = "i8051-script"
-version = "0.24.0"
+version = "0.25.0"
 
 [[package]]
 name = "i8051-test-runner"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "clap",
  "i8051",
@@ -1064,7 +1064,7 @@ dependencies = [
 
 [[package]]
 name = "m6805"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "pretty_assertions",
  "tempfile",
@@ -1137,7 +1137,7 @@ dependencies = [
 
 [[package]]
 name = "mos6502"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "pretty_assertions",
  "tempfile",
