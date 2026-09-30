@@ -27,5 +27,5 @@ i8051-proc-macro = { version = "0.25.0", path = "crates/i8051-proc-macro" }
 i8051-script     = { version = "0.25.0", path = "crates/i8051-script" }
 i8051            = { version = "0.25.0", path = "crates/i8051" }
 i8051-debug-tui  = { version = "0.25.0", path = "crates/i8051-debug-tui" }
-mos6502          = { version = "0.25.0", path = "crates/mos6502" }
+mos6502          = { version = "0.25.0", path = "crates/mos6502", package = "mos-6502" }
 m6805            = { version = "0.25.0", path = "crates/m6805" }

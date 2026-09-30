@@ -1,5 +1,5 @@
 [package]
-name = "mos6502"
+name = "mos-6502"
 description = "A decoder/disassembler for the MOS 6502 (NMOS) 8-bit CPU."
 version.workspace = true
 edition.workspace = true
@@ -8,6 +8,9 @@ license.workspace = true
 repository.workspace = true
 categories.workspace = true
 keywords = ["6502", "mos", "nmos", "disassembler"]
+
+[lib]
+name = "mos6502"
 
 [dependencies]
 

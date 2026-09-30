@@ -64,7 +64,7 @@ fn decode_test() {
 
 /// Regenerate `decode_test.txt` by sweeping all 256 opcodes.
 ///
-/// Run with `cargo test -p mos6502 regenerate_reference -- --ignored --nocapture`.
+/// Run with `cargo test -p mos-6502 regenerate_reference -- --ignored --nocapture`.
 #[test]
 #[ignore]
 fn regenerate_reference() {
